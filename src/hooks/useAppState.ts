@@ -786,6 +786,24 @@ export function useAppState() {
       ),
     }));
 
+  // Inline task-name edit (Phase 2 addition — prototype locked the name after
+  // creation, which is a bug, not a feature). Wired up in ChecklistItem in
+  // Checkpoint D with the same UX as stage description editing.
+  const editTaskText = (clientId: string, stageId: string, taskId: string, text: string) =>
+    updateClient(clientId, (c) => ({
+      ...c,
+      stages: c.stages.map((s) =>
+        s.id === stageId
+          ? {
+              ...s,
+              tasks: s.tasks.map((t) =>
+                t.id === taskId && text.trim() ? { ...t, text: text.trim() } : t,
+              ),
+            }
+          : s,
+      ),
+    }));
+
   const updateTaskPosition = (
     clientId: string,
     stageId: string,
@@ -1240,6 +1258,7 @@ export function useAppState() {
     removeTask,
     reorderTask,
     setTaskNote,
+    editTaskText,
     updateTaskPosition,
 
     // Notes
