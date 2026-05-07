@@ -1,65 +1,38 @@
-import Image from "next/image";
+function StagesLogo({ size = 64 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="60 60 210 210"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      style={{ display: "block" }}
+    >
+      <path d="M212.083 80.0451L84.2083 60.0716L81.9167 71.6541L81 84.7068V98.2256L81.9167 110.812L82.8333 122L212.083 114.541L213 101.955V88.4361L212.083 80.0451Z" fill="#DF1E5A" />
+      <path d="M144.688 133.09L240.594 119.05L242.312 127.192L243 136.367V145.87L242.312 154.717L240.938 166L144.688 163.009L144 148.491V138.989L144.688 133.09Z" fill="#E273C1" />
+      <path d="M73.9062 212.896L75.2656 223L187.188 208.085L188.094 204.236L189 194.613V178.736L187.188 172H75.2656L73.9062 181.142L73 196.057L73.9062 212.896Z" fill="#21B159" />
+      <path d="M116.452 254.603L117.356 261H245.74L248 241.353V229.931L247.548 217.138L246.192 208L220.877 212.112L117.356 227.647L116.452 232.433L116 241.353L116.452 254.603Z" fill="#36C5EF" />
+    </svg>
+  );
+}
 
 export default function Home() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+    <main className="flex flex-1 flex-col items-center justify-center dotted-grid px-6">
+      <div className="fade-in flex flex-col items-center gap-6 text-center">
+        <StagesLogo size={64} />
+        <h1 className="text-5xl font-extrabold tracking-tight text-stages-text">
+          Stages
+        </h1>
+        <p className="max-w-md text-base leading-relaxed text-stages-muted">
+          The operating system for client services businesses.
+        </p>
+      </div>
+
+      <div className="absolute bottom-6 flex items-center gap-2 text-[11px] text-stages-subtle">
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-stages-green" />
+        <span>v0.1 · scaffolded — migrating from prototype</span>
+      </div>
+    </main>
   );
 }

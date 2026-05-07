@@ -1,26 +1,42 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+  --font-sans: var(--font-plus-jakarta-sans), system-ui, sans-serif;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  /* Stages brand palette — ported from prototype GlobalStyles */
+  --color-stages-bg: #212124;
+  --color-stages-card: #2C2C2F;
+  --color-stages-border: #36363A;
+  --color-stages-border-hover: #4A4A50;
+  --color-stages-text: #E4E4E7;
+  --color-stages-muted: #979393;
+  --color-stages-subtle: #71717A;
+  --color-stages-blue: #108CE9;
+  --color-stages-blue-hover: #0E7DD1;
+  --color-stages-green: #15B981;
+  --color-stages-red: #F43F5E;
+  --color-stages-amber: #F59E0B;
+  --color-stages-purple: #8B5CF6;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-stages-bg);
+  color: var(--color-stages-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Dotted grid backdrop — used on auth screens, canvas, and the landing page */
+.dotted-grid {
+  background-color: var(--color-stages-bg);
+  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in {
+  animation: fadeIn 0.4s ease-out;
 }
