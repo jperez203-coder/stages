@@ -23,9 +23,9 @@ A running log of what shipped in each session. Newest first.
 - Plus Jakarta Sans loaded via `next/font` with weights 400/500/600/700/800.
 - Hello-Stages landing page rendering on `localhost:3000` — logo, wordmark, tagline, dotted-grid backdrop.
 - `CLAUDE.md` written as the cross-session project memory; `AGENTS.md` (auto-generated, contains a Next 16 warning) preserved and imported from CLAUDE.md.
-- Git repo initialized (auto by `create-next-app`), remote `origin` set to `https://github.com/jperez203-coder/stages.git` (HTTPS), pushed to `main`.
+- Git repo initialized (auto by `create-next-app`), Phase 1 changes committed locally on `main`. Remote `origin` set to `https://github.com/jperez203-coder/stages.git` (HTTPS). **Push to GitHub is pending — local machine has no GitHub credential helper configured yet; once a PAT is set up, `git push -u origin main` will complete the phase.**
 
-**Verified:** dev server starts clean on port 3000, page renders with correct font/colors.
+**Verified:** dev server starts clean on port 3000, page renders with correct font/colors. Brand palette utilities (`bg-stages-bg`, `text-stages-blue`, `dotted-grid`, etc.) confirmed in compiled CSS.
 
 **Open items / flagged for later phases:**
 - Prototype's full `GlobalStyles` utility class set (`panel-card`, `btn-primary`, `btn-ghost`, `icon-btn`, `field`, `check-box`, `stage-node`, etc.) NOT yet ported — they'll come over in Phase 2 alongside the components that use them.
