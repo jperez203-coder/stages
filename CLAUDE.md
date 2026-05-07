@@ -67,9 +67,18 @@ When in doubt, mirror the prototype's shapes — don't over-normalize. Refactor 
 - **Team invite** `{ token: { clientId, email, invitedBy, createdAt, accepted } }`.
 - **Client portal invite** (magic-link) `{ token: { clientId, clientEmail, agencyEmail, accepted, ts, acceptedAt? } }`.
 - **User template** `{ id, name, icon, description, ownerEmail, createdAt, stages: [{ name, tasks: string[] }] }`.
-- **Session (agency)** `{ email, role: "owner" | "member" }`.
-- **Client session** `{ email, clientId, role: "client", token }` — magic-link only, 30-day expiry intended.
+- **Session** (prototype shape) — currently splits into `{ email, role: "owner" | "member" }` for agency-side and `{ email, clientId, role: "client", token }` for clients. **This collapses in Phase 3** per [Identity model](#identity-model): one session shape with role resolved per active context, regardless of how the user authed.
 - **Read state** keyed `${email}|${clientId}|${tab}` for unread badges; `|celebration` marker for one-time confetti.
+
+## Identity model
+
+**One user = one email.** A person who first joins as a client via magic-link can later create their own agency workspace and become an owner — using the same account. There is exactly one Supabase `auth.users` row per email, ever. Don't model "client users" and "agency users" as separate tables or namespaces; that conflates identity with role.
+
+**Role is a property of the relationship, not of the user.** A user has a separate membership record per (user, workspace) and per (user, pipeline). The `role` column lives on the membership row. The same email can be `owner` of one workspace and `client` of a different workspace's pipeline at the same time, with no contradiction.
+
+**Login → workspace switcher.** After authentication, fetch the user's full set of memberships across all workspaces and pipelines. If they have exactly one context, route them straight in. If multiple, render a switcher — each row shows the workspace or pipeline name plus the role they hold there (e.g. "Mikey's Tree Removals — client", "Apex Roofing Marketing — owner"). Once a context is selected, the agency-side vs client-portal UI choice follows from the role: `owner | admin | member` → agency UI; `client` → portal.
+
+**Auth methods coexist on one user.** A typical client signs up via magic-link (no password). When that same person later upgrades to running their own agency workspace, they can add a password to the same account for faster sign-in. Supabase supports both auth methods on a single user via the `identities` table — use that, don't duplicate accounts.
 
 ## Permission model
 
@@ -81,11 +90,12 @@ Three tiers, all **per-pipeline** (not org-wide):
 | Admin | Full edit access. Can submit *only* if owner flips that admin's `canSubmit` flag. |
 | Member | View, comment, update tasks they're assigned to. |
 
-**Client** is a separate identity entirely — magic-link auth (no password), sees only `clientVisible: true` items, and `internal: true` messages are filtered out at render in two places (defense in depth). Clients post into channels they're members of, with `internal: false` hard-coded server-side.
+**Client** is a role on a membership, not a separate kind of account — see [Identity model](#identity-model). A user with the `client` role on a pipeline sees only `clientVisible: true` items, and `internal: true` messages are filtered out at render in two places (defense in depth). Clients post into channels they're members of, with `internal: false` hard-coded server-side.
 
 Auth (Phase 3 onward):
-- **Agency** = email + password (Supabase Auth).
-- **Client** = magic-link only. Lands directly on portal. Email cached in localStorage so return visits show "Welcome back, [email] — send a new sign-in link?". Sessions long-lived (30 days).
+- **Default for clients** = magic-link only (no password). Lands directly on the portal. Email cached in localStorage so return visits show "Welcome back, [email] — send a new sign-in link?". Sessions long-lived (30 days).
+- **Default for agency owners** = email + password.
+- **Both methods can coexist** on one user via Supabase `identities`. A magic-link-only client who later creates their own workspace can add a password to the same `auth.users` row — no duplicate account.
 
 ## Target file structure (Phase 2 onward)
 
