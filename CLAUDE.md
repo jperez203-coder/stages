@@ -97,6 +97,20 @@ Auth (Phase 3 onward):
 - **Default for agency owners** = email + password.
 - **Both methods can coexist** on one user via Supabase `identities`. A magic-link-only client who later creates their own workspace can add a password to the same `auth.users` row — no duplicate account.
 
+## Phase 3 schema decisions (locked)
+
+Decided ahead of Phase 3 to inform schema design. The prototype's shapes (mirrored in `src/types/stages.ts`) are the *current* state, not the target. Phase 3 schema will diverge in these specific ways:
+
+1. **No denormalized owner columns.** Workspaces and pipelines do not store `owner_email`. Owner is just a `workspace_memberships` (or `pipeline_memberships`) row with `role: 'owner'`.
+2. **Drop `pipeline.messages[]` entirely.** It's legacy, superseded by channels in the prototype, never needed in Phase 3. No migration shim.
+3. **Single `stage_notes` table.** No string/object/array shape variants — one normalized shape per row.
+4. **Mentions reference `user_id`, not email strings.** Future-proof against email changes.
+5. **Multi-owner workspaces.** Allowed via multiple `role: 'owner'` membership rows. Real agencies need this.
+6. **All inline arrays become tables.** `pipeline.activity` → `activity_events`; `pipeline.links` → `pipeline_links`; `stage.attachments` → `stage_attachments`; `pipeline.channels` → `channels`; `channel.memberEmails` → `channel_members`; `channel.messages` → `channel_messages`. The last one matters most — `channel_messages` will grow large and needs RLS to filter `internal: true` for client viewers.
+7. **Normalized `read_state` table.** Columns `(user_id, scope_type, scope_id, kind, last_read_at)` instead of concatenated string keys.
+
+These answers pre-decide the schema; Phase 3 work is to express them as Postgres tables + RLS, not to revisit them.
+
 ## Target file structure (Phase 2 onward)
 
 ```

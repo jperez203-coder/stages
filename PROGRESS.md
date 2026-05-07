@@ -4,6 +4,32 @@ A running log of what shipped in each session. Newest first.
 
 ---
 
+## Phase 2 — Checkpoint A: foundation (2026-05-07)
+
+**Goal:** lay TypeScript / lib / primitives groundwork without changing visible behavior.
+
+**What landed:**
+- `src/types/stages.ts` — full type set mirroring prototype shapes.
+- `src/lib/{constants,format,buildStages,storage}.ts` — utilities + `window.storage` in-memory stub.
+- `src/components/icons/{StagesLogo,WorkspaceIcon,StatIcons}.tsx`.
+- `src/components/{Avatar,Toast}.tsx`.
+- `src/app/globals.css` — `@layer components` ported from the prototype's `<GlobalStyles>` (`panel-card`, `btn-primary`, `btn-ghost`, `icon-btn`, `field`, `check-box`, `stage-node`, etc.).
+- `src/app/page.tsx` — uses imported `StagesLogo` instead of inlining.
+
+**Verified:** Hello-stages page renders identically (logo, wordmark, tagline, dotted grid, footer). No console errors.
+
+**Phase 3 schema decisions locked** during checkpoint review — see [CLAUDE.md → Phase 3 schema decisions](CLAUDE.md). Seven flags surfaced from the prototype, all answered: drop owner columns, drop legacy `messages[]`, single `stage_notes` shape, mentions as `user_id`, multi-owner workspaces, all inline arrays become tables, normalized `read_state`.
+
+**Pending for Checkpoint D — client portal:**
+- **Add a Files section to `ClientPortal`.** The prototype has no receiving view for files the agency marked `clientVisible`. Surface them in the portal:
+  - All `clientVisible` items from `pipeline.links` plus all `clientVisible` items from `stage.attachments` across every stage.
+  - Sort newest-first. Image thumbnails. Stage-attachment items show the colored stage badge (same component the agency-side rolled-up Files tab uses).
+  - Click an image to open the existing lightbox modal.
+  - Read-only — no upload, no toggle, no delete.
+  - Surface as a third tab next to Project / Chat, OR as a section below the project journey — pick whichever feels cleaner during implementation.
+
+---
+
 ## Phase 1 — Skeleton (2026-05-07)
 
 **Goal:** working Next.js scaffold deployed locally, on-brand, pushed to GitHub.
