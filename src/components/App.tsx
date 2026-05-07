@@ -5,6 +5,9 @@ import { LoginScreen } from "@/components/auth/LoginScreen";
 import { InviteAcceptScreen } from "@/components/auth/InviteAcceptScreen";
 import { ClientPortalAcceptScreen } from "@/components/auth/ClientPortalAcceptScreen";
 import { Toast } from "@/components/Toast";
+import { ClientList } from "@/components/home/ClientList";
+import { NewClientModal } from "@/components/home/NewClientModal";
+import { NewWorkspaceModal } from "@/components/home/NewWorkspaceModal";
 import { useAppState } from "@/hooks/useAppState";
 
 export function App() {
@@ -44,7 +47,7 @@ export function App() {
   }
 
   if (app.clientSession && app.clientPipeline) {
-    return <Phase2Placeholder kind="client-portal" email={app.clientSession.email} />;
+    return <PortalPlaceholder email={app.clientSession.email} onLogout={app.handleClientLogout} />;
   }
 
   if (app.clientSession && !app.clientPipeline) {
@@ -56,9 +59,7 @@ export function App() {
           <p className="text-[13px] mb-4" style={{ color: "#979393" }}>
             This project may have been removed or your access revoked. Please contact the agency.
           </p>
-          <button onClick={app.handleClientLogout} className="btn-ghost">
-            Sign out
-          </button>
+          <button onClick={app.handleClientLogout} className="btn-ghost">Sign out</button>
         </div>
       </div>
     );
@@ -83,32 +84,88 @@ export function App() {
     return (
       <>
         <LoginScreen onLogin={app.handleLogin} />
-        {app.toast && <Toast key={app.toast.id} message={app.toast.message} type={app.toast.type} />}
+        {app.toast && (
+          <Toast key={app.toast.id} message={app.toast.message} type={app.toast.type} />
+        )}
       </>
     );
   }
 
-  // Signed in as agency — full ClientList / ClientBoard / StagePage land in
-  // Checkpoints C and D. Until then, show a placeholder so the auth flow can
-  // be exercised end-to-end.
+  // Signed in, no pipeline open → homepage.
+  if (!app.activeClient) {
+    const session = app.session;
+    return (
+      <>
+        <ClientList
+          clients={app.filteredClients}
+          allClients={app.visibleClients}
+          totalClients={app.visibleClients.length}
+          searchQuery={app.searchQuery}
+          setSearchQuery={app.setSearchQuery}
+          onOpen={app.setActiveClientId}
+          onDelete={app.deleteClient}
+          onNew={() => app.setShowNewClient(true)}
+          session={session}
+          onLogout={app.handleLogout}
+          computeUnread={app.computeUnread}
+          workspaces={app.workspaces.filter((w) => w.ownerEmail === session.email)}
+          activeWorkspace={app.workspaces.find((w) => w.id === app.activeWorkspaceId)}
+          onSwitchWorkspace={app.switchWorkspace}
+          onShowWorkspaceModal={() => app.setShowWorkspaceModal(true)}
+          onRenameWorkspace={app.renameWorkspace}
+          onDeleteWorkspace={app.deleteWorkspace}
+        />
+        {app.showNewClient && (
+          <NewClientModal
+            onCreate={app.createClient}
+            onCancel={() => app.setShowNewClient(false)}
+            userTemplates={app.userTemplates}
+            onDeleteUserTemplate={app.deleteUserTemplate}
+          />
+        )}
+        {app.showWorkspaceModal && (
+          <NewWorkspaceModal
+            onCreate={(name) => {
+              app.createWorkspace(name);
+              app.setShowWorkspaceModal(false);
+            }}
+            onCancel={() => app.setShowWorkspaceModal(false)}
+          />
+        )}
+        {app.toast && (
+          <Toast key={app.toast.id} message={app.toast.message} type={app.toast.type} />
+        )}
+      </>
+    );
+  }
+
+  // Active pipeline open → pipeline view (lands in Checkpoint D).
   return (
     <>
-      <Phase2Placeholder kind="agency" email={app.session.email} onLogout={app.handleLogout} />
-      {app.toast && <Toast key={app.toast.id} message={app.toast.message} type={app.toast.type} />}
+      <PipelinePlaceholder
+        clientName={app.activeClient.name}
+        emoji={app.activeClient.emoji}
+        onBack={() => {
+          app.setActiveClientId(null);
+          app.setActiveStageId(null);
+          app.setBoardTab("canvas");
+        }}
+      />
+      {app.toast && (
+        <Toast key={app.toast.id} message={app.toast.message} type={app.toast.type} />
+      )}
     </>
   );
 }
 
-// Throwaway scaffolding for Checkpoint B — replaced in C/D when the real
-// ClientList and ClientPortal land.
-function Phase2Placeholder({
-  kind,
-  email,
-  onLogout,
+function PipelinePlaceholder({
+  clientName,
+  emoji,
+  onBack,
 }: {
-  kind: "agency" | "client-portal";
-  email: string;
-  onLogout?: () => void;
+  clientName: string;
+  emoji: string;
+  onBack: () => void;
 }) {
   return (
     <div className="min-h-screen flex items-center justify-center px-4 dotted-grid">
@@ -117,24 +174,46 @@ function Phase2Placeholder({
           <StagesLogo size={48} />
         </div>
         <div className="text-[11px] uppercase tracking-wider mb-2" style={{ color: "#979393" }}>
-          Phase 2 · Checkpoint B
+          Phase 2 · Checkpoint D
         </div>
         <h1 className="text-xl font-semibold mb-2">
-          {kind === "agency" ? "Signed in" : "Client portal"}
+          {emoji || "📋"} {clientName}
         </h1>
+        <p className="text-[13px] mb-6 leading-relaxed" style={{ color: "#979393" }}>
+          The pipeline view (canvas, stage page, chat, files, members, activity) lands in
+          Checkpoint D. The pipeline is selected and addressable in app state — clicking back
+          returns you to the homepage cleanly.
+        </p>
+        <button onClick={onBack} className="btn-ghost">Back to homepage</button>
+      </div>
+    </div>
+  );
+}
+
+function PortalPlaceholder({
+  email,
+  onLogout,
+}: {
+  email: string;
+  onLogout: () => void;
+}) {
+  return (
+    <div className="min-h-screen flex items-center justify-center px-4 dotted-grid">
+      <div className="panel-card p-8 w-full max-w-md fade-in text-center">
+        <div className="flex justify-center mb-5">
+          <StagesLogo size={48} />
+        </div>
+        <div className="text-[11px] uppercase tracking-wider mb-2" style={{ color: "#979393" }}>
+          Phase 2 · Checkpoint E
+        </div>
+        <h1 className="text-xl font-semibold mb-2">Client portal</h1>
         <p className="text-[13px] mb-1" style={{ color: "#E4E4E7" }}>
-          <span style={{ color: "#979393" }}>You&apos;re in as</span> {email}
+          <span style={{ color: "#979393" }}>Signed in as</span> {email}
         </p>
         <p className="text-[13px] mb-6 leading-relaxed" style={{ color: "#979393" }}>
-          The {kind === "agency" ? "client list and pipeline views" : "project portal view"} land
-          in {kind === "agency" ? "Checkpoints C and D" : "Checkpoint E"}. Auth + state extraction
-          are working — sign-out works, and the app would route correctly if those views existed.
+          The project portal view (with the new Files section) lands in Checkpoint E.
         </p>
-        {onLogout && (
-          <button onClick={onLogout} className="btn-ghost">
-            Sign out
-          </button>
-        )}
+        <button onClick={onLogout} className="btn-ghost">Sign out</button>
       </div>
     </div>
   );
