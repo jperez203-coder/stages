@@ -414,7 +414,16 @@ export function useAppState() {
             ? withActivity(
                 {
                   ...c,
-                  members: [...members, { email: cleanEmail, joinedAt: Date.now(), role: "member", canSubmit: false }],
+                  members: [
+                    ...members,
+                    {
+                      email: cleanEmail,
+                      joinedAt: Date.now(),
+                      role: "member",
+                      canSubmit: false,
+                      canCheckTasks: false,
+                    },
+                  ],
                 },
                 { type: "member_joined", who: cleanEmail },
               )
@@ -725,13 +734,27 @@ export function useAppState() {
           i === idx ? { ...s, completed: true, completedAt: Date.now() } : s,
         );
         const next = stagesAfter[idx + 1];
+        // Activity-log actor: agency session if present, else client session.
+        const actor = session?.email || clientSession?.email || "";
         return withActivity(
           { ...c, stages: finalStages, currentStage: next ? next.id : c.currentStage },
-          { type: "stage_advanced", who: session?.email || "", stageName: toggled.name },
+          { type: "stage_advanced", who: actor, stageName: toggled.name },
         );
       }
       return { ...c, stages: stagesAfter };
     });
+
+  // Client-side task toggle: enforces clientVisible at the data layer.
+  // Defense in depth — UI also gates, but Phase 4 will move this to RLS.
+  const clientToggleTask = (stageId: string, taskId: string) => {
+    if (!clientSession) return;
+    const target = clients.find((c) => c.id === clientSession.clientId);
+    if (!target) return;
+    const stage = target.stages.find((s) => s.id === stageId);
+    const task = stage?.tasks.find((t) => t.id === taskId);
+    if (!task?.clientVisible) return;
+    toggleTask(target.id, stageId, taskId);
+  };
 
   const addTask = (clientId: string, stageId: string, text: string) => {
     if (!text.trim()) return;
@@ -1091,7 +1114,9 @@ export function useAppState() {
     updateClient(clientId, (c) => ({
       ...c,
       members: (c.members || []).map((m: Member) =>
-        m.email === email ? { ...m, role: "member", canSubmit: false } : m,
+        m.email === email
+          ? { ...m, role: "member", canSubmit: false, canCheckTasks: false }
+          : m,
       ),
     }));
 
@@ -1100,6 +1125,14 @@ export function useAppState() {
       ...c,
       members: (c.members || []).map((m: Member) =>
         m.email === email ? { ...m, canSubmit: !m.canSubmit } : m,
+      ),
+    }));
+
+  const toggleMemberCanCheckTasks = (clientId: string, email: string) =>
+    updateClient(clientId, (c) => ({
+      ...c,
+      members: (c.members || []).map((m: Member) =>
+        m.email === email ? { ...m, canCheckTasks: !m.canCheckTasks } : m,
       ),
     }));
 
@@ -1292,7 +1325,9 @@ export function useAppState() {
     promoteToAdmin,
     demoteToMember,
     toggleAdminCanSubmit,
+    toggleMemberCanCheckTasks,
     createInvite,
+    clientToggleTask,
 
     // Read state
     markRead,

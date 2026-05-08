@@ -22,6 +22,7 @@ type Props = {
   clientSession: ClientSession;
   onLogout: () => void;
   onSendChannelMessage: (channelId: string, text: string, mentions: string[]) => void;
+  onToggleTask: (stageId: string, taskId: string) => void;
 };
 
 type PortalTab = "project" | "chat" | "files";
@@ -37,6 +38,7 @@ export function ClientPortal({
   clientSession,
   onLogout,
   onSendChannelMessage,
+  onToggleTask,
 }: Props) {
   const visibleStages = pipeline.stages.filter((s) => s.clientVisible);
   const currentStageIdx = pipeline.stages.findIndex((s) => s.id === pipeline.currentStage);
@@ -53,6 +55,7 @@ export function ClientPortal({
   );
 
   const currentStage = pipeline.stages[currentStageIdx];
+  const currentStageId = currentStage?.id;
   const actionItems = currentStage
     ? currentStage.tasks.filter((t) => t.clientVisible && !t.done)
     : [];
@@ -231,9 +234,21 @@ export function ClientPortal({
                         border: "1px solid #F59E0B33",
                       }}
                     >
-                      <div
-                        className="w-5 h-5 rounded flex-shrink-0 mt-0.5"
-                        style={{ background: "#36363A", border: "1.5px solid #4A4A50" }}
+                      <button
+                        onClick={() => currentStageId && onToggleTask(currentStageId, task.id)}
+                        className="w-5 h-5 rounded flex-shrink-0 mt-0.5 flex items-center justify-center transition-colors"
+                        style={{
+                          background: "#36363A",
+                          border: "1.5px solid #4A4A50",
+                          cursor: "pointer",
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.borderColor = "#15B981";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.borderColor = "#4A4A50";
+                        }}
+                        title="Mark as done"
                       />
                       <div className="flex-1 min-w-0">
                         <div className="text-[14px] leading-relaxed">{task.text}</div>
@@ -386,19 +401,28 @@ export function ClientPortal({
                           <div className="mt-3 ml-12 space-y-1.5">
                             {visibleTasks.map((task) => (
                               <div key={task.id} className="flex items-center gap-2">
-                                <div
-                                  className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0"
+                                <button
+                                  onClick={() => onToggleTask(stage.id, task.id)}
+                                  className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0 transition-colors"
                                   style={{
                                     background: task.done ? stage.color : "transparent",
                                     border: `1.5px solid ${
                                       task.done ? stage.color : "#4A4A50"
                                     }`,
+                                    cursor: "pointer",
                                   }}
+                                  onMouseEnter={(e) => {
+                                    if (!task.done) e.currentTarget.style.borderColor = stage.color;
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    if (!task.done) e.currentTarget.style.borderColor = "#4A4A50";
+                                  }}
+                                  title={task.done ? "Mark as not done" : "Mark as done"}
                                 >
                                   {task.done && (
                                     <Check size={10} strokeWidth={3} color="white" />
                                   )}
-                                </div>
+                                </button>
                                 <span
                                   className={`text-[13px] ${task.done ? "line-through" : ""}`}
                                   style={{ color: task.done ? "#71717A" : "#E4E4E7" }}

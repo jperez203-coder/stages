@@ -121,8 +121,11 @@ export function StagePage({
 
   const myMember = (client.members || []).find((m) => m.email === session.email);
   const isAdminMember = myMember?.role === "admin";
-  const canEditDescription =
-    client.ownerEmail === session.email || isAdminMember;
+  const isOwner = client.ownerEmail === session.email;
+  const canEditDescription = isOwner || isAdminMember;
+  // Owner + admin always check; member only if granted canCheckTasks.
+  const canCheckTasks =
+    isOwner || isAdminMember || (myMember?.role === "member" && !!myMember.canCheckTasks);
 
   const stageAttachments = stage.attachments || [];
 
@@ -540,6 +543,7 @@ export function StagePage({
                     onEditTaskText ? (text) => onEditTaskText(task.id, text) : null
                   }
                   canEdit={canEditDescription}
+                  canCheck={canCheckTasks}
                   isDragging={draggingTaskId === task.id}
                   isDragOver={dragOverTaskId === task.id && draggingTaskId !== task.id}
                   draggable={canEditDescription && !!onReorderTask}

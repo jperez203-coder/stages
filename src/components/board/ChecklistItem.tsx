@@ -27,6 +27,8 @@ type Props = {
   /** Phase 2 addition — inline rename of the task text. Owners + admins only. */
   onEditText: ((text: string) => void) | null;
   canEdit?: boolean;
+  /** Whether the current user can toggle the checkbox done/undone. */
+  canCheck?: boolean;
   // drag props
   draggable?: boolean;
   isDragging?: boolean;
@@ -49,6 +51,7 @@ export function ChecklistItem({
   onToggleClientVisible,
   onEditText,
   canEdit = true,
+  canCheck = true,
   draggable = false,
   isDragging = false,
   isDragOver = false,
@@ -173,8 +176,17 @@ export function ChecklistItem({
           </button>
         )}
         <button
-          onClick={onToggle}
+          onClick={canCheck ? onToggle : undefined}
+          disabled={!canCheck}
           className={`check-box mt-0.5 ${task.done ? "checked" : ""}`}
+          style={!canCheck ? { cursor: "not-allowed", opacity: 0.6 } : undefined}
+          title={
+            canCheck
+              ? task.done
+                ? "Mark as not done"
+                : "Mark as done"
+              : "You don't have permission to check tasks. Ask the owner or an admin."
+          }
         >
           {task.done && <Check size={11} strokeWidth={3} color="white" />}
         </button>

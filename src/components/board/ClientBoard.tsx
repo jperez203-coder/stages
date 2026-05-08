@@ -63,6 +63,7 @@ type Props = {
   onPromoteToAdmin: (email: string) => void;
   onDemoteToMember: (email: string) => void;
   onToggleAdminCanSubmit: (email: string) => void;
+  onToggleMemberCanCheckTasks: (email: string) => void;
   pendingInvites: (TeamInvite & { token: string })[];
   // Celebration
   hasSeenCelebration: boolean;
@@ -110,6 +111,7 @@ export function ClientBoard({
   onPromoteToAdmin,
   onDemoteToMember,
   onToggleAdminCanSubmit,
+  onToggleMemberCanCheckTasks,
   pendingInvites,
   hasSeenCelebration,
   onMarkCelebrationSeen,
@@ -469,6 +471,7 @@ export function ClientBoard({
               onPromoteToAdmin={onPromoteToAdmin}
               onDemoteToMember={onDemoteToMember}
               onToggleAdminCanSubmit={onToggleAdminCanSubmit}
+              onToggleMemberCanCheckTasks={onToggleMemberCanCheckTasks}
               isOwner={isOwner}
             />
           )}

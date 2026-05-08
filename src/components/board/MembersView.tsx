@@ -14,6 +14,7 @@ type Props = {
   onPromoteToAdmin: (email: string) => void;
   onDemoteToMember: (email: string) => void;
   onToggleAdminCanSubmit: (email: string) => void;
+  onToggleMemberCanCheckTasks: (email: string) => void;
   isOwner: boolean;
 };
 
@@ -41,9 +42,14 @@ function RolePill({ role }: { role: "owner" | "admin" | "member" }) {
 
 export function MembersView({
   client, session, pendingInvites, onShowInvite,
-  onRemoveMember, onPromoteToAdmin, onDemoteToMember, onToggleAdminCanSubmit, isOwner,
+  onRemoveMember, onPromoteToAdmin, onDemoteToMember, onToggleAdminCanSubmit,
+  onToggleMemberCanCheckTasks, isOwner,
 }: Props) {
   const members = client.members || [];
+  // Admins can also grant canCheckTasks to members (lower-stakes than canSubmit).
+  const myMember = members.find((m) => m.email === session.email);
+  const isAdmin = myMember?.role === "admin";
+  const canManageMembers = isOwner || isAdmin;
 
   return (
     <div className="max-w-3xl mx-auto p-4 sm:p-8">
@@ -62,7 +68,7 @@ export function MembersView({
         )}
       </div>
 
-      {isOwner && (
+      {canManageMembers && (
         <div
           className="rounded-lg px-4 py-3 mb-4 text-[12px] leading-relaxed"
           style={{ background: "#1A1A1C", border: "1px solid #36363A", color: "#979393" }}
@@ -79,11 +85,11 @@ export function MembersView({
           </div>
           <div>
             <span style={{ color: "#C4B5FD", fontWeight: 600 }}>Admin</span> — full edit access ·
-            can submit the final pipeline only if you grant permission
+            can submit the final pipeline only if owner grants permission
           </div>
           <div>
             <span style={{ color: "#A1A1AA", fontWeight: 600 }}>Member</span> — can view, comment,
-            and update tasks they&apos;re assigned to
+            and check off tasks if owner or admin grants the permission
           </div>
         </div>
       )}
@@ -122,9 +128,10 @@ export function MembersView({
 
               <RolePill role={role} />
 
-              {isOwner && (
+              {canManageMembers && (
                 <div className="flex items-center gap-2 flex-wrap">
-                  {isAdmin && (
+                  {/* canSubmit toggle — admins only, and only owner can grant. */}
+                  {isAdmin && isOwner && (
                     <button
                       onClick={() => onToggleAdminCanSubmit(m.email)}
                       className="inline-flex items-center gap-1.5 rounded-full transition-colors"
@@ -148,40 +155,74 @@ export function MembersView({
                     </button>
                   )}
 
-                  {isAdmin ? (
+                  {/* canCheckTasks toggle — members only; owner or admin can grant. */}
+                  {!isAdmin && (
                     <button
-                      onClick={() => {
-                        if (confirm(`Demote ${m.email} to Member? They'll lose admin permissions.`)) {
-                          onDemoteToMember(m.email);
-                        }
+                      onClick={() => onToggleMemberCanCheckTasks(m.email)}
+                      className="inline-flex items-center gap-1.5 rounded-full transition-colors"
+                      style={{
+                        background: m.canCheckTasks ? "#15B98122" : "transparent",
+                        border: `1px solid ${m.canCheckTasks ? "#15B98166" : "#36363A"}`,
+                        color: m.canCheckTasks ? "#34D399" : "#71717A",
+                        padding: "4px 10px",
+                        fontSize: "11px",
+                        fontWeight: 500,
+                        cursor: "pointer",
                       }}
-                      className="btn-ghost"
-                      style={{ padding: "4px 10px", fontSize: "11px" }}
-                      title="Demote to member"
+                      title={
+                        m.canCheckTasks
+                          ? "Can check off tasks — click to revoke"
+                          : "Cannot check tasks — click to grant"
+                      }
                     >
-                      Demote
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => onPromoteToAdmin(m.email)}
-                      className="btn-ghost"
-                      style={{ padding: "4px 10px", fontSize: "11px" }}
-                      title="Promote to admin"
-                    >
-                      <Sparkles size={11} strokeWidth={2.5} /> Promote
+                      {m.canCheckTasks ? <CheckCircle2 size={11} /> : <Lock size={11} />}
+                      <span>{m.canCheckTasks ? "Can check tasks" : "No check"}</span>
                     </button>
                   )}
 
-                  <button
-                    onClick={() => {
-                      if (confirm(`Remove ${m.email}?`)) onRemoveMember(m.email);
-                    }}
-                    className="icon-btn opacity-0 group-hover:opacity-100 transition-opacity"
-                    style={{ color: "#F87171" }}
-                    title="Remove from pipeline"
-                  >
-                    <Trash2 size={13} />
-                  </button>
+                  {/* Promote/Demote/Remove — owner only. */}
+                  {isOwner && (
+                    <>
+                      {isAdmin ? (
+                        <button
+                          onClick={() => {
+                            if (
+                              confirm(
+                                `Demote ${m.email} to Member? They'll lose admin permissions.`,
+                              )
+                            ) {
+                              onDemoteToMember(m.email);
+                            }
+                          }}
+                          className="btn-ghost"
+                          style={{ padding: "4px 10px", fontSize: "11px" }}
+                          title="Demote to member"
+                        >
+                          Demote
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => onPromoteToAdmin(m.email)}
+                          className="btn-ghost"
+                          style={{ padding: "4px 10px", fontSize: "11px" }}
+                          title="Promote to admin"
+                        >
+                          <Sparkles size={11} strokeWidth={2.5} /> Promote
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => {
+                          if (confirm(`Remove ${m.email}?`)) onRemoveMember(m.email);
+                        }}
+                        className="icon-btn opacity-0 group-hover:opacity-100 transition-opacity"
+                        style={{ color: "#F87171" }}
+                        title="Remove from pipeline"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
             </div>

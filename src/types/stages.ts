@@ -16,6 +16,8 @@ export type Member = {
   joinedAt: number;
   role: MemberRole;
   canSubmit: boolean;
+  /** Granted by owner/admin. Undefined treated as false (legacy members). */
+  canCheckTasks?: boolean;
 };
 
 export type TaskPosition = { x: number; y: number };

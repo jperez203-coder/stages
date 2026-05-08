@@ -61,6 +61,7 @@ export function App() {
         onSendChannelMessage={(channelId, text, mentions) =>
           app.sendClientChannelMessage(channelId, text, mentions)
         }
+        onToggleTask={(stageId, taskId) => app.clientToggleTask(stageId, taskId)}
       />
     );
   }
@@ -194,6 +195,9 @@ export function App() {
           onPromoteToAdmin={(email) => app.promoteToAdmin(activeClient.id, email)}
           onDemoteToMember={(email) => app.demoteToMember(activeClient.id, email)}
           onToggleAdminCanSubmit={(email) => app.toggleAdminCanSubmit(activeClient.id, email)}
+          onToggleMemberCanCheckTasks={(email) =>
+            app.toggleMemberCanCheckTasks(activeClient.id, email)
+          }
           pendingInvites={app.pendingClientInvitesForActive}
           hasSeenCelebration={app.hasSeenCelebration(activeClient.id)}
           onMarkCelebrationSeen={() => app.markCelebrationSeen(activeClient.id)}
