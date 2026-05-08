@@ -4,24 +4,31 @@ A running log of what shipped in each session. Newest first.
 
 ---
 
-## Phase 3 — Checkpoint 3.2: schema migration drafted (2026-05-08)
+## Phase 3 — Checkpoint 3.2: schema reviewed + CLI ready (2026-05-08)
 
-**Goal:** SQL for the initial Supabase schema, ready to apply once the project is back online.
+**Goal:** Founder-approved schema migration ready to apply via the Supabase CLI once the us-east-1-az4 incident clears.
 
-**What landed:**
-- `supabase/migrations/20260508120000_initial_schema.sql` — full schema covering 16 tables (profiles, workspaces, workspace_memberships, pipelines, pipeline_memberships, stages, tasks, stage_notes, stage_attachments, pipeline_links, channels, channel_memberships, channel_messages, activity_events, read_state, user_templates, team_invites, client_invites). Reflects every locked Phase 3 decision in CLAUDE.md.
+**Schema revisions applied during review:**
+- `workspace_memberships.role` CHECK loosened to `('owner', 'admin', 'member')`. MVP only writes `'owner'`, but the column is pre-loosened to avoid the migration cost when an agency wants a workspace-wide admin role (cross-pipeline visibility without being a co-owner).
+- `activity_events.actor_name text not null` added alongside `actor_id`. Both `stage_name` and `actor_name` are denormalized at write time so historical entries survive renames, deletes, AND user account deletions ("Sarah completed task X" stays correct forever).
+- TODO comment added near `team_invites` / `client_invites` flagging the explicit decision to evaluate Supabase's native `inviteUserByEmail` flow during 3.4. If native handles both agency (email+password) and client (magic-link) cases cleanly, drop the custom tables. If not, keep them.
 
-**Key shape decisions baked in:**
-- No `owner_email` denormalization — owner is a membership row.
-- One-client-channel-per-pipeline enforced at the DB (unique partial index).
-- `channel_messages.mentions` is `uuid[]` with a GIN index.
-- `read_state` is normalized (`user_id`, `scope_type`, `scope_id`, `kind`).
-- `pipelines.current_stage_id` is a back-reference added after `stages` exists (resolves the circular FK).
-- `pipeline_memberships.can_check_tasks` and `can_submit` are real columns (matches the per-member permission UI from Phase 2).
+**Index audit:** all four query-pattern indexes already present:
+- `channel_messages_channel_idx` on `(channel_id, created_at DESC)`
+- `activity_events_pipeline_idx` on `(pipeline_id, created_at DESC)`
+- `tasks_stage_pos_idx` on `(stage_id, position)`
+- `stage_notes_stage_idx` on `(stage_id, created_at DESC)`
 
-**Status:** drafted only — NOT applied. Will be reviewed and applied to the dashboard SQL editor once Supabase us-east-1-az4 connectivity is restored.
+**CLI infrastructure:**
+- `supabase` installed as a dev dependency (v2.98.2). No global install needed; commands run via `npx supabase ...`.
+- `npx supabase init` ran cleanly — generated `supabase/config.toml` and `supabase/.gitignore`. Migrations directory preserved.
+- `supabase/README.md` documents the apply flow (`login` → `link --project-ref fdukdjbrqtltqzhvmmsz` → `db push`) and the discipline that applied migrations are immutable; future schema changes go in new migration files.
 
-**Pending:** RLS policies (3.3) and auth wiring (3.4). RLS is the security gate — do not expose any of these tables to the publishable key without policies in place.
+**Status:** schema is **finalized but NOT applied**. Apply blocked on Supabase incident clearing.
+
+**Pending storage-policy work for 3.3:** when RLS lands, storage bucket policies must be treated with equal scrutiny. The two-browser RLS test plan must include "client A tries to access client B's stage attachment via direct storage URL and gets denied." Storage is the second half of security; do not let it become an afterthought.
+
+**Pending:** RLS policies + storage bucket policies (3.3) and auth wiring (3.4). RLS is the security gate — do not expose any of these tables to the publishable key without policies in place.
 
 ---
 

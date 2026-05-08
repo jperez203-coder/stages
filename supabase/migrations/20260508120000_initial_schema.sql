@@ -45,12 +45,14 @@ create table public.workspaces (
 );
 
 -- ─── workspace_memberships ───────────────────────────────────────────────────
--- The replacement for prototype's workspace.ownerEmail. Today only role='owner'
--- is meaningful at the workspace level; admin/member would expand it later.
+-- The replacement for prototype's workspace.ownerEmail. MVP only writes
+-- role='owner', but the CHECK is pre-loosened to admit admin/member so we
+-- don't pay the column-migration cost later when an agency wants a workspace-
+-- wide ops admin (cross-pipeline visibility without being a co-owner).
 create table public.workspace_memberships (
   workspace_id uuid not null references public.workspaces(id) on delete cascade,
   user_id uuid not null references auth.users(id) on delete cascade,
-  role text not null default 'owner' check (role in ('owner')),
+  role text not null default 'owner' check (role in ('owner', 'admin', 'member')),
   joined_at timestamptz not null default now(),
   primary key (workspace_id, user_id)
 );
@@ -238,12 +240,15 @@ create index channel_messages_channel_idx on public.channel_messages(channel_id,
 create index channel_messages_mentions_idx on public.channel_messages using gin (mentions);
 
 -- ─── activity_events ─────────────────────────────────────────────────────────
--- Append-only event log for the Activity tab. stage_name is denormalized at
--- write time so the entry survives stage renames/deletes.
+-- Append-only event log for the Activity tab. Both stage_name AND actor_name
+-- are denormalized at write time: the entry survives stage renames, stage
+-- deletes, AND user account deletions so historical entries always read
+-- "Sarah completed task X" forever, never "[deleted user] completed task X".
 create table public.activity_events (
   id uuid primary key default uuid_generate_v4(),
   pipeline_id uuid not null references public.pipelines(id) on delete cascade,
   actor_id uuid references auth.users(id) on delete set null,
+  actor_name text not null,
   type text not null check (type in (
     'pipeline_created',
     'member_joined',
@@ -284,6 +289,17 @@ create table public.user_templates (
 );
 
 create index user_templates_owner_idx on public.user_templates(owner_id);
+
+-- ─── invites (team_invites + client_invites) ────────────────────────────────
+-- These two tables track the prototype's custom-token invitation flow.
+--
+-- TODO(3.4) — explicit decision required when wiring auth: compare Supabase's
+-- native auth.admin.inviteUserByEmail() flow against this custom-token
+-- approach. Specifically check whether native handles BOTH cases cleanly:
+--   (a) agency invites that lead to email+password setup, and
+--   (b) client invites that lead to magic-link-only access.
+-- If native handles both, drop these tables. If not, keep them. Don't carry
+-- the duplication into 4.x without making the call.
 
 -- ─── team_invites ────────────────────────────────────────────────────────────
 -- Pending team-member invitations. Acceptance creates a pipeline_memberships
