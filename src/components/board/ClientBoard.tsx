@@ -26,8 +26,8 @@ import { CelebrationBanner } from "./CelebrationBanner";
 import { PipelineMoreMenu } from "./PipelineMoreMenu";
 import { ActivityView } from "./ActivityView";
 import { MembersView } from "./MembersView";
-import { ChatViewPlaceholder } from "./ChatViewPlaceholder";
 import { LinksViewPlaceholder } from "./LinksViewPlaceholder";
+import { ChatView } from "@/components/chat/ChatView";
 import { timeAgo } from "@/lib/format";
 import type { Client, Session, TaskPosition, TeamInvite } from "@/types/stages";
 
@@ -63,6 +63,17 @@ type Props = {
   onMarkCelebrationSeen: () => void;
   // Client portal invites count for the sidebar badge
   clientInvitesCount: number;
+  // Chat
+  clientPortalEmail: string | null;
+  onCreateChannel: (name: string, members: string[], isClient: boolean) => string | null;
+  onAddChannelMember: (channelId: string, email: string) => void;
+  onRemoveChannelMember: (channelId: string, email: string) => void;
+  onSendChannelMessage: (
+    channelId: string,
+    text: string,
+    mentions: string[],
+    internal: boolean,
+  ) => void;
 };
 
 export function ClientBoard({
@@ -91,6 +102,11 @@ export function ClientBoard({
   hasSeenCelebration,
   onMarkCelebrationSeen,
   clientInvitesCount,
+  clientPortalEmail,
+  onCreateChannel,
+  onAddChannelMember,
+  onRemoveChannelMember,
+  onSendChannelMessage,
 }: Props) {
   const completedCount = client.stages.filter((s) => s.completed).length;
   const currentIdx = client.stages.findIndex((s) => s.id === client.currentStage);
@@ -401,7 +417,17 @@ export function ClientBoard({
               onReorderStage={onReorderStage}
             />
           )}
-          {boardTab === "thread" && <ChatViewPlaceholder />}
+          {boardTab === "thread" && (
+            <ChatView
+              client={client}
+              session={session}
+              clientPortalEmail={clientPortalEmail}
+              onCreateChannel={onCreateChannel}
+              onAddChannelMember={onAddChannelMember}
+              onRemoveChannelMember={onRemoveChannelMember}
+              onSendChannelMessage={onSendChannelMessage}
+            />
+          )}
           {boardTab === "activity" && <ActivityView client={client} />}
           {boardTab === "links" && <LinksViewPlaceholder />}
           {boardTab === "members" && (

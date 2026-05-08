@@ -145,9 +145,14 @@ export function App() {
   if (!app.activeStage) {
     const activeClient = app.activeClient;
     const session = app.session;
-    const clientInvitesCount = Object.values(app.clientInvites).filter(
+    const clientInvitesForPipeline = Object.values(app.clientInvites).filter(
       (inv) => inv.clientId === activeClient.id,
-    ).length;
+    );
+    const clientInvitesCount = clientInvitesForPipeline.length;
+    const clientPortalEmail =
+      clientInvitesForPipeline.find((inv) => inv.accepted)?.clientEmail ||
+      clientInvitesForPipeline[0]?.clientEmail ||
+      null;
     return (
       <>
         <ClientBoard
@@ -188,6 +193,19 @@ export function App() {
           hasSeenCelebration={app.hasSeenCelebration(activeClient.id)}
           onMarkCelebrationSeen={() => app.markCelebrationSeen(activeClient.id)}
           clientInvitesCount={clientInvitesCount}
+          clientPortalEmail={clientPortalEmail}
+          onCreateChannel={(name, members, isClient) =>
+            app.createChannel(activeClient.id, name, members, isClient)
+          }
+          onAddChannelMember={(channelId, email) =>
+            app.addChannelMember(activeClient.id, channelId, email)
+          }
+          onRemoveChannelMember={(channelId, email) =>
+            app.removeChannelMember(activeClient.id, channelId, email)
+          }
+          onSendChannelMessage={(channelId, text, mentions, internal) =>
+            app.sendChannelMessage(activeClient.id, channelId, text, mentions, internal)
+          }
         />
         {app.toast && (
           <Toast key={app.toast.id} message={app.toast.message} type={app.toast.type} />
