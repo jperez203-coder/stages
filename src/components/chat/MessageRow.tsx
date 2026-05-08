@@ -56,11 +56,15 @@ export function MessageRow({ msg, sameAuthor, session }: Props) {
 
   return (
     <div
-      className={`flex gap-3 ${sameAuthor ? "pl-[52px] py-0.5" : "py-2"} px-2 rounded-md group transition-colors`}
+      className={`flex gap-3 ${sameAuthor ? "py-0.5" : "py-2"} px-2 rounded-md group transition-colors`}
       style={{
         background: bgColor,
         borderLeft: `2px solid ${borderColor}`,
         marginLeft: borderColor !== "transparent" ? "-2px" : "0",
+        // Same-author follow-ups skip the avatar; pad the row by avatar (40px)
+        // + gap-3 (12px) + the row's own px-2 padding-left (8px) so the body
+        // starts exactly where the new-author row's body starts.
+        ...(sameAuthor && { paddingLeft: 60 }),
       }}
     >
       {!sameAuthor && <Avatar email={msg.author} size={10} shape="square" />}
