@@ -10,6 +10,9 @@ import { NewClientModal } from "@/components/home/NewClientModal";
 import { NewWorkspaceModal } from "@/components/home/NewWorkspaceModal";
 import { ClientBoard } from "@/components/board/ClientBoard";
 import type { BoardTab } from "@/components/board/ClientBoard";
+import { StagePage } from "@/components/board/StagePage";
+import { InviteModal } from "@/components/board/InviteModal";
+import { SaveTemplateModal } from "@/components/board/SaveTemplateModal";
 import { useAppState } from "@/hooks/useAppState";
 
 export function App() {
@@ -145,10 +148,9 @@ export function App() {
   if (!app.activeStage) {
     const activeClient = app.activeClient;
     const session = app.session;
-    const clientInvitesForPipeline = Object.values(app.clientInvites).filter(
-      (inv) => inv.clientId === activeClient.id,
-    );
-    const clientInvitesCount = clientInvitesForPipeline.length;
+    const clientInvitesForPipeline = Object.entries(app.clientInvites)
+      .filter(([, inv]) => inv.clientId === activeClient.id)
+      .map(([token, inv]) => ({ token, ...inv }));
     const clientPortalEmail =
       clientInvitesForPipeline.find((inv) => inv.accepted)?.clientEmail ||
       clientInvitesForPipeline[0]?.clientEmail ||
@@ -172,15 +174,8 @@ export function App() {
           onUpdateTaskPos={(stageId, taskId, pos) =>
             app.updateTaskPosition(activeClient.id, stageId, taskId, pos)
           }
-          onShowInvite={() =>
-            app.showToast("Team invite modal lands in Checkpoint D3", "info")
-          }
-          onShowSaveTemplate={() =>
-            app.showToast("Save-as-template modal lands in Checkpoint D3", "info")
-          }
-          onShowInviteClient={() =>
-            app.showToast("Client portal invite modal lands in Checkpoint D3", "info")
-          }
+          onShowInvite={() => app.setShowInviteModal(true)}
+          onShowSaveTemplate={() => app.setShowSaveTemplateModal(true)}
           onRenameStage={(sid, name) => app.renameStage(activeClient.id, sid, name)}
           onAddStage={() => app.addStage(activeClient.id)}
           onRemoveStage={(sid) => app.removeStage(activeClient.id, sid)}
@@ -192,7 +187,6 @@ export function App() {
           pendingInvites={app.pendingClientInvitesForActive}
           hasSeenCelebration={app.hasSeenCelebration(activeClient.id)}
           onMarkCelebrationSeen={() => app.markCelebrationSeen(activeClient.id)}
-          clientInvitesCount={clientInvitesCount}
           clientPortalEmail={clientPortalEmail}
           onCreateChannel={(name, members, isClient) =>
             app.createChannel(activeClient.id, name, members, isClient)
@@ -206,7 +200,34 @@ export function App() {
           onSendChannelMessage={(channelId, text, mentions, internal) =>
             app.sendChannelMessage(activeClient.id, channelId, text, mentions, internal)
           }
+          onAddLink={(label, url) => app.addLink(activeClient.id, label, url)}
+          onAddImage={(label, dataUrl, fileName, fileSize) =>
+            app.addImage(activeClient.id, label, dataUrl, fileName, fileSize)
+          }
+          onToggleLinkClientVisible={(linkId) =>
+            app.toggleLinkClientVisible(activeClient.id, linkId)
+          }
+          onRemoveLink={(linkId) => app.removeLink(activeClient.id, linkId)}
+          clientInvitesForPipeline={clientInvitesForPipeline}
+          onInviteClientToPipeline={(email) => app.inviteClientToPipeline(activeClient.id, email)}
+          onRevokeClientInvite={app.revokeClientInvite}
         />
+        {app.showInviteModal && (
+          <InviteModal
+            client={activeClient}
+            onCreate={(email) => app.createInvite(activeClient.id, email)}
+            onClose={() => app.setShowInviteModal(false)}
+          />
+        )}
+        {app.showSaveTemplateModal && (
+          <SaveTemplateModal
+            client={activeClient}
+            onSave={(name, includeTasks) =>
+              app.saveAsTemplate(activeClient.id, name, includeTasks)
+            }
+            onClose={() => app.setShowSaveTemplateModal(false)}
+          />
+        )}
         {app.toast && (
           <Toast key={app.toast.id} message={app.toast.message} type={app.toast.type} />
         )}
@@ -214,50 +235,79 @@ export function App() {
     );
   }
 
-  // Active stage open → stage page placeholder (D3).
+  // Active stage open → real StagePage.
+  const activeClient = app.activeClient;
+  const activeStage = app.activeStage;
+  const isCurrent = activeClient.currentStage === activeStage.id;
   return (
     <>
-      <StagePagePlaceholder
-        clientName={app.activeClient.name}
-        stageName={app.activeStage.name}
+      <StagePage
+        client={activeClient}
+        stage={activeStage}
+        session={app.session}
+        isCurrent={isCurrent}
         onBack={() => app.setActiveStageId(null)}
+        onMarkComplete={() => app.completeCurrentStage(activeClient.id)}
+        onToggleTask={(tid) => app.toggleTask(activeClient.id, activeStage.id, tid)}
+        onAddTask={(text) => app.addTask(activeClient.id, activeStage.id, text)}
+        onRemoveTask={(tid) => app.removeTask(activeClient.id, activeStage.id, tid)}
+        onSetTaskNote={(tid, note) =>
+          app.setTaskNote(activeClient.id, activeStage.id, tid, note)
+        }
+        onEditTaskText={(tid, text) =>
+          app.editTaskText(activeClient.id, activeStage.id, tid, text)
+        }
+        onAddNote={(text) => app.addNote(activeClient.id, activeStage.id, text)}
+        onEditNote={(noteId, text) =>
+          app.editNote(activeClient.id, activeStage.id, noteId, text)
+        }
+        onDeleteNote={(noteId) => app.deleteNote(activeClient.id, activeStage.id, noteId)}
+        onUpdateStageDescription={(desc) =>
+          app.updateStageDescription(activeClient.id, activeStage.id, desc)
+        }
+        onSetStageDeadline={(deadline) =>
+          app.setStageDeadline(activeClient.id, activeStage.id, deadline)
+        }
+        onSetTaskDeadline={(taskId, deadline) =>
+          app.setTaskDeadline(activeClient.id, activeStage.id, taskId, deadline)
+        }
+        onToggleStageClientVisible={() =>
+          app.toggleStageClientVisible(activeClient.id, activeStage.id)
+        }
+        onToggleTaskClientVisible={(taskId) =>
+          app.toggleTaskClientVisible(activeClient.id, activeStage.id, taskId)
+        }
+        onToggleNoteClientVisible={(noteId) =>
+          app.toggleNoteClientVisible(activeClient.id, activeStage.id, noteId)
+        }
+        onAddStageAttachment={(label, dataUrl, fileName, fileSize) =>
+          app.addStageAttachment(
+            activeClient.id,
+            activeStage.id,
+            label,
+            dataUrl,
+            fileName,
+            fileSize,
+          )
+        }
+        onToggleStageAttachmentClientVisible={(attachmentId) =>
+          app.toggleStageAttachmentClientVisible(
+            activeClient.id,
+            activeStage.id,
+            attachmentId,
+          )
+        }
+        onRemoveStageAttachment={(attachmentId) =>
+          app.removeStageAttachment(activeClient.id, activeStage.id, attachmentId)
+        }
+        onReorderTask={(taskId, newIndex) =>
+          app.reorderTask(activeClient.id, activeStage.id, taskId, newIndex)
+        }
       />
       {app.toast && (
         <Toast key={app.toast.id} message={app.toast.message} type={app.toast.type} />
       )}
     </>
-  );
-}
-
-function StagePagePlaceholder({
-  clientName,
-  stageName,
-  onBack,
-}: {
-  clientName: string;
-  stageName: string;
-  onBack: () => void;
-}) {
-  return (
-    <div className="min-h-screen flex items-center justify-center px-4 dotted-grid">
-      <div className="panel-card p-8 w-full max-w-md fade-in text-center">
-        <div className="flex justify-center mb-5">
-          <StagesLogo size={48} />
-        </div>
-        <div className="text-[11px] uppercase tracking-wider mb-2" style={{ color: "#979393" }}>
-          Phase 2 · Checkpoint D3
-        </div>
-        <h1 className="text-xl font-semibold mb-2">{stageName}</h1>
-        <p className="text-[13px] mb-1" style={{ color: "#E4E4E7" }}>
-          <span style={{ color: "#979393" }}>Stage of</span> {clientName}
-        </p>
-        <p className="text-[13px] mb-6 leading-relaxed" style={{ color: "#979393" }}>
-          The full stage page (checklist with inline task-name editing, files, notes, deadline pill)
-          lands in Checkpoint D3.
-        </p>
-        <button onClick={onBack} className="btn-ghost">Back to pipeline</button>
-      </div>
-    </div>
   );
 }
 

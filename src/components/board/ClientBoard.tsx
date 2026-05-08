@@ -26,10 +26,17 @@ import { CelebrationBanner } from "./CelebrationBanner";
 import { PipelineMoreMenu } from "./PipelineMoreMenu";
 import { ActivityView } from "./ActivityView";
 import { MembersView } from "./MembersView";
-import { LinksViewPlaceholder } from "./LinksViewPlaceholder";
+import { LinksView } from "./LinksView";
+import { InviteClientModal } from "./InviteClientModal";
 import { ChatView } from "@/components/chat/ChatView";
 import { timeAgo } from "@/lib/format";
-import type { Client, Session, TaskPosition, TeamInvite } from "@/types/stages";
+import type {
+  Client,
+  ClientInvite,
+  Session,
+  TaskPosition,
+  TeamInvite,
+} from "@/types/stages";
 
 export type BoardTab = "canvas" | "thread" | "activity" | "links" | "members";
 
@@ -46,7 +53,6 @@ type Props = {
   onUpdateTaskPos: (stageId: string, taskId: string, pos: TaskPosition) => void;
   onShowInvite: () => void;
   onShowSaveTemplate: () => void;
-  onShowInviteClient: () => void;
   // Stage edit
   onRenameStage: (stageId: string, name: string) => void;
   onAddStage: () => void;
@@ -61,8 +67,6 @@ type Props = {
   // Celebration
   hasSeenCelebration: boolean;
   onMarkCelebrationSeen: () => void;
-  // Client portal invites count for the sidebar badge
-  clientInvitesCount: number;
   // Chat
   clientPortalEmail: string | null;
   onCreateChannel: (name: string, members: string[], isClient: boolean) => string | null;
@@ -74,6 +78,15 @@ type Props = {
     mentions: string[],
     internal: boolean,
   ) => void;
+  // Links
+  onAddLink: (label: string, url: string) => void;
+  onAddImage: (label: string, dataUrl: string, fileName: string, fileSize: number) => void;
+  onToggleLinkClientVisible: (linkId: string) => void;
+  onRemoveLink: (linkId: string) => void;
+  // Client portal invites (modal owned internally by ClientBoard, matching prototype)
+  clientInvitesForPipeline: (ClientInvite & { token: string })[];
+  onInviteClientToPipeline: (email: string) => { token: string; link: string } | null;
+  onRevokeClientInvite: (token: string) => void;
 };
 
 export function ClientBoard({
@@ -89,7 +102,6 @@ export function ClientBoard({
   onUpdateTaskPos,
   onShowInvite,
   onShowSaveTemplate,
-  onShowInviteClient,
   onRenameStage,
   onAddStage,
   onRemoveStage,
@@ -101,12 +113,18 @@ export function ClientBoard({
   pendingInvites,
   hasSeenCelebration,
   onMarkCelebrationSeen,
-  clientInvitesCount,
   clientPortalEmail,
   onCreateChannel,
   onAddChannelMember,
   onRemoveChannelMember,
   onSendChannelMessage,
+  onAddLink,
+  onAddImage,
+  onToggleLinkClientVisible,
+  onRemoveLink,
+  clientInvitesForPipeline,
+  onInviteClientToPipeline,
+  onRevokeClientInvite,
 }: Props) {
   const completedCount = client.stages.filter((s) => s.completed).length;
   const currentIdx = client.stages.findIndex((s) => s.id === client.currentStage);
@@ -126,6 +144,8 @@ export function ClientBoard({
   const [zoom, setZoom] = useState(1);
   const [showCelebration, setShowCelebration] = useState(false);
   const [confettiActive, setConfettiActive] = useState(false);
+  // Client portal invite modal — local to the board, matching the prototype.
+  const [showClientInviteModal, setShowClientInviteModal] = useState(false);
 
   const ZOOM_MIN = 0.4;
   const ZOOM_MAX = 1.6;
@@ -395,8 +415,8 @@ export function ClientBoard({
               <ToolBtn
                 icon={<ExternalLink size={15} />}
                 label="Invite client to portal"
-                onClick={onShowInviteClient}
-                count={clientInvitesCount}
+                onClick={() => setShowClientInviteModal(true)}
+                count={clientInvitesForPipeline.length}
               />
             </>
           )}
@@ -429,7 +449,16 @@ export function ClientBoard({
             />
           )}
           {boardTab === "activity" && <ActivityView client={client} />}
-          {boardTab === "links" && <LinksViewPlaceholder />}
+          {boardTab === "links" && (
+            <LinksView
+              client={client}
+              session={session}
+              onAddLink={onAddLink}
+              onAddImage={onAddImage}
+              onToggleLinkClientVisible={onToggleLinkClientVisible}
+              onRemoveLink={onRemoveLink}
+            />
+          )}
           {boardTab === "members" && (
             <MembersView
               client={client}
@@ -490,6 +519,16 @@ export function ClientBoard({
           )}
         </main>
       </div>
+
+      {showClientInviteModal && (
+        <InviteClientModal
+          pipeline={client}
+          existingInvites={clientInvitesForPipeline}
+          onInvite={onInviteClientToPipeline}
+          onRevoke={onRevokeClientInvite}
+          onClose={() => setShowClientInviteModal(false)}
+        />
+      )}
     </div>
   );
 }
