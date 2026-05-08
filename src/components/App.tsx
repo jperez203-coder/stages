@@ -1,5 +1,9 @@
 "use client";
 
+// Eager import: ensures the Supabase client is constructed at app start so
+// auth state and dev-console testing work immediately.
+import "@/lib/supabase";
+
 import { StagesLogo } from "@/components/icons/StagesLogo";
 import { LoginScreen } from "@/components/auth/LoginScreen";
 import { InviteAcceptScreen } from "@/components/auth/InviteAcceptScreen";

@@ -4,6 +4,43 @@ A running log of what shipped in each session. Newest first.
 
 ---
 
+## Phase 3 — Checkpoint 3.2: schema migration drafted (2026-05-08)
+
+**Goal:** SQL for the initial Supabase schema, ready to apply once the project is back online.
+
+**What landed:**
+- `supabase/migrations/20260508120000_initial_schema.sql` — full schema covering 16 tables (profiles, workspaces, workspace_memberships, pipelines, pipeline_memberships, stages, tasks, stage_notes, stage_attachments, pipeline_links, channels, channel_memberships, channel_messages, activity_events, read_state, user_templates, team_invites, client_invites). Reflects every locked Phase 3 decision in CLAUDE.md.
+
+**Key shape decisions baked in:**
+- No `owner_email` denormalization — owner is a membership row.
+- One-client-channel-per-pipeline enforced at the DB (unique partial index).
+- `channel_messages.mentions` is `uuid[]` with a GIN index.
+- `read_state` is normalized (`user_id`, `scope_type`, `scope_id`, `kind`).
+- `pipelines.current_stage_id` is a back-reference added after `stages` exists (resolves the circular FK).
+- `pipeline_memberships.can_check_tasks` and `can_submit` are real columns (matches the per-member permission UI from Phase 2).
+
+**Status:** drafted only — NOT applied. Will be reviewed and applied to the dashboard SQL editor once Supabase us-east-1-az4 connectivity is restored.
+
+**Pending:** RLS policies (3.3) and auth wiring (3.4). RLS is the security gate — do not expose any of these tables to the publishable key without policies in place.
+
+---
+
+## Phase 3 — Checkpoint 3.1: Supabase client wired (2026-05-08)
+
+**Goal:** install `@supabase/supabase-js`, set up env files, expose a typed client.
+
+**What landed:**
+- `@supabase/supabase-js` installed.
+- `.gitignore` now allows `.env.example` while still ignoring `.env.local`.
+- `.env.local` (gitignored) has the real project URL + publishable key.
+- `.env.example` (committed) has clearly-fake placeholders.
+- `src/lib/supabase.ts` — exports a `SupabaseClient` constructed from the env vars; throws at module load if vars are missing. Dev-only `window.__supabase` escape hatch for browser-console testing.
+- `src/components/App.tsx` eagerly imports the client so it's constructed at app start.
+
+**Connectivity test:** REST endpoint reachable (returns expected 401 "Secret API key required" for the publishable key — as designed). Auth endpoints time out, traced to a Supabase-side incident in us-east-1-az4 (active outage as of 2026-05-08, "several more hours" ETA per their status page). Code is verified at the source level; full end-to-end auth round-trip waits for the incident to clear.
+
+---
+
 ## Phase 2 — Checkpoint E: client portal (2026-05-07)
 
 **Goal:** Replace the PortalPlaceholder with the real `ClientPortal`. Add the new Files section that the prototype was missing.
