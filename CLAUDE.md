@@ -138,6 +138,7 @@ stages/
 - **No CLAUDE.md/PROGRESS.md churn** unless something durable changed; phase-end updates only.
 - **Push to `main`** directly until production. PR discipline starts when there are real customers.
 - **Don't expand scope** beyond the prototype — flag missing/weird things, don't fix silently.
+- **[v1.1 wishlist](WISHLIST.md)** captures intentionally-deferred features. Anything not in the prototype goes there, not into Phase 2 code. Don't act on wishlist items without explicit go-ahead.
 
 ## Reading order for a new session
 

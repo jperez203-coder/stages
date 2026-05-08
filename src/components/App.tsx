@@ -8,6 +8,8 @@ import { Toast } from "@/components/Toast";
 import { ClientList } from "@/components/home/ClientList";
 import { NewClientModal } from "@/components/home/NewClientModal";
 import { NewWorkspaceModal } from "@/components/home/NewWorkspaceModal";
+import { ClientBoard } from "@/components/board/ClientBoard";
+import type { BoardTab } from "@/components/board/ClientBoard";
 import { useAppState } from "@/hooks/useAppState";
 
 export function App() {
@@ -27,7 +29,7 @@ export function App() {
     );
   }
 
-  // ─── CLIENT PORTAL ROUTES — take precedence over agency-side ──────────
+  // ─── CLIENT PORTAL ROUTES ─────────────────────────────────────────────
   if (app.pendingClientPortalInvite && !app.clientSession) {
     return (
       <ClientPortalAcceptScreen
@@ -139,17 +141,68 @@ export function App() {
     );
   }
 
-  // Active pipeline open → pipeline view (lands in Checkpoint D).
+  // Active client, no stage focused → ClientBoard.
+  if (!app.activeStage) {
+    const activeClient = app.activeClient;
+    const session = app.session;
+    const clientInvitesCount = Object.values(app.clientInvites).filter(
+      (inv) => inv.clientId === activeClient.id,
+    ).length;
+    return (
+      <>
+        <ClientBoard
+          client={activeClient}
+          session={session}
+          boardTab={app.boardTab as BoardTab}
+          setBoardTab={app.setBoardTab}
+          unread={app.computeUnread(activeClient)}
+          onBack={() => {
+            app.setActiveClientId(null);
+            app.setActiveStageId(null);
+            app.setBoardTab("canvas");
+          }}
+          onOpenStage={app.setActiveStageId}
+          onMoveToStage={(sid) => app.moveToStage(activeClient.id, sid)}
+          onSubmitPipeline={() => app.submitPipeline(activeClient.id)}
+          onUpdateTaskPos={(stageId, taskId, pos) =>
+            app.updateTaskPosition(activeClient.id, stageId, taskId, pos)
+          }
+          onShowInvite={() =>
+            app.showToast("Team invite modal lands in Checkpoint D3", "info")
+          }
+          onShowSaveTemplate={() =>
+            app.showToast("Save-as-template modal lands in Checkpoint D3", "info")
+          }
+          onShowInviteClient={() =>
+            app.showToast("Client portal invite modal lands in Checkpoint D3", "info")
+          }
+          onRenameStage={(sid, name) => app.renameStage(activeClient.id, sid, name)}
+          onAddStage={() => app.addStage(activeClient.id)}
+          onRemoveStage={(sid) => app.removeStage(activeClient.id, sid)}
+          onReorderStage={(sid, delta) => app.reorderStage(activeClient.id, sid, delta)}
+          onRemoveMember={(email) => app.removeMember(activeClient.id, email)}
+          onPromoteToAdmin={(email) => app.promoteToAdmin(activeClient.id, email)}
+          onDemoteToMember={(email) => app.demoteToMember(activeClient.id, email)}
+          onToggleAdminCanSubmit={(email) => app.toggleAdminCanSubmit(activeClient.id, email)}
+          pendingInvites={app.pendingClientInvitesForActive}
+          hasSeenCelebration={app.hasSeenCelebration(activeClient.id)}
+          onMarkCelebrationSeen={() => app.markCelebrationSeen(activeClient.id)}
+          clientInvitesCount={clientInvitesCount}
+        />
+        {app.toast && (
+          <Toast key={app.toast.id} message={app.toast.message} type={app.toast.type} />
+        )}
+      </>
+    );
+  }
+
+  // Active stage open → stage page placeholder (D3).
   return (
     <>
-      <PipelinePlaceholder
+      <StagePagePlaceholder
         clientName={app.activeClient.name}
-        emoji={app.activeClient.emoji}
-        onBack={() => {
-          app.setActiveClientId(null);
-          app.setActiveStageId(null);
-          app.setBoardTab("canvas");
-        }}
+        stageName={app.activeStage.name}
+        onBack={() => app.setActiveStageId(null)}
       />
       {app.toast && (
         <Toast key={app.toast.id} message={app.toast.message} type={app.toast.type} />
@@ -158,13 +211,13 @@ export function App() {
   );
 }
 
-function PipelinePlaceholder({
+function StagePagePlaceholder({
   clientName,
-  emoji,
+  stageName,
   onBack,
 }: {
   clientName: string;
-  emoji: string;
+  stageName: string;
   onBack: () => void;
 }) {
   return (
@@ -174,17 +227,17 @@ function PipelinePlaceholder({
           <StagesLogo size={48} />
         </div>
         <div className="text-[11px] uppercase tracking-wider mb-2" style={{ color: "#979393" }}>
-          Phase 2 · Checkpoint D
+          Phase 2 · Checkpoint D3
         </div>
-        <h1 className="text-xl font-semibold mb-2">
-          {emoji || "📋"} {clientName}
-        </h1>
-        <p className="text-[13px] mb-6 leading-relaxed" style={{ color: "#979393" }}>
-          The pipeline view (canvas, stage page, chat, files, members, activity) lands in
-          Checkpoint D. The pipeline is selected and addressable in app state — clicking back
-          returns you to the homepage cleanly.
+        <h1 className="text-xl font-semibold mb-2">{stageName}</h1>
+        <p className="text-[13px] mb-1" style={{ color: "#E4E4E7" }}>
+          <span style={{ color: "#979393" }}>Stage of</span> {clientName}
         </p>
-        <button onClick={onBack} className="btn-ghost">Back to homepage</button>
+        <p className="text-[13px] mb-6 leading-relaxed" style={{ color: "#979393" }}>
+          The full stage page (checklist with inline task-name editing, files, notes, deadline pill)
+          lands in Checkpoint D3.
+        </p>
+        <button onClick={onBack} className="btn-ghost">Back to pipeline</button>
       </div>
     </div>
   );
