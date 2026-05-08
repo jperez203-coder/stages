@@ -13,6 +13,7 @@ import type { BoardTab } from "@/components/board/ClientBoard";
 import { StagePage } from "@/components/board/StagePage";
 import { InviteModal } from "@/components/board/InviteModal";
 import { SaveTemplateModal } from "@/components/board/SaveTemplateModal";
+import { ClientPortal } from "@/components/portal/ClientPortal";
 import { useAppState } from "@/hooks/useAppState";
 
 export function App() {
@@ -52,7 +53,16 @@ export function App() {
   }
 
   if (app.clientSession && app.clientPipeline) {
-    return <PortalPlaceholder email={app.clientSession.email} onLogout={app.handleClientLogout} />;
+    return (
+      <ClientPortal
+        pipeline={app.clientPipeline}
+        clientSession={app.clientSession}
+        onLogout={app.handleClientLogout}
+        onSendChannelMessage={(channelId, text, mentions) =>
+          app.sendClientChannelMessage(channelId, text, mentions)
+        }
+      />
+    );
   }
 
   if (app.clientSession && !app.clientPipeline) {
@@ -311,31 +321,3 @@ export function App() {
   );
 }
 
-function PortalPlaceholder({
-  email,
-  onLogout,
-}: {
-  email: string;
-  onLogout: () => void;
-}) {
-  return (
-    <div className="min-h-screen flex items-center justify-center px-4 dotted-grid">
-      <div className="panel-card p-8 w-full max-w-md fade-in text-center">
-        <div className="flex justify-center mb-5">
-          <StagesLogo size={48} />
-        </div>
-        <div className="text-[11px] uppercase tracking-wider mb-2" style={{ color: "#979393" }}>
-          Phase 2 · Checkpoint E
-        </div>
-        <h1 className="text-xl font-semibold mb-2">Client portal</h1>
-        <p className="text-[13px] mb-1" style={{ color: "#E4E4E7" }}>
-          <span style={{ color: "#979393" }}>Signed in as</span> {email}
-        </p>
-        <p className="text-[13px] mb-6 leading-relaxed" style={{ color: "#979393" }}>
-          The project portal view (with the new Files section) lands in Checkpoint E.
-        </p>
-        <button onClick={onLogout} className="btn-ghost">Sign out</button>
-      </div>
-    </div>
-  );
-}

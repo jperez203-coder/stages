@@ -4,6 +4,55 @@ A running log of what shipped in each session. Newest first.
 
 ---
 
+## Phase 2 — Checkpoint E: client portal (2026-05-07)
+
+**Goal:** Replace the PortalPlaceholder with the real `ClientPortal`. Add the new Files section that the prototype was missing.
+
+**What landed:**
+- `src/components/portal/ClientPortal.tsx` — full client portal with three tabs (Project / Chat / Files). Project tab: status pill, overall progress, action items, project journey of `clientVisible` stages with their visible tasks + visible notes. Chat tab shown only when the client is a member of at least one channel. Files tab unconditional.
+- `src/components/portal/ClientPortalChat.tsx` — read-only-styled subset of the chat ecosystem reusing `MessageRow`, `ChannelComposer`, `ChannelRow`, `MembersAvatarStack`. Filters internal messages at render in addition to the storage-layer guard.
+- `src/components/portal/ClientPortalFiles.tsx` — the new section. Rolls up `clientVisible` items from `pipeline.links` + `clientVisible` items from `stage.attachments` across all stages. Sorted newest-first. Image thumbnails with click-to-preview lightbox. Stage-attachment items show the colored stage badge. Read-only — no upload, no toggle, no delete.
+- `src/components/App.tsx` — replaces `PortalPlaceholder` with the real `<ClientPortal />` and wires `sendClientChannelMessage` for client-side channel posts.
+- `WISHLIST.md` — captures per-task notes (single field) as intentional MVP design. Notes that the asymmetry with stage notes (threaded) is on purpose: stage notes for ongoing commentary, task notes for quick reminders. Don't change without real customer signal.
+
+**Verified:** dev server returns HTTP 200, no console errors. Agency-side flow still works (sign in → homepage → create pipeline → open). Source-reviewed the portal wiring (App.tsx → ClientPortal → tabs).
+
+**Known limitation:** The full magic-link landing → portal experience can't be tested end-to-end in the in-memory stub setup, because the stub clears on page reload and the magic-link flow detects the token in the load useEffect at mount. Phase 4 (Supabase) makes this testable since the DB persists across navigations.
+
+**Phase 2 complete.** All checkpoints A–E shipped. Sole feature addition during the refactor: inline task name editing in `ChecklistItem` (Checkpoint D3).
+
+---
+
+## Phase 2 — Checkpoint D3: stage page + links + remaining modals (2026-05-07)
+
+See git history (`Phase 2 checkpoint D3`).
+
+---
+
+## Phase 2 — Checkpoint D2: chat ecosystem (2026-05-07)
+
+See git history (`Phase 2 checkpoint D2`).
+
+---
+
+## Phase 2 — Checkpoint D1: pipeline view chrome + canvas + activity + members (2026-05-07)
+
+See git history (`Phase 2 checkpoint D1`).
+
+---
+
+## Phase 2 — Checkpoint C: homepage / ClientList ecosystem (2026-05-07)
+
+See git history (`Phase 2 checkpoint C`).
+
+---
+
+## Phase 2 — Checkpoint B: state hook + auth + app routing (2026-05-07)
+
+See git history (`Phase 2 checkpoint B`).
+
+---
+
 ## Phase 2 — Checkpoint A: foundation (2026-05-07)
 
 **Goal:** lay TypeScript / lib / primitives groundwork without changing visible behavior.
