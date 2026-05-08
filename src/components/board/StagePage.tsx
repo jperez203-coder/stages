@@ -290,14 +290,14 @@ export function StagePage({
                 <span
                   className="badge"
                   style={{
-                    background: stage.color + "22",
-                    borderColor: stage.color + "44",
-                    color: stage.color,
+                    background: "#15B98122",
+                    borderColor: "#15B98144",
+                    color: "#34D399",
                   }}
                 >
                   <span
                     className="inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle"
-                    style={{ background: stage.color }}
+                    style={{ background: "#15B981" }}
                   />
                   Active
                 </span>
