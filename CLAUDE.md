@@ -80,22 +80,144 @@ When in doubt, mirror the prototype's shapes — don't over-normalize. Refactor 
 
 **Auth methods coexist on one user.** A typical client signs up via magic-link (no password). When that same person later upgrades to running their own agency workspace, they can add a password to the same account for faster sign-in. Supabase supports both auth methods on a single user via the `identities` table — use that, don't duplicate accounts.
 
-## Permission model
+## Security model
 
-Three tiers, all **per-pipeline** (not org-wide):
+The canonical source of truth for who can do what. Everything else (RLS policies, app-layer gates, route guards) implements what's here.
 
-| Role | Can do |
-| --- | --- |
-| Owner | Full access. Only one who can submit the final pipeline by default. |
-| Admin | Full edit access. Can submit *only* if owner flips that admin's `canSubmit` flag. |
-| Member | View, comment, update tasks they're assigned to. |
+### Roles
 
-**Client** is a role on a membership, not a separate kind of account — see [Identity model](#identity-model). A user with the `client` role on a pipeline sees only `clientVisible: true` items, and `internal: true` messages are filtered out at render in two places (defense in depth). Clients post into channels they're members of, with `internal: false` hard-coded server-side.
+Four roles. The first three apply at the agency side; the fourth is the external-user role. All are properties of a **membership row**, not the user.
 
-Auth (Phase 3 onward):
-- **Default for clients** = magic-link only (no password). Lands directly on the portal. Email cached in localStorage so return visits show "Welcome back, [email] — send a new sign-in link?". Sessions long-lived (30 days).
-- **Default for agency owners** = email + password.
-- **Both methods can coexist** on one user via Supabase `identities`. A magic-link-only client who later creates their own workspace can add a password to the same `auth.users` row — no duplicate account.
+| Role | Scope | Read | Write | Notes |
+| --- | --- | --- | --- | --- |
+| **Owner** | workspace + pipeline | Full | Full | Workspace creator. The only role that can delete the workspace, manage billing, invite teammates at the workspace level, and submit the final pipeline by default. |
+| **Admin** | pipeline | Full edit access on pipeline | All edits incl. stage/task/note/file/channel management | Can submit final pipeline only if the owner flips `pipeline_memberships.can_submit = true`. Can grant `can_check_tasks` to members (lower-stakes than `can_submit`). |
+| **Member** | pipeline | View + comment | Toggle task `done` only if `can_check_tasks = true`; cannot edit stage structure | Default role for invited teammates. |
+| **Client** | pipeline (one only, via magic-link) | Only rows flagged `client_visible = true` (stages, tasks, notes, files); only channels they're a member of; only non-internal messages | Toggle task `done` on `client_visible` tasks; post messages with `is_internal` forced to `false` | Cannot create channels, see internal channels/notes, manage members, edit anything else, or submit. Tracked via `pipeline_memberships` with `role = 'client'` only — no `workspace_memberships` row. |
+
+### Identity stays the same across roles
+
+See the Identity model section above. One user, one email, same `auth.users` row. The same person can simultaneously be an Owner of one workspace, an Admin on a different agency's pipeline, and a Client on a third — no contradiction, all enforced by membership rows.
+
+### Auth methods (3.4 onward)
+
+Three coexist on the same `auth.users` row via Supabase Identity Linking:
+
+| Method | Primary use | Notes |
+| --- | --- | --- |
+| Email + password | Agencies (default) | Standard sign-up flow. |
+| Google OAuth | Agencies + teammates | "Sign in with Google" on the auth screen. |
+| Magic link | Clients (default), agencies (alternative) | Passwordless. Long-lived session (30 days) for clients so they don't constantly re-auth. |
+
+A magic-link-only client who later creates their own agency workspace can add a password (or link Google) to the same account — no duplicate `auth.users` row. **Policies must not assume a specific auth method**, only that `auth.uid()` returns the stable user ID.
+
+### The four critical isolation rules (the things RLS exists to enforce)
+
+These are the policies that, if wrong, leak data.
+
+1. **Workspace isolation.** A user can only read `workspaces`, `workspace_memberships`, and any descendants if they have an active membership in that workspace OR are a client on a pipeline that belongs to that workspace. Cross-workspace queries must return zero rows for non-members.
+2. **Cross-agency isolation.** A user cannot query data from any workspace they don't belong to, by any means. RLS filters by membership, not by `user_id` presence in some unrelated table.
+3. **Client visibility scope.** A client invited to pipeline X can only see:
+   - The pipeline record itself
+   - Stages where `client_visible = true`
+   - Tasks where `client_visible = true` AND the parent stage is also client-visible
+   - Stage notes where `client_visible = true`
+   - Pipeline links where `client_visible = true`
+   - Stage attachments where `client_visible = true`
+   - Channels they're explicitly a member of
+   - Messages in those channels where `is_internal = false`
+
+   Anything not in this list is invisible to them, even via direct API access.
+4. **Internal-message privacy is enforced in three layers.** Defense in depth:
+   - **RLS policy** filters `is_internal = true` from any SELECT a client runs (the only layer that protects against direct API access — most important).
+   - **Application server-side** hard-codes `is_internal = false` for any message a client sends (in `clientToggleTask` / `sendClientChannelMessage` patterns).
+   - **Application render-side** filters internal messages on the client portal before rendering.
+
+### Client write surface (the only mutations clients can make)
+
+Clients can:
+- Toggle `tasks.done` on tasks where `client_visible = true` AND parent stage is `client_visible` AND they're a member of the parent pipeline as `role = 'client'`. *(Note: client task-checking does NOT require a `can_check_tasks` flag — that flag is for agency members. For clients, "tasks they're assigned to" == `client_visible` tasks.)*
+- INSERT a `channel_messages` row in channels they're a member of, with `is_internal` forced to `false` by RLS WITH CHECK clause.
+
+Clients **cannot**:
+- Create / edit stages, tasks (other than `done`), notes, files, channels, members
+- Toggle any visibility flag
+- Submit pipelines
+- Read anything outside the visibility scope above
+
+### Submit-final-pipeline gate
+
+Only specific roles can mutate `pipelines.submitted_at` / `pipelines.submitted_by`:
+
+- Workspace owner of the pipeline's workspace: always.
+- Pipeline-level admin: only if `pipeline_memberships.can_submit = true`.
+- Member: never.
+- Client: never.
+
+### Storage bucket policies (security half #2)
+
+Two private buckets with signed-URL access. Public buckets are not allowed.
+
+| Bucket | Path convention | Holds |
+| --- | --- | --- |
+| `stage-attachments` | `{pipeline_id}/{stage_id}/{attachment_id}.{ext}` | Files uploaded on the stage page |
+| `pipeline-files` | `{pipeline_id}/{link_id}.{ext}` | Pipeline-level Files & Links uploads |
+
+Policies must enforce:
+- Only authenticated users can upload.
+- A user can only read a file if they're authorized to read the corresponding `stage_attachments` / `pipeline_links` row (joined by `storage_path = name`). For clients, that means the row's `client_visible = true`.
+- File URLs are signed (time-limited), never public.
+- Path encoding allows policies to extract `pipeline_id` via `(storage.foldername(name))[1]` for fast membership checks.
+
+Storage gets the same scrutiny as table RLS. The two-browser test (below) explicitly probes "client A tries to fetch client B's file via direct storage URL — must 403."
+
+### Pricing-driven gates (Phase 6 — Stripe billing)
+
+Schema must support fast seat-counting for the Solo vs Team plan distinction. Definitions:
+
+- **Agency seat** = a unique user with EITHER a `workspace_memberships` row in the workspace, OR a `pipeline_memberships` row with `role IN ('owner', 'admin', 'member')` on any pipeline in the workspace.
+- **Client seat** = a `pipeline_memberships` row with `role = 'client'`. Always free, never counted.
+
+Seat-count query (must be fast):
+```sql
+select count(distinct user_id) from (
+  select user_id from workspace_memberships where workspace_id = $1
+  union
+  select pm.user_id from pipeline_memberships pm
+  join pipelines p on p.id = pm.pipeline_id
+  where p.workspace_id = $1 and pm.role in ('owner', 'admin', 'member')
+) seat_holders;
+```
+
+Existing indexes (`workspace_memberships` PK on `(workspace_id, user_id)`, `pipelines_workspace_idx`, `pipeline_memberships_role_idx`) cover this. Don't enforce the seat cap in RLS — that's an application-layer pre-flight check before INSERTing a `pipeline_memberships` row with an agency role. RLS guards the perimeter; pricing guards the seat count above the perimeter.
+
+### The two-browser test (the verification gate before 3.4)
+
+After RLS + storage policies are written, this test runs before any auth-wiring or production deploy. Failure on any point = RLS is broken, do not advance.
+
+**Browser A — Agency A:**
+1. Sign up as Agency A, create Workspace A, create Pipeline A1.
+2. Invite a client to Pipeline A1, upload a stage attachment.
+3. In the client channel, post a public message AND an internal message.
+
+**Browser B — Agency B (different email, incognito or separate browser):**
+1. Sign up as Agency B, create Workspace B, create Pipeline B1.
+2. Try to:
+   - `select * from workspaces` → only Workspace B in result.
+   - `select * from pipelines` → only Pipeline B1.
+   - `select * from pipelines where id = '<Pipeline A1 id>'` → empty result.
+   - `select * from channel_messages` → only B1's messages.
+   - `GET <Pipeline A1's stage attachment direct storage URL>` → **403 Forbidden**.
+
+**Browser C — the client of Pipeline A1 (third session):**
+1. Should see Pipeline A1.
+2. Should NOT see Workspace A as a top-level workspace.
+3. Should NOT see Pipeline B1.
+4. Should see only `client_visible` stages, tasks, notes, files for A1.
+5. Should see ONLY non-internal messages in their client channel — the internal message must be invisible.
+6. Should NOT see other Agency A pipelines (if any).
+
+Every check passes or RLS is broken. **Two-browser testing is non-optional.** Phase 3.3 doesn't advance to 3.4 until this passes.
 
 ## Phase 3 schema decisions (locked)
 
