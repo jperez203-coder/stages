@@ -4,6 +4,29 @@ A running log of what shipped in each session. Newest first.
 
 ---
 
+## Phase 3 — Checkpoint 3.3 (verification plan): RLS_TEST.md (2026-05-09)
+
+**Goal:** partial verification of RLS policies via the SQL editor before adding more layers (auth in 3.4) on top.
+
+**What landed:**
+- `supabase/RLS_TEST.md` — 21-test checklist for the SQL editor. Three phases: (1) create 5 test users via the Auth dashboard with auto-confirm, (2) seed test data with fixed UUIDs via one big DO block, (3) run impersonated queries using `set local role authenticated; set local request.jwt.claims to '{"sub": "..."}';` wrapped in `begin/rollback` so mutations don't persist between tests. Each test has expected output and a pass/fail checkbox.
+
+**Coverage of the 8 boundaries the founder listed:**
+1. Cross-agency workspace isolation — Tests 1–4
+2. Client cannot see other agency's pipeline — Test 7
+3. Client cannot see internal channel messages — Tests 12–14b (incl. INSERT-block test)
+4. Client cannot see hidden stages/tasks/notes/files — Tests 8–11 (incl. parent-gate enforcement)
+5. Member cannot submit — Test 15 (RLS silent denial)
+6. Admin without can_submit cannot submit — Test 16 (trigger raises)
+7. Owner can submit — Test 17
+8. Storage cross-agency probe — Test 18 (real HTTP probe waits for 3.4)
+
+**Bonus tests added:** admin can_check_tasks scope (Tests 19–20), last-owner protection trigger (Test 21).
+
+**Status:** awaiting founder to apply the RLS migration and run through the 21-test checklist.
+
+---
+
 ## Phase 3 — Checkpoint 3.3 (SQL written): RLS migration ready to apply (2026-05-09)
 
 **Goal:** the RLS migration that enforces every rule in CLAUDE.md → Security model. Plan was approved with answers to the five open questions; SQL implements those answers exactly.
