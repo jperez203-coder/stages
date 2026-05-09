@@ -17,9 +17,6 @@
 -- until RLS is enabled and policies are in place.
 -- ============================================================================
 
--- ─── extensions ──────────────────────────────────────────────────────────────
-create extension if not exists "uuid-ossp";
-
 -- ─── profiles ────────────────────────────────────────────────────────────────
 -- Lightweight extension of auth.users. Join target for display data; the
 -- email is denormalized so app queries don't need to reach into auth schema.
@@ -39,7 +36,7 @@ comment on table public.profiles is
 -- A workspace groups pipelines for one agency. Multi-owner allowed via
 -- workspace_memberships (locked decision #5).
 create table public.workspaces (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   name text not null,
   created_at timestamptz not null default now()
 );
@@ -64,7 +61,7 @@ create index workspace_memberships_user_idx on public.workspace_memberships(user
 -- workspace_id is required so every pipeline lives inside a workspace.
 -- current_stage_id is added below as a deferred FK (circular with stages).
 create table public.pipelines (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references public.workspaces(id) on delete cascade,
   name text not null,
   company text,
@@ -99,7 +96,7 @@ create index pipeline_memberships_role_idx on public.pipeline_memberships(pipeli
 -- ─── stages ──────────────────────────────────────────────────────────────────
 -- position is the order within the pipeline (renumbered on reorder).
 create table public.stages (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   pipeline_id uuid not null references public.pipelines(id) on delete cascade,
   position integer not null,
   name text not null,
@@ -122,7 +119,7 @@ alter table public.pipelines
 -- position is the list-order within the stage. pos_x/pos_y are free-form
 -- coordinates for the Canvas view (null until the user drags the task).
 create table public.tasks (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   stage_id uuid not null references public.stages(id) on delete cascade,
   position integer not null,
   text text not null,
@@ -140,7 +137,7 @@ create index tasks_stage_pos_idx on public.tasks(stage_id, position);
 -- Threaded notes per stage. Replaces the prototype's three legacy shapes
 -- (string, single object, array) with one row-per-note model.
 create table public.stage_notes (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   stage_id uuid not null references public.stages(id) on delete cascade,
   author_id uuid references auth.users(id) on delete set null,
   text text not null,
@@ -155,7 +152,7 @@ create index stage_notes_stage_idx on public.stage_notes(stage_id, created_at de
 -- Files attached to a specific stage. storage_path points into a Supabase
 -- Storage bucket (created in 3.3 alongside policies). Image-only for MVP.
 create table public.stage_attachments (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   stage_id uuid not null references public.stages(id) on delete cascade,
   kind text not null default 'image' check (kind in ('image')),
   label text,
@@ -174,7 +171,7 @@ create index stage_attachments_stage_idx on public.stage_attachments(stage_id);
 -- for kind='url'; storage_path is set for kind='image'. The check enforces
 -- that exactly the right field is filled for each kind.
 create table public.pipeline_links (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   pipeline_id uuid not null references public.pipelines(id) on delete cascade,
   kind text not null check (kind in ('url', 'image')),
   label text,
@@ -198,7 +195,7 @@ create index pipeline_links_pipeline_idx on public.pipeline_links(pipeline_id);
 -- The unique partial index enforces the one-client-channel-per-pipeline rule
 -- at the database — defense in depth on top of the application check.
 create table public.channels (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   pipeline_id uuid not null references public.pipelines(id) on delete cascade,
   name text not null,
   is_client boolean not null default false,
@@ -227,7 +224,7 @@ create index channel_memberships_user_idx on public.channel_memberships(user_id)
 -- queries fast. is_internal is the agency-only flag — RLS in 3.3 will hide
 -- internal messages from clients.
 create table public.channel_messages (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   channel_id uuid not null references public.channels(id) on delete cascade,
   author_id uuid references auth.users(id) on delete set null,
   text text not null,
@@ -245,7 +242,7 @@ create index channel_messages_mentions_idx on public.channel_messages using gin 
 -- deletes, AND user account deletions so historical entries always read
 -- "Sarah completed task X" forever, never "[deleted user] completed task X".
 create table public.activity_events (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   pipeline_id uuid not null references public.pipelines(id) on delete cascade,
   actor_id uuid references auth.users(id) on delete set null,
   actor_name text not null,
@@ -279,7 +276,7 @@ create table public.read_state (
 -- [{ name, tasks: [string] }] } — JSONB because it's a write-once snapshot
 -- and we never need to query its contents.
 create table public.user_templates (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   owner_id uuid not null references auth.users(id) on delete cascade,
   name text not null,
   icon text default '📋',
