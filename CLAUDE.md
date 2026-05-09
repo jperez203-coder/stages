@@ -128,10 +128,12 @@ These are the policies that, if wrong, leak data.
    - Messages in those channels where `is_internal = false`
 
    Anything not in this list is invisible to them, even via direct API access.
-4. **Internal-message privacy is enforced in three layers.** Defense in depth:
-   - **RLS policy** filters `is_internal = true` from any SELECT a client runs (the only layer that protects against direct API access — most important).
-   - **Application server-side** hard-codes `is_internal = false` for any message a client sends (in `clientToggleTask` / `sendClientChannelMessage` patterns).
-   - **Application render-side** filters internal messages on the client portal before rendering.
+4. **Internal-message privacy is enforced in three layers.** Defense in depth, in order from most to least important:
+   - **Layer 1 — RLS policy on `channel_messages`** filters `is_internal = true` from any SELECT a client runs. **The only layer that protects against direct API access.** If a client crafts a query bypassing the app entirely, this is what stops them.
+   - **Layer 2 — Application server-side write enforcement** hard-codes `is_internal = false` for any message a client sends (in `clientToggleTask` / `sendClientChannelMessage` patterns). Protects against compromised client-side code attempting to set `is_internal = true` on outgoing messages.
+   - **Layer 3 — Application render-side filter** on the client portal removes any `is_internal = true` message that somehow reached the browser. Protects against UI rendering bugs that might surface a message before the data fetch completed.
+
+   **DO NOT remove any of these three layers thinking the others are sufficient.** Each protects against a different threat model. The most likely failure mode is a future maintainer (or sleep-deprived me in 2027) deleting one because it "looks redundant." It is not redundant — it is layered. Any change that touches one of these layers requires re-auditing all three.
 
 ### Client write surface (the only mutations clients can make)
 

@@ -1,8 +1,14 @@
 # Phase 3.3 — RLS & Storage Policies (planning doc)
 
-This is the plan for the SQL that lands in `0002_rls_policies.sql`. **No SQL is written yet.** Founder approval required before implementation.
+This is the plan for the SQL that lands in `20260509120000_rls_policies.sql`. The canonical source of truth for the security rules referenced below is the "Security model" section of [CLAUDE.md](../CLAUDE.md). This document maps those rules to specific Postgres policies, helper functions, storage buckets, and indexes.
 
-The canonical source of truth for the security rules referenced below is the "Security model" section of [CLAUDE.md](../CLAUDE.md). This document maps those rules to specific Postgres policies, helper functions, storage buckets, and indexes.
+**Status: approved 2026-05-09.** Answers to the five open questions are baked into the SQL:
+
+1. **Workspace-owner inheritance through pipelines** — yes, `is_pipeline_agency_member` returns true for workspace owners without an explicit pipeline_memberships row.
+2. **Admin updating member's `can_check_tasks`** — enforced via trigger `enforce_admin_can_check_tasks_scope`, not column-level RLS.
+3. **Stage advancement** — single trigger transaction `auto_advance_stage` that atomically: marks stage complete, advances `current_stage_id`, inserts the `stage_advanced` activity event. All other event types stay app-side INSERT.
+4. **Storage bucket names** — `stage_attachments` and `pipeline_files` (underscores to match SQL table convention). Pipeline-files path is `{pipeline_id}/links/{link_id}.{ext}` to visually distinguish from stage-scoped files.
+5. **Profiles auto-created on signup** — yes, AFTER INSERT trigger on `auth.users`.
 
 ---
 
