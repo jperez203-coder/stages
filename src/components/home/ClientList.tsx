@@ -2,15 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Plus, Search, X } from "lucide-react";
-import { StagesLogo } from "@/components/icons/StagesLogo";
 import { ChartIcon, ClientsIcon, ClockIcon } from "@/components/icons/StatIcons";
 import { Stat } from "./Stat";
 import { ClientCard } from "./ClientCard";
 import { SortTab } from "./SortTab";
 import { EmptyState } from "./EmptyState";
-import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
-import { ProfileMenu } from "./ProfileMenu";
-import type { Client, Session, Workspace } from "@/types/stages";
+import type { Client, Session } from "@/types/stages";
 
 type Props = {
   clients: Client[];
@@ -22,21 +19,24 @@ type Props = {
   onDelete: (id: string) => void;
   onNew: () => void;
   session: Session;
-  onLogout: () => void;
   computeUnread: (c: Client | undefined) => { thread: number; members: number; activity: number };
-  workspaces: Workspace[];
-  activeWorkspace: Workspace | undefined;
-  onSwitchWorkspace: (id: string) => void;
-  onShowWorkspaceModal: () => void;
-  onRenameWorkspace: (id: string, name: string) => void;
-  onDeleteWorkspace: (id: string) => void;
 };
 
+/**
+ * Homepage view: list of pipelines with search, stats, and create button.
+ *
+ * As of Phase 3.4 step 4c, this view is mounted inside <AppShell>, which
+ * owns the persistent app-shell chrome (logo, workspace switcher, profile
+ * menu). ClientList renders only its view-specific chrome — search bar +
+ * "+ Pipeline" button as a slim secondary bar, then stats and the grid.
+ *
+ * Props removed in 4c (now AppShell's responsibility):
+ *   onLogout, workspaces, activeWorkspace, onSwitchWorkspace,
+ *   onShowWorkspaceModal, onRenameWorkspace, onDeleteWorkspace
+ */
 export function ClientList({
   clients, allClients, totalClients, searchQuery, setSearchQuery,
-  onOpen, onDelete, onNew, session, onLogout, computeUnread,
-  workspaces, activeWorkspace, onSwitchWorkspace, onShowWorkspaceModal,
-  onRenameWorkspace, onDeleteWorkspace,
+  onOpen, onDelete, onNew, session, computeUnread,
 }: Props) {
   const isOwner = session.role === "owner";
   const [searchFocused, setSearchFocused] = useState(false);
@@ -102,41 +102,23 @@ export function ClientList({
   };
 
   return (
-    <div className="min-h-screen" style={{ background: "#212124" }}>
-      <header
-        className="border-b border-zinc-800 flex items-center"
+    <>
+      {/* View-specific bar: search + create. The persistent app-shell
+          chrome (logo, workspace switcher, profile menu) lives in
+          AppShell's header above. */}
+      <div
+        className="flex items-center border-b border-zinc-800"
         style={{
-          background: "#121212",
+          background: "#1A1A1A",
           paddingLeft: "16px",
           paddingRight: "16px",
-          paddingTop: "12px",
-          paddingBottom: "12px",
+          paddingTop: "10px",
+          paddingBottom: "10px",
           gap: "12px",
-          height: "64px",
+          minHeight: "56px",
         }}
       >
-        <div className="flex-shrink-0 flex items-center">
-          <StagesLogo size={28} />
-        </div>
-
-        {isOwner && activeWorkspace && (
-          <div className="flex-shrink-0" style={{ marginLeft: "12px" }}>
-            <WorkspaceSwitcher
-              workspaces={workspaces}
-              activeWorkspace={activeWorkspace}
-              onSwitch={onSwitchWorkspace}
-              onCreateNew={onShowWorkspaceModal}
-              onRename={onRenameWorkspace}
-              onDelete={onDeleteWorkspace}
-            />
-          </div>
-        )}
-
-        <div
-          ref={searchRef}
-          className="relative flex-1 min-w-0"
-          style={{ marginLeft: "8px", marginRight: "8px" }}
-        >
+        <div ref={searchRef} className="relative flex-1 min-w-0">
           <Search
             size={14}
             className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none"
@@ -153,7 +135,7 @@ export function ClientList({
               paddingRight: searchQuery ? "32px" : "12px",
               height: "36px",
               fontSize: "13px",
-              background: "#1A1A1A",
+              background: "#212124",
               border: "1px solid #36363A",
               borderRadius: "8px",
               color: "#E4E4E7",
@@ -249,11 +231,7 @@ export function ClientList({
             <Plus size={14} strokeWidth={2.5} /> <span className="hidden sm:inline">Pipeline</span>
           </button>
         )}
-
-        <div className="flex-shrink-0">
-          <ProfileMenu session={session} onLogout={onLogout} />
-        </div>
-      </header>
+      </div>
 
       <div className="px-4 sm:px-6 pt-6 pb-2 grid grid-cols-3 gap-4">
         <Stat
@@ -343,6 +321,6 @@ export function ClientList({
           </>
         )}
       </div>
-    </div>
+    </>
   );
 }

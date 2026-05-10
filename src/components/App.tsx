@@ -126,14 +126,7 @@ export function App() {
           onDelete={app.deleteClient}
           onNew={() => app.setShowNewClient(true)}
           session={session}
-          onLogout={app.handleLogout}
           computeUnread={app.computeUnread}
-          workspaces={app.workspaces.filter((w) => w.ownerEmail === session.email)}
-          activeWorkspace={app.workspaces.find((w) => w.id === app.activeWorkspaceId)}
-          onSwitchWorkspace={app.switchWorkspace}
-          onShowWorkspaceModal={() => app.setShowWorkspaceModal(true)}
-          onRenameWorkspace={app.renameWorkspace}
-          onDeleteWorkspace={app.deleteWorkspace}
         />
         {app.showNewClient && (
           <NewClientModal

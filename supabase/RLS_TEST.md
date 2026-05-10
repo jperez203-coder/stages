@@ -601,25 +601,66 @@ rollback;
 
 ---
 
-## Phase 5: Cleanup (optional)
+## Phase 5: Reset harness (cleanup + reseed)
 
-Once all tests pass, delete the test data so the project is fresh for real auth-flow testing in 3.4:
+This phase makes the test plan **re-runnable**. Use it any time after schema, helper-function, trigger, or RLS-policy changes to re-verify nothing regressed.
+
+The harness has four steps. Steps A and B are idempotent — they're safe to run even if no test data exists.
+
+### Step A — Delete all test data and users
+
+Run as superuser in the SQL Editor:
 
 ```sql
+-- Cascading deletes from workspaces clean up pipelines, stages, tasks, notes,
+-- attachments, channels, channel_messages, channel_memberships,
+-- pipeline_memberships, activity_events, pipeline_links, stage_attachments.
 delete from public.workspaces where id in (
   'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
   'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
 );
--- Cascades remove pipelines, stages, tasks, notes, attachments, channels, messages, memberships.
-```
 
-To delete the test users entirely (auth.users + cascading profiles):
-
-```sql
+-- Delete the 5 test users. profiles.id has FK on auth.users(id) on delete cascade,
+-- so this also clears the corresponding profiles rows.
 delete from auth.users where email like '%@test.com';
+
+-- Verify clean slate. All three counts should be 0.
+select
+  (select count(*) from auth.users where email like '%@test.com')
+    as test_users_remaining,
+  (select count(*) from public.workspaces where id in (
+    'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+  )) as test_workspaces_remaining,
+  (select count(*) from public.profiles where email like '%@test.com')
+    as test_profiles_remaining;
 ```
 
-(Note: deleting auth.users requires the service role, which the dashboard SQL editor has by default.)
+Expected: all three counts = `0`. If any are non-zero, investigate before reseeding (most likely cause: a non-test row sharing one of the fixed UUIDs, which shouldn't happen but worth checking).
+
+### Step B — Recreate the 5 test users
+
+Repeat **Phase 1** above (Authentication → Add user, Auto Confirm User). Capture the new UUIDs — they will be different from the previous run.
+
+Confirm `profile_count = 5` via the sanity check query in Phase 1.
+
+### Step C — Reseed test data
+
+Repeat **Phase 2** above. Paste the new UUIDs from Step B into the DO block's five `:= 'PASTE_HERE'` slots. Run, then run the count-verification query — all 8 counts must match expected.
+
+### Step D — Run the 21 tests
+
+Repeat **Phase 4**. Use `supabase/RLS_TEST_RESULTS.md` from the previous run as the reference for what each test should output. Any divergence is a regression — diagnose before advancing.
+
+---
+
+**When to re-run this harness:**
+- Any new migration that touches RLS policies, helper functions, or triggers
+- Any new schema column on a table that has RLS policies (the column may need to be added to a USING / WITH CHECK clause)
+- Major Supabase or Postgres version upgrades
+- Before any production deploy that changes anything in `supabase/migrations/`
+
+The 21 tests run end-to-end in ~10 minutes manual. Worth it every time.
 
 ---
 

@@ -264,6 +264,14 @@ stages/
 - **Don't expand scope** beyond the prototype — flag missing/weird things, don't fix silently.
 - **[v1.1 wishlist](WISHLIST.md)** captures intentionally-deferred features. Anything not in the prototype goes there, not into Phase 2 code. Don't act on wishlist items without explicit go-ahead.
 
+## Known transitional state (Phase 3.4 → 4)
+
+The AppShell global header (logo + workspace switcher + profile menu) is introduced in Phase 3.4 step 4c. Its workspace switcher fetches real data from Supabase via the `useUserContexts` hook. But the views nested under it (`ClientList`, `ClientBoard`, `StagePage`) still render in-memory stub data via `useAppState` — they don't consume the active-workspace context from the shell yet.
+
+**During Phase 3.4 → Phase 4, switching workspaces in the AppShell switcher will update the URL (`/w/[slug]/...`) and write `profiles.last_active_workspace_id`, but will NOT change what the in-memory views display.** This is a known transitional state, not a bug. Phase 4 replaces `useAppState` with real Supabase queries; at that point the views will honor the active workspace from the URL.
+
+Do NOT try to "fix" this during Phase 3.4 — it's the wrong layer. The fix is finishing Phase 4.
+
 ## Reading order for a new session
 
 1. This file.
