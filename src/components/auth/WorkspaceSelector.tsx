@@ -204,12 +204,30 @@ function RoleBadge({ role }: { role: UserContext["role"] }) {
 
 /**
  * Fire-and-forget update to profiles.last_active_workspace_id. Failures are
- * swallowed — the worst case is the user gets re-prompted with the chooser
- * on next sign-in, which is harmless.
+ * non-fatal — worst case the user gets re-prompted with the chooser on next
+ * sign-in — but they're logged to the console so silent regressions show up
+ * in dev. Same lesson learned in HeaderWorkspaceSwitcher's switchTo: don't
+ * trust `void` on a PostgrestBuilder; subscribe via await/.then() or the
+ * request never fires.
  */
 async function commitLastActive(userId: string, workspaceId: string) {
-  await supabase
+  // `.select()` returns the affected rows so we can detect silent RLS denials
+  // (0 rows + no error). The current profiles_update policy allows any user
+  // to update their own row, so this case is unreachable today — but the
+  // warning means future policy tightening can't introduce a silent regression.
+  const { error, data } = await supabase
     .from("profiles")
     .update({ last_active_workspace_id: workspaceId })
-    .eq("id", userId);
+    .eq("id", userId)
+    .select();
+  if (error) {
+    console.error(
+      "Failed to persist last_active_workspace_id:",
+      error.message,
+    );
+  } else if (!data || data.length === 0) {
+    console.warn(
+      "last_active_workspace_id update affected 0 rows — RLS denial or missing profile row?",
+    );
+  }
 }

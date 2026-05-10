@@ -109,13 +109,39 @@ export function HeaderWorkspaceSwitcher({ contexts, activeSlug, userId }: Props)
     router.refresh();
   };
 
-  const switchTo = async (ctx: UserContext) => {
+  const switchTo = (ctx: UserContext) => {
     setOpen(false);
-    // Fire-and-forget last-active update.
-    void supabase
+    // Persist last-active. Use .then() (NOT `void`) — supabase-js's
+    // PostgrestBuilder is lazy: the HTTP request only fires once something
+    // subscribes via await or .then(). `void` evaluates the builder and
+    // discards it without subscribing, so the request never leaves the
+    // browser. Bug originally caused Phase F writes to silently no-op.
+    //
+    // We don't await — last_active is a UX hint, not authoritative — so
+    // the navigation isn't blocked on the write. But we do log on error
+    // so future silent failures are visible in the console.
+    // `.select()` returns the affected rows so we can detect silent denials
+    // (0 rows + no error) — what RLS does when its USING clause excludes a
+    // row. For this specific call path it's theoretically impossible (the
+    // policy is `id = auth.uid()` and we pass our own userId), but the
+    // warning catches future regressions if the policy ever tightens.
+    supabase
       .from("profiles")
       .update({ last_active_workspace_id: ctx.workspaceId })
-      .eq("id", userId);
+      .eq("id", userId)
+      .select()
+      .then(({ error, data }) => {
+        if (error) {
+          console.error(
+            "Failed to persist last_active_workspace_id:",
+            error.message,
+          );
+        } else if (!data || data.length === 0) {
+          console.warn(
+            "last_active_workspace_id update affected 0 rows — RLS denial or missing profile row?",
+          );
+        }
+      });
     router.push(`/w/${ctx.workspaceSlug}`);
   };
 
