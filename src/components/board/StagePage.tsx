@@ -590,241 +590,239 @@ export function StagePage({
             </div>
           </section>
 
-          {onAddStageAttachment && (
-            <section className="mb-10">
-              <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-                <div className="flex items-center gap-2">
-                  <FileText size={18} className="text-zinc-400" />
-                  <h3 className="text-[16px] font-semibold">Files</h3>
-                  {stageAttachments.length > 0 && (
-                    <span
-                      className="text-[11px] px-2 py-0.5 rounded-full"
-                      style={{ background: "#36363A", color: "#A1A1AA" }}
-                    >
-                      {stageAttachments.length}
-                    </span>
-                  )}
-                </div>
-                <span className="text-[12px]" style={{ color: "#979393" }}>
-                  Also visible in the pipeline&rsquo;s Files tab.
-                </span>
+          <section className="mb-10">
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <FileText size={18} className="text-zinc-400" />
+                <h3 className="text-[16px] font-semibold">Files</h3>
+                {stageAttachments.length > 0 && (
+                  <span
+                    className="text-[11px] px-2 py-0.5 rounded-full"
+                    style={{ background: "#36363A", color: "#A1A1AA" }}
+                  >
+                    {stageAttachments.length}
+                  </span>
+                )}
               </div>
+              <span className="text-[12px]" style={{ color: "#979393" }}>
+                Also visible in the pipeline&rsquo;s Files tab.
+              </span>
+            </div>
 
-              {canEditDescription && (
+            {canEditDescription && (
+              <div
+                onDrop={onAttDrop}
+                onDragOver={onAttDragOver}
+                onDragLeave={onAttDragLeave}
+                onClick={() => attFileInputRef.current?.click()}
+                className="rounded-xl text-center transition-all cursor-pointer mb-3"
+                style={{
+                  border: `2px dashed ${attDragActive ? "#108CE9" : "#36363A"}`,
+                  background: attDragActive ? "#108CE91A" : "#1A1A1C",
+                  padding: "20px",
+                }}
+              >
                 <div
-                  onDrop={onAttDrop}
-                  onDragOver={onAttDragOver}
-                  onDragLeave={onAttDragLeave}
-                  onClick={() => attFileInputRef.current?.click()}
-                  className="rounded-xl text-center transition-all cursor-pointer mb-3"
+                  className="mx-auto mb-2 flex items-center justify-center"
                   style={{
-                    border: `2px dashed ${attDragActive ? "#108CE9" : "#36363A"}`,
-                    background: attDragActive ? "#108CE91A" : "#1A1A1C",
-                    padding: "20px",
+                    width: "40px",
+                    height: "40px",
+                    borderRadius: "10px",
+                    background: attDragActive ? "#108CE933" : "#2C2C2F",
+                    border: `1px solid ${attDragActive ? "#108CE966" : "#36363A"}`,
                   }}
                 >
-                  <div
-                    className="mx-auto mb-2 flex items-center justify-center"
-                    style={{
-                      width: "40px",
-                      height: "40px",
-                      borderRadius: "10px",
-                      background: attDragActive ? "#108CE933" : "#2C2C2F",
-                      border: `1px solid ${attDragActive ? "#108CE966" : "#36363A"}`,
-                    }}
-                  >
-                    <Plus
-                      size={18}
-                      style={{ color: attDragActive ? "#7EC2F4" : "#979393" }}
-                      strokeWidth={2.5}
-                    />
-                  </div>
-                  <div className="text-[13px] font-semibold mb-0.5">
-                    {attDragActive ? "Drop image here" : "Drag & drop an image"}
-                  </div>
-                  <div className="text-[11px]" style={{ color: "#979393" }}>
-                    or <span style={{ color: "#7EC2F4", textDecoration: "underline" }}>click to browse</span>
-                    {" "}· PNG, JPG, GIF, WebP · up to 3 MB
-                  </div>
-                  <input
-                    ref={attFileInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    onChange={(e) => {
-                      handleAttFiles(e.target.files);
-                      e.target.value = "";
-                    }}
+                  <Plus
+                    size={18}
+                    style={{ color: attDragActive ? "#7EC2F4" : "#979393" }}
+                    strokeWidth={2.5}
                   />
                 </div>
-              )}
+                <div className="text-[13px] font-semibold mb-0.5">
+                  {attDragActive ? "Drop image here" : "Drag & drop an image"}
+                </div>
+                <div className="text-[11px]" style={{ color: "#979393" }}>
+                  or <span style={{ color: "#7EC2F4", textDecoration: "underline" }}>click to browse</span>
+                  {" "}· PNG, JPG, GIF, WebP · up to 3 MB
+                </div>
+                <input
+                  ref={attFileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    handleAttFiles(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+              </div>
+            )}
 
-              {attError && (
-                <div
-                  className="rounded-lg px-3 py-2 mb-3 text-[12px] flex items-start gap-2"
+            {attError && (
+              <div
+                className="rounded-lg px-3 py-2 mb-3 text-[12px] flex items-start gap-2"
+                style={{
+                  background: "#F4335E1A",
+                  border: "1px solid #F4335E66",
+                  color: "#F87171",
+                }}
+              >
+                <AlertCircle size={13} className="mt-0.5 flex-shrink-0" />
+                <span className="flex-1">{attError}</span>
+                <button
+                  onClick={() => setAttError("")}
+                  className="opacity-60 hover:opacity-100"
                   style={{
-                    background: "#F4335E1A",
-                    border: "1px solid #F4335E66",
-                    color: "#F87171",
+                    background: "transparent",
+                    border: "none",
+                    color: "inherit",
+                    cursor: "pointer",
                   }}
                 >
-                  <AlertCircle size={13} className="mt-0.5 flex-shrink-0" />
-                  <span className="flex-1">{attError}</span>
-                  <button
-                    onClick={() => setAttError("")}
-                    className="opacity-60 hover:opacity-100"
-                    style={{
-                      background: "transparent",
-                      border: "none",
-                      color: "inherit",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              )}
+                  <X size={12} />
+                </button>
+              </div>
+            )}
 
-              {stageAttachments.length === 0 ? (
-                !canEditDescription && (
+            {stageAttachments.length === 0 ? (
+              !canEditDescription && (
+                <div
+                  className="text-center py-6 rounded-lg text-[13px]"
+                  style={{
+                    background: "#2C2C2F",
+                    border: "1px dashed #36363A",
+                    color: "#979393",
+                  }}
+                >
+                  No files attached to this stage yet.
+                </div>
+              )
+            ) : (
+              <div className="space-y-2">
+                {stageAttachments.map((att) => (
                   <div
-                    className="text-center py-6 rounded-lg text-[13px]"
-                    style={{
-                      background: "#2C2C2F",
-                      border: "1px dashed #36363A",
-                      color: "#979393",
-                    }}
+                    key={att.id}
+                    className="rounded-lg p-3 flex items-center gap-3 group transition-colors"
+                    style={{ background: "#2C2C2F", border: "1px solid #36363A" }}
+                    onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#4A4A50")}
+                    onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#36363A")}
                   >
-                    No files attached to this stage yet.
-                  </div>
-                )
-              ) : (
-                <div className="space-y-2">
-                  {stageAttachments.map((att) => (
-                    <div
-                      key={att.id}
-                      className="rounded-lg p-3 flex items-center gap-3 group transition-colors"
-                      style={{ background: "#2C2C2F", border: "1px solid #36363A" }}
-                      onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#4A4A50")}
-                      onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#36363A")}
+                    <button
+                      onClick={() => setAttPreview(att)}
+                      className="flex-shrink-0 overflow-hidden rounded-lg"
+                      style={{
+                        width: "48px",
+                        height: "48px",
+                        background: "#1A1A1C",
+                        border: "1px solid #36363A",
+                        cursor: "zoom-in",
+                      }}
+                      title="Preview"
                     >
-                      <button
-                        onClick={() => setAttPreview(att)}
-                        className="flex-shrink-0 overflow-hidden rounded-lg"
-                        style={{
-                          width: "48px",
-                          height: "48px",
-                          background: "#1A1A1C",
-                          border: "1px solid #36363A",
-                          cursor: "zoom-in",
-                        }}
-                        title="Preview"
-                      >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={att.dataUrl}
-                          alt={att.label}
-                          style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                        />
-                      </button>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-[13px] font-semibold truncate">{att.label}</div>
-                        <div className="text-[11px] truncate" style={{ color: "#979393" }}>
-                          {att.fileName}
-                          {att.fileSize ? " · " + formatBytes(att.fileSize) : ""}
-                        </div>
-                        <div className="text-[10px] mt-0.5" style={{ color: "#71717A" }}>
-                          Added by {att.addedBy} · {timeAgo(att.ts)}
-                        </div>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={att.dataUrl}
+                        alt={att.label}
+                        style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                      />
+                    </button>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[13px] font-semibold truncate">{att.label}</div>
+                      <div className="text-[11px] truncate" style={{ color: "#979393" }}>
+                        {att.fileName}
+                        {att.fileSize ? " · " + formatBytes(att.fileSize) : ""}
                       </div>
-                      {canEditDescription && onToggleStageAttachmentClientVisible && (
+                      <div className="text-[10px] mt-0.5" style={{ color: "#71717A" }}>
+                        Added by {att.addedBy} · {timeAgo(att.ts)}
+                      </div>
+                    </div>
+                    {canEditDescription && onToggleStageAttachmentClientVisible && (
+                      <button
+                        onClick={() => onToggleStageAttachmentClientVisible(att.id)}
+                        className="inline-flex items-center gap-1 rounded-full transition-colors flex-shrink-0"
+                        style={{
+                          background: att.clientVisible ? "#108CE91A" : "transparent",
+                          border: `1px solid ${att.clientVisible ? "#108CE966" : "#36363A"}`,
+                          color: att.clientVisible ? "#7EC2F4" : "#71717A",
+                          padding: "3px 8px",
+                          fontSize: "11px",
+                          fontWeight: 500,
+                          cursor: "pointer",
+                          whiteSpace: "nowrap",
+                        }}
+                        title={
+                          att.clientVisible
+                            ? "Visible to client — click to hide"
+                            : "Internal — click to share with client"
+                        }
+                      >
+                        {att.clientVisible ? <ExternalLink size={10} /> : <Lock size={10} />}
+                        <span>{att.clientVisible ? "Client" : "Internal"}</span>
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setAttPreview(att)}
+                      className="icon-btn"
+                      title="Preview"
+                    >
+                      <ZoomIn size={13} />
+                    </button>
+                    {(canEditDescription || att.addedBy === session.email) &&
+                      onRemoveStageAttachment && (
                         <button
-                          onClick={() => onToggleStageAttachmentClientVisible(att.id)}
-                          className="inline-flex items-center gap-1 rounded-full transition-colors flex-shrink-0"
-                          style={{
-                            background: att.clientVisible ? "#108CE91A" : "transparent",
-                            border: `1px solid ${att.clientVisible ? "#108CE966" : "#36363A"}`,
-                            color: att.clientVisible ? "#7EC2F4" : "#71717A",
-                            padding: "3px 8px",
-                            fontSize: "11px",
-                            fontWeight: 500,
-                            cursor: "pointer",
-                            whiteSpace: "nowrap",
+                          onClick={() => {
+                            if (confirm(`Remove "${att.label}"?`))
+                              onRemoveStageAttachment(att.id);
                           }}
-                          title={
-                            att.clientVisible
-                              ? "Visible to client — click to hide"
-                              : "Internal — click to share with client"
-                          }
+                          className="icon-btn opacity-0 group-hover:opacity-100 transition-opacity"
+                          style={{ color: "#F87171" }}
+                          title="Remove"
                         >
-                          {att.clientVisible ? <ExternalLink size={10} /> : <Lock size={10} />}
-                          <span>{att.clientVisible ? "Client" : "Internal"}</span>
+                          <Trash2 size={13} />
                         </button>
                       )}
-                      <button
-                        onClick={() => setAttPreview(att)}
-                        className="icon-btn"
-                        title="Preview"
-                      >
-                        <ZoomIn size={13} />
-                      </button>
-                      {(canEditDescription || att.addedBy === session.email) &&
-                        onRemoveStageAttachment && (
-                          <button
-                            onClick={() => {
-                              if (confirm(`Remove "${att.label}"?`))
-                                onRemoveStageAttachment(att.id);
-                            }}
-                            className="icon-btn opacity-0 group-hover:opacity-100 transition-opacity"
-                            style={{ color: "#F87171" }}
-                            title="Remove"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        )}
-                    </div>
-                  ))}
-                </div>
-              )}
+                  </div>
+                ))}
+              </div>
+            )}
 
-              {attPreview && (
-                <div
-                  className="fixed inset-0 z-50 flex items-center justify-center fade-in p-4"
-                  style={{ background: "rgba(0,0,0,0.85)", backdropFilter: "blur(4px)" }}
+            {attPreview && (
+              <div
+                className="fixed inset-0 z-50 flex items-center justify-center fade-in p-4"
+                style={{ background: "rgba(0,0,0,0.85)", backdropFilter: "blur(4px)" }}
+                onClick={() => setAttPreview(null)}
+              >
+                <button
                   onClick={() => setAttPreview(null)}
+                  className="icon-btn absolute"
+                  style={{ top: "16px", right: "16px", width: 36, height: 36 }}
                 >
-                  <button
-                    onClick={() => setAttPreview(null)}
-                    className="icon-btn absolute"
-                    style={{ top: "16px", right: "16px", width: 36, height: 36 }}
-                  >
-                    <X size={16} />
-                  </button>
-                  <div
-                    onClick={(e) => e.stopPropagation()}
-                    className="max-w-[90vw] max-h-[85vh] flex flex-col items-center gap-3"
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={attPreview.dataUrl}
-                      alt={attPreview.label}
-                      style={{
-                        maxWidth: "100%",
-                        maxHeight: "75vh",
-                        objectFit: "contain",
-                        borderRadius: "8px",
-                      }}
-                    />
-                    <div className="text-[13px] font-semibold">{attPreview.label}</div>
-                    <div className="text-[11px]" style={{ color: "#979393" }}>
-                      {attPreview.fileName} · {formatBytes(attPreview.fileSize)} · added by {attPreview.addedBy}
-                    </div>
+                  <X size={16} />
+                </button>
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="max-w-[90vw] max-h-[85vh] flex flex-col items-center gap-3"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={attPreview.dataUrl}
+                    alt={attPreview.label}
+                    style={{
+                      maxWidth: "100%",
+                      maxHeight: "75vh",
+                      objectFit: "contain",
+                      borderRadius: "8px",
+                    }}
+                  />
+                  <div className="text-[13px] font-semibold">{attPreview.label}</div>
+                  <div className="text-[11px]" style={{ color: "#979393" }}>
+                    {attPreview.fileName} · {formatBytes(attPreview.fileSize)} · added by {attPreview.addedBy}
                   </div>
                 </div>
-              )}
-            </section>
-          )}
+              </div>
+            )}
+          </section>
 
           <section className="mb-10">
             <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
