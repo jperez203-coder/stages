@@ -15,6 +15,15 @@ type Props = {
    * confirmation link).
    */
   onSignedUp?: (email: string) => void;
+  /**
+   * When provided, the email field is pre-filled with this value and locked
+   * (readOnly + visually muted). Used when the user arrived from /accept-
+   * invite/[token]; the email must match the invite or the
+   * accept_workspace_invite RPC will reject at the server. See
+   * SignUpPanel.tsx → InviteLock for the full rationale and the defense-in-
+   * depth note.
+   */
+  lockedEmail?: string;
 };
 
 // Minimum password length. Modern guidance (NIST 800-63B) discourages
@@ -22,8 +31,11 @@ type Props = {
 // lookup; Supabase has the latter built in.
 const MIN_PASSWORD_LENGTH = 8;
 
-export function SignUpForm({ onSignedUp }: Props) {
-  const [email, setEmail] = useState("");
+export function SignUpForm({ onSignedUp, lockedEmail }: Props) {
+  // When lockedEmail is provided we initialize state from it AND ignore
+  // input changes (the input is readOnly, but defensive against React
+  // controlled-input gotchas).
+  const [email, setEmail] = useState(lockedEmail ?? "");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -32,6 +44,7 @@ export function SignUpForm({ onSignedUp }: Props) {
   const [error, setError] = useState<ReactNode | null>(null);
 
   const passwordTooShort = password.length > 0 && password.length < MIN_PASSWORD_LENGTH;
+  const isLocked = !!lockedEmail;
   const canSubmit =
     email.includes("@") && password.length >= MIN_PASSWORD_LENGTH && !submitting;
 
@@ -121,15 +134,24 @@ export function SignUpForm({ onSignedUp }: Props) {
           className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500"
         />
         <input
-          autoFocus
+          // autoFocus shifts to the password field when locked — the email
+          // is fixed so there's nothing to type here.
+          autoFocus={!isLocked}
           type="email"
           autoComplete="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           placeholder="you@company.com"
           className="field"
-          style={{ paddingLeft: "40px" }}
+          style={{
+            paddingLeft: "40px",
+            // Locked styling: slightly muted so it reads as informational
+            // rather than editable. Tab-skipped via readOnly.
+            ...(isLocked ? { color: "#9CA3AF", cursor: "not-allowed" } : {}),
+          }}
           disabled={submitting}
+          readOnly={isLocked}
+          aria-readonly={isLocked}
         />
       </div>
 
@@ -142,6 +164,9 @@ export function SignUpForm({ onSignedUp }: Props) {
           className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500"
         />
         <input
+          // When email is locked, password is the first thing the user
+          // actually types — give it focus instead.
+          autoFocus={isLocked}
           type={showPassword ? "text" : "password"}
           autoComplete="new-password"
           value={password}

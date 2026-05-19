@@ -48,6 +48,22 @@ export function consumePendingAcceptInvite(): string | null {
 }
 
 /**
+ * Reads the pending-accept-invite token WITHOUT clearing it. Used by the
+ * sign-up page to fetch the invite preview and lock the email field to the
+ * invited address. The actual consume-and-route happens later in
+ * WorkspaceSelector — calling consumePendingAcceptInvite from /auth/signup
+ * would clear the token before the post-auth router could route back.
+ */
+export function peekPendingAcceptInvite(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(PENDING_ACCEPT_INVITE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Kicks off the Google OAuth flow. Redirects the browser to Google's consent
  * screen, which (after the user authorises) redirects to Supabase's auth
  * callback, which redirects to OUR /auth/callback with the PKCE code.
