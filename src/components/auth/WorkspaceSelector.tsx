@@ -7,6 +7,7 @@ import { AuthShell } from "@/components/auth/AuthShell";
 import { WorkspaceIcon } from "@/components/icons/WorkspaceIcon";
 import { useSession } from "@/hooks/useSession";
 import { useUserContexts, type UserContext } from "@/hooks/useUserContexts";
+import { consumePendingAcceptInvite } from "@/lib/auth";
 import { resolveDestination } from "@/lib/resolveDestination";
 import { supabase } from "@/lib/supabase";
 
@@ -49,6 +50,18 @@ export function WorkspaceSelector() {
   useEffect(() => {
     if (session.status !== "authenticated") return;
     if (contexts.status !== "ready") return;
+
+    // Pending invite redirect — set by /accept-invite/[token] before the
+    // anonymous user clicked "Sign in" or "Create an account". Check
+    // BEFORE running the resolver so we route back to finish accepting
+    // instead of falling into the user's default destination.
+    // consumePendingAcceptInvite reads-and-clears in one step so a future
+    // post-auth render (sign out → sign back in) won't see a stale token.
+    const pendingInviteToken = consumePendingAcceptInvite();
+    if (pendingInviteToken) {
+      router.replace(`/accept-invite/${pendingInviteToken}`);
+      return;
+    }
 
     const result = resolveDestination(
       contexts.contexts,
