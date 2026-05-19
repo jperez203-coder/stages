@@ -4,6 +4,90 @@ A running log of what shipped in each session. Newest first.
 
 ---
 
+## Phase 3 — Checkpoint 3.4 COMPLETE: auth wiring + invite flows + identity linking (2026-05-19)
+
+**Goal:** wire Supabase auth end-to-end, ship agency + client invite flows, add identity linking + linked-accounts settings, and verify everything via a two-browser end-to-end run.
+
+**Outcome:** all 8 implementation steps shipped, §9 two-browser verification passed across every section that's testable in Phase 3.4's auth-only scope. Phase 3.4 is closed.
+
+**What shipped (8 implementation steps + verification):**
+
+1. **Steps 1–4 — auth wiring + post-login selector + AppShell** (commit `99f5c83`)
+   - `/auth/signin` + `/auth/signup` (email+password and Google OAuth)
+   - `/auth/callback` for the PKCE return trip
+   - `useSession` + `useUserContexts` hooks
+   - WorkspaceSelector + AppShell (logo, workspace switcher, profile menu) — the persistent chrome for `/w/[slug]/*` and `/settings/*`
+   - `profiles.last_active_workspace_id` fix (commit `01ca048`) so workspace switches actually persist
+
+2. **Steps 5–7 — workspace creation + invites** (commit `a74c070`)
+   - `create_workspace_with_owner` RPC (atomic workspace + owner-membership)
+   - Per-user duplicate-name check inside the RPC
+   - `workspace_invites` table + `is_workspace_owner_or_admin` helper + `get_workspace_invite_preview` / `accept_workspace_invite` RPCs
+   - `client_invites` aligned to the same shape (token=uuid, accepted_at, accepted_by, expires_at)
+   - Public-grant hygiene migration (5 RPCs revoked from PUBLIC)
+   - `/accept-invite/[token]` (8-state UI) and `/portal/accept/[token]` (10-state UI)
+   - `/w/[slug]/settings/team` + `/w/[slug]/p/[pipeline-id]/clients` invite UIs
+   - Email send via Resend + React Email templates (`@react-email/components` + `@react-email/render`); API routes use `SUPABASE_SECRET_KEY` for `auth.admin.generateLink`
+   - localStorage side-channel (`setPendingAcceptInvite` / `consumePendingAcceptInvite`) so the invite token survives the sign-in / sign-up round trip
+
+3. **Branding polish** (commit `f810f61`) — full Stages wordmark on all auth surfaces
+
+4. **Step 8 — /settings/account: linked accounts** (commit `435ab36`)
+   - 8a layout + AppShell `activeSlug` fallback to `last_active_workspace_id` for workspace-agnostic routes
+   - 8b Linked accounts section: email+password card (with `user_metadata.has_password` flag for the Supabase quirk where `updateUser({password})` on a Google-linked user skips the email-identity-row creation) + Google card via `linkIdentity`
+   - 8c dismissible "Set password" banner (localStorage-persisted), CTA expands the inline form and scrolls it into view
+   - 8d Settings link in HeaderProfileMenu
+
+5. **§3 prefill+lock fix** (commit `e76af3b`, surfaced by §9 verification) — `/accept-invite/[token]` → "Create account" was routing to a blank, editable email field, so a recipient could sign up with a different address than the invite. SignUpPanel now fetches the invite preview, pre-fills + locks the email, reframes the title around "Accept your invitation." Defense-in-depth: `accept_workspace_invite` already enforces the email match server-side (migration lines 274–279); both layers are commented to call out the threat model each addresses.
+
+**§9 two-browser verification PASS summary:**
+
+| § | Test | Result |
+|---|---|---|
+| 1 | Agency A signup + workspace creation (incl. duplicate-name) | PASS |
+| 2 | Team invite send / copy / resend | PASS |
+| 3 | Teammate accept; prefill+lock fix verified | PASS |
+| 5 | Client accept via magic link → `pipeline_memberships` row confirmed via SQL | PASS (portal route is a Phase 4 stub) |
+| 6.1 | Client → `/w/agency-a` → blocked | PASS |
+| 6.2 | Client → `/w/agency-a/settings/team` → blocked | PASS |
+| 6.3 | Teammate (member role) → `/w/agency-a/settings/team` → blocked (role gate) | PASS |
+| 6.4 | Unauthed → `/w/agency-a` → no content | PASS |
+| 6.5 | Unauthed → `/portal/[id]` → 404 (degenerate, route is Phase 4 stub) | PASS |
+| 7 | Teammate workspace switcher shows only Agency A | PASS |
+| 8 | Cross-agency isolation | SKIPPED — trusted via §6.3 role-gate verification |
+
+Sections not run: §4 against Agency A (no pipeline-creation route exists yet — substituted with 7a Smoke Test Pipeline in Test Workspace 4b, which exercised the same `/clients` invite path).
+
+**Known transitional gaps for Phase 4 (not §9 failures — documented for the next phase):**
+
+1. `/portal/[pipeline-id]` needs its own auth gate when the view is built — server-side session check + verify `pipeline_memberships` row with `role='client'` for that pipeline.
+2. Unauthed `/w/agency-a` renders the legacy in-memory app sign-in screen rather than redirecting to `/auth/signin`. Functionally equivalent (no protected content shown) but should normalize when the legacy app is replaced.
+3. `/w/[slug]` renders blank for Supabase-only workspaces — legacy `<App />` uses `useAppState` in-memory data; doesn't know about Supabase-only workspaces. Per `CLAUDE.md → Known transitional state`, Phase 4 wires real Supabase queries inside the views.
+4. Pipeline creation has no Next.js route. Currently a legacy in-memory action; Phase 4 needs either `/w/[slug]/p/new` or a modal POSTing to a `create_pipeline` RPC.
+
+**Launch-prep checklist (open):**
+
+- Supabase Pro upgrade — covers email rate limit (4/hr free) + 30-day session timeout + production sending volume. One upgrade resolves three blockers.
+- Custom SMTP (Resend or similar) to lift the 4/hr email rate limit. Either redundant with the Pro upgrade or done in addition for cost reasons depending on volume.
+- `/portal/[pipeline-id]` auth gate (Phase 4, see gap #1 above).
+
+**Migrations added this phase:**
+
+- `20260511120000_create_workspace_with_owner.sql`
+- `20260512120000_block_duplicate_workspace_names.sql`
+- `20260513120000_workspace_invites.sql`
+- `20260514120000_client_invites_align.sql`
+- `20260514130000_revoke_public_rpc_grants.sql`
+
+**Lessons learned (apply forever):**
+
+1. **Supabase redirect URL allowlist matters.** Magic-link `redirect_to` silently fell back to the project's Site URL because `/portal/accept/*` wasn't in the allowlist. Diagnosed via Supabase logs after a long debug session. Solution: add `http://localhost:3000/**` and the production URL wildcard. Always verify wildcards cover every redirect path before debugging "magic links go to the wrong place" symptoms.
+2. **`@react-email/render` is separate from `@react-email/components` and `resend`.** Installing the latter two without the renderer ships broken email sends. Watch for missing-dep errors at runtime.
+3. **PostgREST nested-select array-vs-object typing is unreliable.** A one-to-one nested select can come back typed as an array even when it's a single object. Cast through `unknown` and handle both shapes defensively in client code.
+4. **Phase 3.4 §9 surfaced a real security finding** — `/accept-invite/[token]` signup form let recipients pick any email. The accept RPC enforced server-side, but the UX let an attacker (or confused user) create the wrong account. **The two-browser verification gate is non-optional precisely because it surfaces this class of UX-to-security gap.**
+
+---
+
 ## Phase 3 — Checkpoint 3.3 COMPLETE: RLS verified (21/21) + bug fix migration (2026-05-09)
 
 **Goal:** run all 21 SQL-editor tests in `RLS_TEST.md`, document each one's exact query and output, and only advance to 3.4 with a clean board.
