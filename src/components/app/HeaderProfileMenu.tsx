@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { LogOut } from "lucide-react";
+import { LogOut, Settings } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
 const COLORS = ["#3BA5EE", "#8B5CF6", "#EC4899", "#F59E0B", "#10B981", "#06B6D4", "#F43F5E"];
@@ -100,6 +100,20 @@ export function HeaderProfileMenu({ email, displayName, avatarUrl }: Props) {
             </div>
           </div>
           <div className="p-1">
+            <button
+              onClick={() => {
+                setOpen(false);
+                router.push("/settings/account");
+              }}
+              disabled={signingOut}
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-[13px] font-medium text-zinc-300 transition-colors"
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#1F1F22")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              style={{ background: "transparent" }}
+            >
+              <Settings size={14} />
+              Settings
+            </button>
             <button
               onClick={() => {
                 setOpen(false);

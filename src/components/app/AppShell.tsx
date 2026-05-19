@@ -30,14 +30,25 @@ type Props = {
 export function AppShell({ children }: Props) {
   const session = useSession();
   const contexts = useUserContexts();
-  // Active workspace slug from the URL. Only present when AppShell is
-  // mounted inside the /w/[slug] route tree (which it always is in step
-  // 4c — App.tsx wraps these views, and the route file at
-  // src/app/w/[slug]/page.tsx renders App). Defensive null for the
-  // theoretical case of mounting elsewhere.
+  // Active workspace slug. When mounted inside /w/[slug]/*, it comes
+  // straight from the route params. When mounted on workspace-agnostic
+  // routes like /settings/*, there's no [slug] param — fall back to the
+  // user's last_active_workspace_id resolved through their contexts. That
+  // makes the switcher button label show the user's last workspace as a
+  // "this is what you'd open by default" hint, even though the current
+  // page isn't workspace-scoped. Clicking any workspace in the dropdown
+  // still routes to /w/[slug] and leaves the agnostic page (decision 5
+  // from the step 8 plan).
   const params = useParams();
-  const activeSlug =
+  const slugFromUrl =
     typeof params?.slug === "string" ? params.slug : null;
+  const lastActiveSlug =
+    contexts.status === "ready" && contexts.lastActiveWorkspaceId
+      ? contexts.contexts.find(
+          (c) => c.workspaceId === contexts.lastActiveWorkspaceId,
+        )?.workspaceSlug ?? null
+      : null;
+  const activeSlug = slugFromUrl ?? lastActiveSlug;
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "#212124" }}>
