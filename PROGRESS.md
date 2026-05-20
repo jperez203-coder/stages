@@ -4,6 +4,52 @@ A running log of what shipped in each session. Newest first.
 
 ---
 
+## Phase 4a — step 4: My Tasks full view + deadlines (2026-05-20)
+
+**Goal:** turn the `/w/[slug]/my-tasks` placeholder route (from step 2's "See all N →" link) into the real surface — all tasks assigned to the current user across pipelines, grouped by deadline, with inline date editing and quick-add. Step 3 (deadlines) folded into step 4 because `tasks.deadline` already exists from the step-0 migration; the work was UI + the date picker, not schema.
+
+**Migrations (applied to remote, in order):**
+
+- `20260520130000_create_task_rpc.sql` — security-definer RPC `create_task(stage_id, title, assignee_id default null, deadline default null)`. Atomic position computation (max(position)+1 in the target stage) plus the INSERT in one transaction. Permission gate matches the `tasks_insert` RLS rule (`can_edit_pipeline`). Assignee defaults to caller (quick-add self-assigns); explicit assignment + unassign land in task detail (step 6). Title trim + non-empty + 200-char cap. Direct INSERT would have passed RLS but `tasks.position` is `NOT NULL` with no default — the RPC removes a client-side race.
+- `20260520140000_fix_create_task_ambiguous_stage_id.sql` — hotfix. Original migration shipped with `where stage_id = create_task.stage_id` which Postgres flagged as ambiguous (column vs function parameter, same name). Caught during smoke-test runs of the prior migration before any client wired to it. Fix: alias the `tasks` table (`from public.tasks t where t.stage_id = create_task.stage_id`). The earlier `stages` lookup used `where id = create_task.stage_id` so wasn't affected (no column called `stage_id` on that table).
+
+**Route + components:**
+
+- `src/app/w/[slug]/my-tasks/page.tsx` — server component, all initial data at page level. Same auth + redirect rules as the dashboard (anon → `/auth/signin?next=…`, client → portal, non-member → last-active or `/`).
+- `src/components/my-tasks/MyTasksView.tsx` — client component, owns task list state, chip filter, search, hide-completed toggle. Optimistic updates for toggle-complete and deadline-edit; quick-add hydrates the new task into the local list from the RPC's return + a 1-row stage lookup for pipeline metadata.
+- `src/components/my-tasks/TaskRow.tsx` — row component. Checkbox + title + subtitle (`[emoji] [pipeline name] · Stage [N] · [stage name]`) + bucket-colored pill. Click pill opens DatePickerPopover. Null deadline shows "+ Add date" dashed affordance. Done state: strikethrough title + muted color + "Done" badge replaces pill + sinks to bucket bottom (sort logic in MyTasksView). Click on row body (not checkbox / pill) logs the step-6 stub.
+- `src/components/my-tasks/DatePickerPopover.tsx` — hand-rolled month calendar (no external dep). Quick-set row on top (Today / Tomorrow / Next week / Clear), month grid below with prev/next nav. Closes on outside-click, Esc, or select. Auto-flips up when near viewport bottom.
+- `src/components/my-tasks/QuickAddRow.tsx` — dashed "Quick add task" row at the bottom of the list. ⌘N from anywhere on the page focuses its input. Pipeline picker pre-selects to `profiles.last_active_pipeline_id`. Submit creates via `create_task` RPC, task lands in No date bucket (no deadline at creation), input clears + keeps focus for rapid multi-add. Pipeline picker filters out pipelines with no stages (the RPC needs a stage_id target).
+- `src/lib/task-buckets.ts` — shared bucketing helper. `bucketForDeadline()` + `bucketMatchesChip()`. Imported by future surfaces (canvas, task detail) so they bucket consistently with My Tasks AND the dashboard's My Tasks card.
+
+**Pill colors (locked surface-dependent treatment):** My Tasks uses BUCKET-colored pills (urgency-first); dashboard uses PIPELINE-colored pills (context-first). Pipeline identity is carried in the My Tasks subtitle so moving urgency onto the pill loses nothing. Canvas (step 5) and task detail (step 6) each get their own pill-color decision when built — `"pill color" is now surface-dependent, not one global rule`.
+
+**Verification (live, jordan as workspace owner of Test Workspace 4b):**
+
+- 10 tasks seeded across all 6 buckets (Overdue / Today / Tomorrow / This week / Later / No date) including one completed task. Sections render in correct order; Overdue only appears when populated.
+- Chip counts reconcile: All = Today (incl. overdue) + This week (incl. tomorrow) + Later + No date.
+- Quick-set picker (Today / Tomorrow / Next week / Clear) writes the deadline immediately and moves the task to the right bucket.
+- "+ Add date" on null-deadline task opens picker; selecting moves it out of No date.
+- Quick-add defaults to `last_active_pipeline_id`, creates via the RPC, lands in No date, input stays focused.
+- ⌘N focuses quick-add from anywhere on page.
+- Checkbox toggle: strikethrough + Done badge + sinks to bottom of bucket.
+- Hide completed toggle: removes completed + updates counts; chip math still reconciles.
+- Search filters client-side by title.
+- Row click → console.log step-6 stub.
+- Test data cleaned (0 tasks, 0 stages remaining in workspace 4b) before commit.
+
+**Two bugs caught + fixed during verification:**
+
+1. **Chip-count reconciliation bug (logic).** Initial implementation of `bucketMatchesChip()` mapped `overdue → no chip except All`. Result: clicking any non-All chip hid the overdue tasks entirely — the most urgent bucket became the most-filtered-out, exactly backwards. Fix: fold overdue into the Today chip (overdue is max urgency, belongs with "deal with now"). Locked rule: **chip counts must always reconcile to All; non-reconciling counts = hidden-bucket logic bug.** Every bucket must map to exactly one non-All chip.
+2. **Seed deadlines at midnight-UTC misbucketed in local dev (TZ preview).** Test data seeded with `(now())::date::timestamptz` — midnight UTC of today. Server running locally (ET) computes `todayStartMs` as midnight ET = 04:00 UTC. Tasks seeded for "today" landed at May 20 00:00 UTC = 4 hours before today's ET midnight → bucketed as Overdue. Tasks seeded for "tomorrow" landed at May 21 00:00 UTC = May 20 20:00 ET = "today" in ET. The bucket logic is correct — the seed straddled the TZ boundary. **Live evidence that real US users in their evening hours will see deadlines mis-bucket the same way.** Workaround in test data: use noon-UTC instead of midnight-UTC (inside the calendar day in every TZ from UTC-11 to UTC+11). Real fix is the TZ-cookie launch-prep item — confirmed not optional.
+
+**Lessons learned (apply forever):**
+
+1. **Chip filters must reconcile to a partition.** Whenever a chip filter exists alongside a category total, the sum of category counts must equal the total. Buckets that don't map to any chip silently disappear when the user filters — and almost always those are the buckets the user wanted to see (overdue is the canonical example). When designing chip filters, draw the bucket-to-chip mapping explicitly and verify every bucket has exactly one home in the chip space.
+2. **Use noon-UTC for test deadlines, not midnight-UTC.** Midnight-UTC straddles the day boundary for every timezone west of UTC; using it in seeds will mis-bucket tasks in local dev and quietly mask bugs. Noon-UTC is inside the calendar day in every timezone (UTC-11 to UTC+11). This isn't a hack — it's how to write TZ-portable test data until the TZ-cookie fix ships. The same trap will catch real US users in their evening hours; the launch-prep TZ-cookie fix isn't optional, this is the live evidence.
+
+---
+
 ## Phase 4a — steps 1 + 2: pipeline creation + workspace dashboard (2026-05-19 → 2026-05-20)
 
 **Goal:** ship pipeline creation end-to-end (RPC + route + form) and replace the legacy in-memory `<App />` render at `/w/[slug]` with a real Supabase-data-driven dashboard. Closes Phase 3.4 paper cut #1 (blank workspace home) and the dashboard half of lesson #10 (legacy sign-in fallback for unauthed visits).
