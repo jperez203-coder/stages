@@ -4,6 +4,80 @@ A running log of what shipped in each session. Newest first.
 
 ---
 
+## Phase 4a — steps 1 + 2: pipeline creation + workspace dashboard (2026-05-19 → 2026-05-20)
+
+**Goal:** ship pipeline creation end-to-end (RPC + route + form) and replace the legacy in-memory `<App />` render at `/w/[slug]` with a real Supabase-data-driven dashboard. Closes Phase 3.4 paper cut #1 (blank workspace home) and the dashboard half of lesson #10 (legacy sign-in fallback for unauthed visits).
+
+**Step 1 — `create_pipeline_with_channels` RPC + `/w/[slug]/p/new` route (commit `2943b34`, applied 2026-05-19).**
+
+Atomic security-definer RPC inserts pipeline + owner pipeline_membership + 2 channels (`general` is_client=false, `client` is_client=true) + creator's channel_memberships, all in one transaction. Permission gate is `is_workspace_owner_or_admin` (same helper Phase 3.4 step 6 uses for workspace_invites). Route at `/w/[slug]/p/new` renders the create form inside AppShell with name + emoji preset picker; on success persists `profiles.last_active_pipeline_id` and routes to `/w/[slug]/p/[new-id]` (a Phase 4a step 5 stub for now).
+
+Step 1 verification (chrome, jordan as agency owner):
+- Happy path: created "Step 1 Verification" pipeline. Redirect → `/w/test-workspace-4b/p/[uuid]` returns 404, expected (canvas is step 5 stub).
+- SQL spot-check: pipelines row created with name + emoji correct; `channels` has 2 rows (general/client); `pipeline_memberships` has 1 row with role='owner'. Clean.
+- Anonymous branch (incognito): `/w/test-workspace-4b/p/new` redirected to `/` with the legacy sign-in screen. Functionally equivalent to `/auth/signin` (unauthed user blocked) — same legacy fallback documented in Phase 3.4 lesson #10. Full normalization to `/auth/signin?next=…` deferred to a Phase 4c step; step 2 closes the dashboard half of this gap directly.
+- One pre-existing finding flagged for cleanup: Supabase default privileges grant `EXECUTE` to `anon`/`authenticated`/`postgres`/`service_role` on every RPC independently of PUBLIC, so `REVOKE FROM PUBLIC` alone leaves anon callable. The in-function `auth.uid() is null` check is the actual gate. Logged as a separate task — not a step 1 regression.
+
+**Step 2 — Workspace dashboard at `/w/[slug]` (this commit).**
+
+Server component, all data fetched at page-level (no client waterfalls). Replaces the legacy `<App />` render. Auth + redirect rules per spec: anon → `/auth/signin?next=/w/[slug]` (closes the dashboard half of lesson #10); client-only members in this workspace → `/portal/[first-pipeline-id]`; non-member with a `last_active_workspace_id` elsewhere → that workspace; otherwise → `/`.
+
+Layout:
+- **Greeting block** — `Hey [first-letter-capitalized firstname]! 👋` in a #263D5F highlight with #7FA7D9 text, subhead "What can we get done today?", date line. Greeting parses `display_name.trim().split(/\s+/)[0]` then capitalizes; null/empty → "Hey there! 👋".
+- **My Tasks card** — top 5 non-completed tasks assigned to current user, sorted: overdue first → deadline asc → no-deadline by created_at desc. Date pills in pipeline color; overdue tasks get red titles, pills stay pipeline-colored.
+- **Activity card** — top 5 events from `activity_events`, filtered to `member_joined / stage_advanced / pipeline_submitted / pipeline_created` (the 4 types the current schema can write); mentions/replies/assignments/completions deferred to 4b (needs schema expansion + writer triggers). Subtitle locked as "Recent updates from your team" — don't promise mentions we can't deliver yet.
+- **Team chat strip** — always renders in step 2; permanent empty state ("no messages yet." + "Start a conversation" CTA stub). TODO comments mark the spots for 4b workspace-channel schema and Phase 6 `workspaces.plan` gating.
+- **Pipelines section** — filter chips (Progress asc default → stalled first / Name / Recents) above a responsive grid (1/2/3/4/5 cols at sm/md/lg/xl/2xl). Each card renders emoji block, name, optional `🏠 [company]` line (per the figma), member cluster (3 avatars + `+N`), current stage with locked 3-state visual derivation, and progress bar.
+
+Shared components introduced:
+- **`<UserAvatar user={...} size={...} />`** — new, dashboard-only scope. Renders `profiles.avatar_url` when present; else proportional rounded-square (size × 0.25) with deterministic-hashed bg and initial fallback. Email used ONLY for the single-character initial fallback — never in `alt`/`aria-label`/`title` (guard against agency↔client email leakage). The existing `src/components/Avatar.tsx` + the inline Avatar inside `HeaderProfileMenu` stay untouched; migrating those is a follow-up.
+- **AppShell header** restructured: contents wrapped in matching `max-w-[1600px] mx-auto px-6 sm:px-12` so the workspace switcher's left edge and the avatar's right edge align with the cards below. Header gets a search-bar visual placeholder (cmd+K is post-4a) + a "+ Pipeline" button when `activeSlug` is known.
+
+Schema additions:
+- Migration `20260519140000_tasks_created_at` — adds `tasks.created_at timestamptz not null default now()` for the third-tier sort in My Tasks (no-deadline tasks by creation desc).
+- Migration `20260520120000_create_pipeline_company_param` — extends `create_pipeline_with_channels` with an optional `pipeline_company text default null` parameter so the create form can populate `pipelines.company` (column has existed since `20260508120000_initial_schema`, just had no writer path until now).
+
+Storage migration (Supabase auth):
+- Client switched from `createClient` (supabase-js, localStorage) to `createBrowserClient` (`@supabase/ssr`, cookies). New server-side client at `src/lib/supabase-server.ts` reads the same cookies via `next/headers` so RSC can resolve `auth.uid()` correctly. Without this pairing, the dashboard server component saw no session and looped to `/auth/signin` while the client showed authenticated — the infinite-redirect bug observed mid-build.
+
+Bug surfaced + fixed during build (the actual reason the dashboard returned empty data before the FK fix):
+- **PostgREST PGRST201 ambiguous embed.** The schema has two FKs between `stages` and `pipelines`: `stages.pipeline_id → pipelines.id` (the parent FK we want) and `pipelines.current_stage_id → stages.id` (auto_advance_stage back-pointer). PostgREST refused to embed without a hint and three queries (`myTasksRes`, `workspaceTasksRes`, `stagesRes`) all returned errors that collapsed to empty arrays via the `.data ?? []` fallback. My Tasks surfaced as an error state in the UI; the other two failed *silently* and made every pipeline card render "0/0 + No stages yet" even when the data was there. Fix: disambiguate explicitly with `pipelines!stages_pipeline_id_fkey!inner(...)` in all three queries. Verified against the live REST endpoint — returns `[]` (RLS deny) instead of PGRST201 with the FK hint.
+
+Verification (live, jordan as workspace owner of Test Workspace 4b):
+- Seeded test data: 3 stages (Discovery #DF1E5A, Design #E273C1, Delivery #21B159), 6 tasks (3 done, 3 not), 3 mock activity events from non-jordan actors, `company = 'Smoke Test Co'` on 7a.
+- Pipeline card derivation: 7a showed "Design" with 3/6 progress + light-pink bar + solid colored dot. Matches the locked 3-state rule (partial completion → highest-position stage with any completed task).
+- My Tasks: 2 visible (First draft / Tomorrow / pipeline color dot · Final delivery / no pill), sorted correctly.
+- Activity card: 3 events rendered newest-first with avatars matching actor identity (Jordan Perez Google avatar, William Wayne initials).
+- Avatar fallback: jordanperez1270+client@gmail.com (null display_name) renders "J" (first letter of email) — not the previous "4" (first hex char of uuid).
+- Unauthed redirect: smoke-tested via `curl` against the production build server → HTTP 307 to `/auth/signin?next=/w/test-workspace-4b`.
+- Test data fully cleaned before commit (0 stages, 0 tasks, 0 activity_events, company reset to null on 7a).
+
+Polish landed in step 2 (figma alignment): square greeting highlight, type-scale tweaks (40/600 → 40/500 greeting, 30 → 34 subhead), 48px emoji boxes with #212124 bg + #36363A border across all cards, dotted-grid backdrop (`.dotted-grid` class color refreshed to #424242, applied to dashboard + create-pipeline page), responsive header padding (`px-6 sm:px-12`), responsive max-width 1200 → 1600, pipelines grid xl/2xl breakpoints, rounded-square avatar treatment (size × 0.25 proportional), hover-pill rows with negative-margin pattern, pipeline cards now render `🏠 [company]` when set, conditional `#7FA7D9` text-link color on active "See all" / "Open chat" links.
+
+Two deviations from the original SPEC, both green-lit on disclosure:
+1. **My Tasks `+` quick-add** is a placeholder explanation ("Quick-add lands in step 4") instead of a half-broken title-only composer — tasks need a `stage_id` and there's no way to derive one from title alone. Step 4 builds the full picker.
+2. **Avatar call-site count** — the new UserAvatar has TWO call sites in step 2 (Activity rows + Pipeline cluster), not three. My Tasks rows use a pipeline-color dot per the row spec, not an assignee avatar.
+
+Convention added this phase (see CLAUDE.md → Conventions):
+- **Dashboard sections stay position-agnostic.** User-customizable section ordering is a planned v1.1+ feature, deferred until post-launch validation. Every dashboard section component must stay self-contained, must not hardcode vertical position, and must own its own data/empty/error states. Keeps the v1.1 customization a layout-shell change rather than a rewrite. Free now, expensive to retrofit.
+
+Scope addition deferred to Phase 4a step 5 (canvas):
+- **Soft-delete pipelines** via `pipelines.archived_at timestamptz null` + `archive_pipeline` / `restore_pipeline` RPCs + dashboard filter (`.is('archived_at', null)`) + Archived view. Permission gate: workspace owner/admin OR pipeline owner. Activity event types `'pipeline_archived'` / `'pipeline_restored'` added to the CHECK constraint as part of the same migration. Folded into step 5 rather than spawned as a separate chip — pipeline lifecycle is naturally cohesive with the canvas + settings UI.
+
+**Lessons learned (apply forever):**
+
+1. **PostgREST `.data ?? []` fallbacks mask query errors.** A query returning PGRST201 (ambiguous embed, missing FK hint, schema mismatch) hits the JS error branch but the page-level `.data ?? []` pattern silently substitutes an empty array — UI shows empty state, no console log, no error state, no banner. The bug was only caught because the *other* failing query surfaced via `myTasksRes.error` into the My Tasks card's error UI. When checking dashboard data, verify failures aren't masquerading as empty results: log `*Res.error` for each query, or wire a per-card error prop and make sure it's not always-null.
+
+2. **Disambiguate multi-FK embeds explicitly.** Any pair of tables with more than one FK between them (stages↔pipelines is the live example; pipelines.current_stage_id back-pointer is the second FK) requires the `tablename!fk_constraint_name!inner` syntax to embed. PostgREST will not pick a default. Audit happens at the query-write step, not at runtime.
+
+3. **Header alignment matters more than expected.** Aligning the AppShell header's contents with the dashboard body's max-width container costs one extra `<div>` wrapper but pays off across every workspace-scoped surface (workspace switcher ↔ greeting ↔ first card all share a left edge). Don't leave the header at full-bleed if the body is constrained.
+
+4. **Storage mismatch between Supabase client + server clients is silent until you SSR.** The browser client at `createClient` (supabase-js, localStorage) doesn't share session storage with the server's `createServerClient` (@supabase/ssr, cookies). Sessions written by the client are invisible to the server, producing infinite redirect-to-signin loops when SSR pages gate on auth. Pair them: `createBrowserClient` on the client side, `createServerClient` on the server, both via `@supabase/ssr`.
+
+5. **TZ caveat on server-side day boundaries.** Dashboard's "overdue" sort uses midnight-today computed in the server's local TZ (UTC on Vercel). For users west of UTC, deadlines that fall in their local "today" but after server UTC midnight will misbucket as not-overdue. Pre-launch blocker (US-based GHL beachhead is mostly west of UTC). Locked fix path: read user TZ from a cookie set client-side on first load, compute the day boundary in that TZ. Tracked in launch-prep checklist.
+
+---
+
 ## Phase 3 — Checkpoint 3.4 COMPLETE: auth wiring + invite flows + identity linking (2026-05-19)
 
 **Goal:** wire Supabase auth end-to-end, ship agency + client invite flows, add identity linking + linked-accounts settings, and verify everything via a two-browser end-to-end run.

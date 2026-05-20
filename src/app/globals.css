@@ -26,10 +26,14 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Dotted grid backdrop — used on auth screens, canvas, and the landing page */
+/* Dotted grid backdrop — used on auth screens, canvas, dashboard, and the
+   landing page. Dot color refreshed 2026-05-19 (Phase 4a step 2 polish)
+   from rgba(255,255,255,0.06) to a flat #424242 so dots are visible
+   against the #212124 background without disappearing on darker variant
+   surfaces. */
 .dotted-grid {
   background-color: var(--color-stages-bg);
-  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+  background-image: radial-gradient(circle, #424242 1px, transparent 1px);
   background-size: 24px 24px;
 }
 

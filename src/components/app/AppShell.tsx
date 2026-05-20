@@ -1,7 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
+import { Plus, Search } from "lucide-react";
 import { StagesLogo } from "@/components/icons/StagesLogo";
 import { useSession } from "@/hooks/useSession";
 import { useUserContexts } from "@/hooks/useUserContexts";
@@ -30,6 +31,7 @@ type Props = {
 export function AppShell({ children }: Props) {
   const session = useSession();
   const contexts = useUserContexts();
+  const router = useRouter();
   // Active workspace slug. When mounted inside /w/[slug]/*, it comes
   // straight from the route params. When mounted on workspace-agnostic
   // routes like /settings/*, there's no [slug] param — fall back to the
@@ -53,42 +55,101 @@ export function AppShell({ children }: Props) {
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "#212124" }}>
       <header
-        className="border-b border-zinc-800 flex items-center sticky top-0 z-40"
+        className="border-b border-zinc-800 sticky top-0 z-40"
         style={{
           background: "#121212",
-          paddingLeft: "16px",
-          paddingRight: "16px",
-          paddingTop: "12px",
-          paddingBottom: "12px",
-          gap: "12px",
           height: "64px",
         }}
       >
-        <div className="flex-shrink-0 flex items-center" style={{ marginRight: "4px" }}>
-          <StagesLogo size={28} />
+        {/* Inner container matches the dashboard body's max-w-[1200px] +
+            px-4/sm:px-6 so the workspace switcher's left edge and the
+            avatar's right edge align with the cards below. Header
+            background still spans the full viewport (sticky bar). */}
+        {/* Flat flex row matching the figma header layout:
+              [logo] [switcher] [search flex-1] [pipeline] [avatar]
+            Consistent 16px gap between every element. Search bar is the
+            only flexible element — it absorbs all remaining space; the
+            others sit at their natural width. No max-width cap on search:
+            it spans whatever's left between switcher and Pipeline button. */}
+        <div
+          className="max-w-[1600px] mx-auto px-6 sm:px-12 h-full flex items-center"
+          style={{ gap: "16px" }}
+        >
+          {/* Logo */}
+          <div className="flex-shrink-0 flex items-center">
+            <StagesLogo size={28} />
+          </div>
+
+          {/* Workspace switcher. Empty slot during the brief load window
+              (no placeholder flash). */}
+          {session.status === "authenticated" && contexts.status === "ready" && (
+            <HeaderWorkspaceSwitcher
+              contexts={contexts.contexts}
+              activeSlug={activeSlug}
+              userId={session.user.id}
+            />
+          )}
+
+          {/* Search bar — Phase 4a step 2 visual placeholder. cmd+K wire-
+              up is post-4a; styled non-functional input. flex-1 absorbs
+              all leftover space; hidden below md so mobile chrome stays
+              tight. */}
+          <div className="flex-1 min-w-0 hidden md:block">
+            <div
+              className="flex items-center gap-2"
+              style={{
+                background: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.06)",
+                borderRadius: 8,
+                padding: "8px 12px",
+                cursor: "not-allowed",
+                opacity: 0.7,
+              }}
+              aria-label="Search (coming soon)"
+              title="Search arrives in a later step"
+            >
+              <Search size={14} style={{ color: "rgba(255,255,255,0.5)" }} />
+              <span
+                className="text-[13px] truncate"
+                style={{ color: "rgba(255,255,255,0.4)" }}
+              >
+                Search by name or company…
+              </span>
+            </div>
+          </div>
+
+          {/* + Pipeline button — only on workspace-scoped routes where
+              activeSlug is known. */}
+          {activeSlug && (
+            <button
+              type="button"
+              onClick={() => router.push(`/w/${activeSlug}/p/new`)}
+              className="flex items-center gap-1.5 text-[14px] font-medium text-white flex-shrink-0 transition-opacity"
+              style={{
+                background: "#108CE9",
+                height: 40,
+                padding: "0 16px",
+                borderRadius: 10,
+                border: "none",
+                cursor: "pointer",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.9")}
+              onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
+            >
+              <Plus size={14} strokeWidth={2.5} />
+              Pipeline
+            </button>
+          )}
+
+          {/* Avatar */}
+          {session.status === "authenticated" && contexts.status === "ready" && (
+            <HeaderProfileMenu
+              email={session.user.email ?? ""}
+              displayName={contexts.profile.displayName}
+              avatarUrl={contexts.profile.avatarUrl}
+            />
+          )}
         </div>
-
-        {/* Workspace switcher — only render when we have data. During the
-            brief loading window, leave the slot empty (no flash of
-            placeholder text). */}
-        {session.status === "authenticated" && contexts.status === "ready" && (
-          <HeaderWorkspaceSwitcher
-            contexts={contexts.contexts}
-            activeSlug={activeSlug}
-            userId={session.user.id}
-          />
-        )}
-
-        {/* Spacer pushes the profile menu to the right edge. */}
-        <div className="flex-1 min-w-0" />
-
-        {session.status === "authenticated" && contexts.status === "ready" && (
-          <HeaderProfileMenu
-            email={session.user.email ?? ""}
-            displayName={contexts.profile.displayName}
-            avatarUrl={contexts.profile.avatarUrl}
-          />
-        )}
       </header>
 
       {/* Children render below the persistent header. Each view (ClientList,

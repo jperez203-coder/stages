@@ -6,9 +6,13 @@ import { supabase } from "@/lib/supabase";
 
 /**
  * Three-state session model. `loading` is the brief window after mount where
- * the Supabase client is checking localStorage and (if present) refreshing the
- * stored token. UI should render a placeholder rather than flashing the
- * sign-in form during this window.
+ * the Supabase client is reading the session cookies and (if present)
+ * refreshing the stored token. UI should render a placeholder rather than
+ * flashing the sign-in form during this window.
+ *
+ * Storage moved from localStorage to cookies in Phase 4a step 2 when the
+ * client switched to @supabase/ssr's createBrowserClient (paired with the
+ * server's createSupabaseServerClient so SSR can see the session).
  */
 export type SessionState =
   | { status: "loading" }

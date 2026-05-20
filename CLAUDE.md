@@ -263,6 +263,7 @@ stages/
 - **Push to `main`** directly until production. PR discipline starts when there are real customers.
 - **Don't expand scope** beyond the prototype — flag missing/weird things, don't fix silently.
 - **[v1.1 wishlist](WISHLIST.md)** captures intentionally-deferred features. Anything not in the prototype goes there, not into Phase 2 code. Don't act on wishlist items without explicit go-ahead.
+- **Dashboard sections stay position-agnostic.** Customizable dashboard ordering (user decides whether pipelines, tasks, activity, etc. come first) is a planned v1.1+ feature, deferred until post-launch validation. NOT being built now. But every dashboard section component (the cards under `src/components/dashboard/`, plus future sections) must (a) be self-contained — no section assumes what renders above or below it, (b) not hardcode its vertical position or order, (c) own its own data fetching / empty / error states independently. Keeps v1.1 customization a layout-shell change (persist a per-user order, drag-to-reorder the shell) rather than a rewrite of every card. Don't couple sections to fixed positions or to each other.
 
 ## Known transitional state (Phase 3.4 → 4)
 

@@ -24,6 +24,7 @@ type CreateResult = {
   pipeline_id: string;
   name: string;
   emoji: string;
+  company: string | null;
 };
 
 /**
@@ -54,6 +55,7 @@ export default function CreatePipelinePage() {
   const contexts = useUserContexts();
 
   const [name, setName] = useState("");
+  const [company, setCompany] = useState("");
   const [emoji, setEmoji] = useState(DEFAULT_EMOJI);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -119,12 +121,18 @@ export default function CreatePipelinePage() {
     setSubmitting(true);
     setError(null);
 
+    const trimmedCompany = company.trim();
     const { data, error: rpcError } = await supabase.rpc(
       "create_pipeline_with_channels",
       {
         workspace_id: workspace.workspaceId,
         pipeline_name: trimmed,
         pipeline_emoji: emoji,
+        // Empty string sent as-is; the RPC's trim + nullif collapses
+        // it to NULL on the DB side, matching the "show only when set"
+        // rule the dashboard's PipelineCard uses to render the company
+        // line.
+        pipeline_company: trimmedCompany,
       },
     );
 
@@ -171,24 +179,32 @@ export default function CreatePipelinePage() {
   // Loading: session resolving, or contexts not yet fetched. Both happen
   // briefly on mount; combined into one placeholder to avoid flashing
   // intermediate states.
+  // All five render branches below share the same outer chrome: the
+  // dotted-grid background (same .dotted-grid class used by the dashboard)
+  // + min-h-full to fill the AppShell content area. Inner max-w-2xl keeps
+  // the form/panel centered with reasonable reading width.
   if (
     session.status === "loading" ||
     session.status === "anonymous" ||
     contexts.status === "loading"
   ) {
     return (
-      <div className="max-w-2xl mx-auto px-6 py-12">
-        <div className="text-[13px] text-zinc-500">Loading…</div>
+      <div className="dotted-grid min-h-full px-4 sm:px-6 py-12">
+        <div className="max-w-2xl mx-auto">
+          <div className="text-[13px] text-zinc-500">Loading…</div>
+        </div>
       </div>
     );
   }
 
   if (contexts.status === "error") {
     return (
-      <div className="max-w-2xl mx-auto px-6 py-12">
-        <div className="panel-card p-6 flex items-start gap-3 text-[13px] text-stages-red">
-          <AlertCircle size={16} className="flex-shrink-0 mt-0.5" />
-          <span>Couldn&apos;t load your workspace contexts: {contexts.message}</span>
+      <div className="dotted-grid min-h-full px-4 sm:px-6 py-12">
+        <div className="max-w-2xl mx-auto">
+          <div className="panel-card p-6 flex items-start gap-3 text-[13px] text-stages-red">
+            <AlertCircle size={16} className="flex-shrink-0 mt-0.5" />
+            <span>Couldn&apos;t load your workspace contexts: {contexts.message}</span>
+          </div>
         </div>
       </div>
     );
@@ -199,37 +215,41 @@ export default function CreatePipelinePage() {
   // "no permission" UI mid-redirect.
   if (!workspace) {
     return (
-      <div className="max-w-2xl mx-auto px-6 py-12">
-        <div className="text-[13px] text-zinc-500">Loading…</div>
+      <div className="dotted-grid min-h-full px-4 sm:px-6 py-12">
+        <div className="max-w-2xl mx-auto">
+          <div className="text-[13px] text-zinc-500">Loading…</div>
+        </div>
       </div>
     );
   }
 
   if (!canCreate) {
     return (
-      <div className="max-w-2xl mx-auto px-6 py-12">
-        <button
-          onClick={() => router.push(`/w/${slug}`)}
-          className="text-[13px] text-zinc-500 hover:text-zinc-300 flex items-center gap-1.5 mb-6 transition-colors"
-        >
-          <ArrowLeft size={14} />
-          Back to {workspace.workspaceName}
-        </button>
-        <div className="panel-card p-6 flex items-start gap-3">
-          <AlertCircle
-            size={18}
-            className="text-stages-amber flex-shrink-0 mt-0.5"
-          />
-          <div>
-            <div className="text-[14px] font-medium mb-1">
-              You don&apos;t have permission to create pipelines here.
+      <div className="dotted-grid min-h-full px-4 sm:px-6 py-12">
+        <div className="max-w-2xl mx-auto">
+          <button
+            onClick={() => router.push(`/w/${slug}`)}
+            className="text-[13px] text-zinc-500 hover:text-zinc-300 flex items-center gap-1.5 mb-6 transition-colors"
+          >
+            <ArrowLeft size={14} />
+            Back to {workspace.workspaceName}
+          </button>
+          <div className="panel-card p-6 flex items-start gap-3">
+            <AlertCircle
+              size={18}
+              className="text-stages-amber flex-shrink-0 mt-0.5"
+            />
+            <div>
+              <div className="text-[14px] font-medium mb-1">
+                You don&apos;t have permission to create pipelines here.
+              </div>
+              <p className="text-[13px] text-zinc-400 leading-snug">
+                Only workspace owners and admins can create new pipelines in{" "}
+                <span className="text-zinc-200">{workspace.workspaceName}</span>.
+                Ask an owner or admin to create the pipeline, or to upgrade
+                your role.
+              </p>
             </div>
-            <p className="text-[13px] text-zinc-400 leading-snug">
-              Only workspace owners and admins can create new pipelines in{" "}
-              <span className="text-zinc-200">{workspace.workspaceName}</span>.
-              Ask an owner or admin to create the pipeline, or to upgrade
-              your role.
-            </p>
           </div>
         </div>
       </div>
@@ -237,7 +257,8 @@ export default function CreatePipelinePage() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto px-6 py-8">
+    <div className="dotted-grid min-h-full px-4 sm:px-6 py-8">
+      <div className="max-w-2xl mx-auto">
       <button
         onClick={() => router.push(`/w/${slug}`)}
         className="text-[13px] text-zinc-500 hover:text-zinc-300 flex items-center gap-1.5 mb-6 transition-colors"
@@ -268,6 +289,26 @@ export default function CreatePipelinePage() {
         />
         <p className="text-[12px] text-zinc-600 mb-6 leading-relaxed">
           Up to {MAX_NAME_LENGTH} characters.
+        </p>
+
+        <label className="block mb-1.5">
+          <span className="text-[13px] text-zinc-400">
+            Company{" "}
+            <span className="text-zinc-600">(optional)</span>
+          </span>
+        </label>
+        <input
+          type="text"
+          value={company}
+          onChange={(e) => setCompany(e.target.value)}
+          placeholder="Acme Inc"
+          maxLength={MAX_NAME_LENGTH}
+          className="field mb-2"
+          disabled={submitting}
+        />
+        <p className="text-[12px] text-zinc-600 mb-6 leading-relaxed">
+          The client or business this pipeline is for. Shows under the
+          pipeline name on the dashboard.
         </p>
 
         <label className="block mb-2">
@@ -340,6 +381,7 @@ export default function CreatePipelinePage() {
           </button>
         </div>
       </form>
+      </div>
     </div>
   );
 }

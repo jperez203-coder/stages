@@ -50,14 +50,20 @@ export function HeaderProfileMenu({ email, displayName, avatarUrl }: Props) {
   };
 
   return (
-    <div ref={ref} className="relative">
+    // `flex items-center` on the wrapper kills the inline-block baseline
+    // descender that <button> would otherwise add below itself, which made
+    // this wrapper measure ~44px tall (40px button + ~4px descender space)
+    // and shifted the avatar ~2px up relative to the 40px Pipeline button
+    // next to it. As a flex container, the button stops being baseline-
+    // aligned and the wrapper's height matches the button exactly.
+    <div ref={ref} className="relative flex items-center">
       <button
         onClick={() => setOpen(!open)}
         className="transition-transform"
         style={{
-          width: "36px",
-          height: "36px",
-          borderRadius: "9px",
+          width: "40px",
+          height: "40px",
+          borderRadius: "10px",
           cursor: "pointer",
           padding: 0,
           background: "transparent",
@@ -68,7 +74,7 @@ export function HeaderProfileMenu({ email, displayName, avatarUrl }: Props) {
         title={displayName ? `${displayName} (${email})` : email}
         aria-label="Open profile menu"
       >
-        <Avatar email={email} avatarUrl={avatarUrl} size={36} fontSize={14} />
+        <Avatar email={email} avatarUrl={avatarUrl} size={40} fontSize={16} />
       </button>
 
       {open && (
@@ -169,6 +175,17 @@ function Avatar({
   const color = COLORS[Math.abs(hash) % COLORS.length];
   const initial = email.charAt(0).toUpperCase();
 
+  // Rendering shape rules (apply to both image and initials branches):
+  //   * borderRadius: rounded-square (10px) for sizes ≤ 40 (header trigger);
+  //     full circle (50%) for larger (44+ dropdown avatar). Threshold bumped
+  //     from 36 → 40 in the 2026-05-20 polish round so the new 40px trigger
+  //     keeps the rounded-square aesthetic matching the dashboard emoji
+  //     boxes (#212124 + #36363A, borderRadius 10).
+  //   * boxSizing: "border-box" is EXPLICIT here because next/image's <img>
+  //     element doesn't reliably inherit Tailwind preflight's global box-
+  //     sizing rule. Without this the 2px border was being added to the
+  //     40px footprint, making the trigger avatar render visually ~44px and
+  //     sit above the 40px Pipeline button next to it.
   if (avatarUrl && !imgFailed) {
     return (
       <Image
@@ -181,7 +198,8 @@ function Avatar({
         style={{
           width: `${size}px`,
           height: `${size}px`,
-          borderRadius: size <= 36 ? "9px" : "50%",
+          boxSizing: "border-box",
+          borderRadius: size <= 40 ? "10px" : "50%",
           objectFit: "cover",
           border: `2px solid ${color}66`,
           display: "block",
@@ -196,10 +214,11 @@ function Avatar({
       style={{
         width: `${size}px`,
         height: `${size}px`,
+        boxSizing: "border-box",
         background: color + "33",
         color,
         border: `2px solid ${color}66`,
-        borderRadius: size <= 36 ? "9px" : "50%",
+        borderRadius: size <= 40 ? "10px" : "50%",
         fontSize: `${fontSize}px`,
       }}
     >
