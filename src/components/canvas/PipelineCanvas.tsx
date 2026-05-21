@@ -17,29 +17,50 @@ import {
   STAGE_NODE_WIDTH,
   STAGE_NODE_HEIGHT,
   BADGE_DIAMETER,
+  computeStageNodeHeight,
 } from "./StageNode";
 import { StageConnector } from "./StageConnector";
-import type { StageViewModel } from "@/app/w/[slug]/p/[pipeline-id]/page";
+import {
+  pickAnchorStage,
+  stageStateFromCounts,
+  type StageState,
+} from "@/lib/current-stage";
+import { supabase } from "@/lib/supabase";
+import type {
+  StageRaw,
+  TaskRaw,
+} from "@/app/w/[slug]/p/[pipeline-id]/page";
 
 /**
- * Pipeline canvas — Phase 4a step 5b (real stage rendering on the 5a shell).
+ * Pipeline canvas — Phase 4a step 5c (tasks + completion + add).
  *
- * Stages laid out left-to-right horizontally at the geometric center of
- * the 4000×4000 transform plane. Each stage renders as a StageNode
- * (badge + box) with a StageConnector between adjacent badges. State
- * coloring (passed/current/future → green/purple/grey) is derived
- * server-side via deriveCurrentStage + stateForStage and arrives in the
- * `stages` prop as `StageViewModel[]`.
+ * Builds on 5b's stage rendering. Each stage now renders its tasks as
+ * checkbox + title rows beneath the box. Checking a task UPDATEs
+ * tasks.done (the existing set_task_completion_metadata BEFORE UPDATE
+ * trigger writes completed_at/_by; the auto_advance_stage trigger
+ * writes pipelines.current_stage_id but we don't read it — derivation
+ * stays the source of truth). After every toggle/create the client
+ * re-runs deriveCurrentStage with updated task counts, recomputes
+ * per-stage state, and re-renders — so colors advance live as the
+ * pipeline progresses.
  *
- * 5a's wheel handling (pan via custom listener, Cmd/Ctrl+wheel zoom via
- * lib activationKeys), edge fades, coachmark, and zoom controls are all
- * preserved unchanged. The placeholder boxes from 5a are deleted; the
- * content-bbox now derives from real stage positions.
+ * Derivation moved from server-side (5b) to client-side here. Server
+ * sends RAW stages + tasks; client computes counts, runs the helper,
+ * builds StageViewModel locally. Both paths use the SAME helper
+ * (src/lib/current-stage.ts) — no second implementation.
  *
- * Empty-stage fallback: when the pipeline has zero stages, the canvas
- * renders the grid + a small "no stages yet" pill at the plane center.
- * Auto-center is skipped (nothing to target). 5e will surface a real
- * "create your first stage" affordance.
+ * Permission gating mirrors the tightened RLS exactly:
+ *   * canEditPipeline = workspace owner OR pipeline owner/admin →
+ *     can toggle any task, sees +add task affordance
+ *   * Otherwise: per-task interactivity gated by
+ *     task.assignee_id === currentUserId
+ *
+ * Still NOT in scope:
+ *   * Task detail panel (step 6) — clicking task ROW (not checkbox)
+ *     is stubbed to console.log
+ *   * Left rail + header chrome (5d)
+ *   * Edit pipeline mode (5e)
+ *   * Client portal — client_visible filtering NOT applied here (4c)
  */
 
 type Props = {
@@ -47,31 +68,28 @@ type Props = {
   pipelineName: string;
   workspaceSlug: string;
   coachmarkInitiallyDismissed: boolean;
-  stages: StageViewModel[];
-  currentStageId: string | null;
+  stages: StageRaw[];
+  tasks: TaskRaw[];
+  currentUserId: string;
+  canEditPipeline: boolean;
 };
 
-// Canvas plane size — big enough that pan + edge fades have room to
-// breathe at all zoom levels. The plane is the transformed inner content
-// (dotted grid + stage nodes). When zoomed to 1x and centered on the
-// origin, the visible area shows a small slice of this plane.
 const PLANE_W = 4000;
 const PLANE_H = 4000;
-
-// Plane center — where the stage row is anchored.
 const PLANE_CX = PLANE_W / 2;
 const PLANE_CY = PLANE_H / 2;
-
-// Horizontal gap between stages. STAGE_NODE_WIDTH (180) + STAGE_GAP (100)
-// = 280px between adjacent stage left edges, which puts badge centers
-// ~280px apart — matches the figma's spacing rhythm.
 const STAGE_GAP = 100;
-
-// Bounding-box padding around the stage cluster for the edge fades.
-// Fades activate when the user pans content past this padded boundary
-// instead of right at the cluster's literal edge — gives a small "you
-// haven't quite reached the limit" buffer.
 const BBOX_PADDING = 40;
+
+// Result of running deriveCurrentStage + stateForStage across all stages.
+type StageVM = {
+  id: string;
+  position: number;
+  name: string;
+  total: number;
+  completed: number;
+  state: StageState;
+};
 
 export function PipelineCanvas({
   pipelineId,
@@ -79,44 +97,135 @@ export function PipelineCanvas({
   workspaceSlug,
   coachmarkInitiallyDismissed,
   stages,
-  currentStageId,
+  tasks: initialTasks,
+  currentUserId,
+  canEditPipeline,
 }: Props) {
   const transformRef = useRef<ReactZoomPanPinchRef | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
 
-  // ── Layout coordinates for each stage ─────────────────────────────────
-  // Stages laid out left-to-right horizontally, centered on the plane.
-  // All stages share the same y (badge centers aligned on one axis).
-  //
-  // Recomputed only when `stages` changes (rare — typically once per
-  // page load).
-  const layout = useMemo(() => {
-    const n = stages.length;
-    if (n === 0) {
-      return { positions: new Map<string, { x: number; y: number }>(), bbox: null };
-    }
-    const totalWidth = n * STAGE_NODE_WIDTH + (n - 1) * STAGE_GAP;
-    const startX = PLANE_CX - totalWidth / 2;
-    const yTop = PLANE_CY - STAGE_NODE_HEIGHT / 2;
+  // ── Live task state ────────────────────────────────────────────────────
+  // The server hands us the initial array; we mutate locally on
+  // optimistic updates + RPC successes. Re-derivation reads from this
+  // state, so any change here propagates through the whole canvas
+  // (counts, current stage, colors, connector states).
+  const [tasksState, setTasksState] = useState<TaskRaw[]>(initialTasks);
+  // Note: no useEffect to re-sync tasksState from initialTasks. Route
+  // remount creates a new component when navigating to a different
+  // pipeline-id, so initialTasks only changes on remount (when useState
+  // re-initializes from the new prop). Adding a sync effect here would
+  // trigger React 19's react-hooks/set-state-in-effect warning AND
+  // overwrite local optimistic mutations on every re-render of the
+  // parent.
 
-    const positions = new Map<string, { x: number; y: number }>();
-    stages.forEach((s, idx) => {
-      const x = startX + idx * (STAGE_NODE_WIDTH + STAGE_GAP);
-      positions.set(s.id, { x, y: yTop });
+  // ── Tasks-by-stage map (for StageNode prop + counts derivation) ───────
+  const tasksByStage = useMemo(() => {
+    const map = new Map<string, TaskRaw[]>();
+    for (const t of tasksState) {
+      const list = map.get(t.stage_id) ?? [];
+      list.push(t);
+      map.set(t.stage_id, list);
+    }
+    // Sort each stage's tasks by position ascending (matches the
+    // server's order, but the optimistic add-task path appends to the
+    // end which can violate ordering if positions aren't strictly
+    // monotonic — re-sort defensively).
+    for (const list of map.values()) {
+      list.sort((a, b) => a.position - b.position);
+    }
+    return map;
+  }, [tasksState]);
+
+  // ── Live derivation ────────────────────────────────────────────────────
+  // Recomputes on every tasksState change. NEW model (5c annotation
+  // polish 2026-05-22): per-stage state is independent of position —
+  // each stage is classified from its own task counts via
+  // stageStateFromCounts. Multiple stages can be "in-progress" at once.
+  // The single "anchor" stage (for auto-center + pill) is picked
+  // separately via pickAnchorStage.
+  const { stageVMs, anchorStageId, layout } = useMemo(() => {
+    const stageCounts = new Map<
+      string,
+      { total: number; completed: number }
+    >();
+    for (const t of tasksState) {
+      const c = stageCounts.get(t.stage_id) ?? { total: 0, completed: 0 };
+      c.total += 1;
+      if (t.done) c.completed += 1;
+      stageCounts.set(t.stage_id, c);
+    }
+
+    // Per-stage state classification — pure function of each stage's
+    // own counts. Build the state map first, THEN pick the anchor.
+    const stageStates = new Map<string, StageState>();
+    for (const s of stages) {
+      const c = stageCounts.get(s.id) ?? { total: 0, completed: 0 };
+      stageStates.set(s.id, stageStateFromCounts(c));
+    }
+
+    // Single anchor stage for auto-center + pill — picked by the
+    // shared rule (first in-progress → first not-started → last).
+    const anchor = pickAnchorStage(stages, stageStates);
+
+    const vms: StageVM[] = stages.map((s) => {
+      const c = stageCounts.get(s.id) ?? { total: 0, completed: 0 };
+      return {
+        id: s.id,
+        position: s.position,
+        name: s.name,
+        total: c.total,
+        completed: c.completed,
+        state: stageStates.get(s.id) ?? "not-started",
+      };
     });
 
-    // Content bbox in canvas-plane coords for edge-fade detection,
-    // padded a bit so fades activate slightly past the literal cluster
-    // edge.
-    const bbox = {
-      left: startX - BBOX_PADDING,
-      right: startX + totalWidth + BBOX_PADDING,
-      top: yTop - BBOX_PADDING,
-      bottom: yTop + STAGE_NODE_HEIGHT + BBOX_PADDING,
-    };
+    // Layout coords (same math as 5b — stages laid out left-to-right
+    // centered on plane center). The stage NODE height now varies per
+    // stage because of task counts + the +add row; we compute the
+    // tallest column's bottom for bbox below.
+    const n = stages.length;
+    const positions = new Map<string, { x: number; y: number }>();
+    let bbox: {
+      left: number;
+      right: number;
+      top: number;
+      bottom: number;
+    } | null = null;
 
-    return { positions, bbox };
-  }, [stages]);
+    if (n > 0) {
+      const totalWidth = n * STAGE_NODE_WIDTH + (n - 1) * STAGE_GAP;
+      const startX = PLANE_CX - totalWidth / 2;
+      const yTop = PLANE_CY - STAGE_NODE_HEIGHT / 2;
+
+      stages.forEach((s, idx) => {
+        const x = startX + idx * (STAGE_NODE_WIDTH + STAGE_GAP);
+        positions.set(s.id, { x, y: yTop });
+      });
+
+      // Tallest column's bottom = bbox.bottom. Each stage's height
+      // depends on its task count + whether the +add row is shown
+      // (canEditPipeline gates it).
+      const tallestColumnBottom = stages.reduce((max, s) => {
+        const taskCount = tasksByStage.get(s.id)?.length ?? 0;
+        const h = computeStageNodeHeight(taskCount, canEditPipeline);
+        const bottom = yTop + h;
+        return Math.max(max, bottom);
+      }, yTop + STAGE_NODE_HEIGHT);
+
+      bbox = {
+        left: startX - BBOX_PADDING,
+        right: startX + totalWidth + BBOX_PADDING,
+        top: yTop - BBOX_PADDING,
+        bottom: tallestColumnBottom + BBOX_PADDING,
+      };
+    }
+
+    return {
+      stageVMs: vms,
+      anchorStageId: anchor?.id ?? null,
+      layout: { positions, bbox },
+    };
+  }, [stages, tasksState, tasksByStage, canEditPipeline]);
 
   // ── Edge-fade visibility ──────────────────────────────────────────────
   const [edges, setEdges] = useState({
@@ -147,18 +256,14 @@ export function PipelineCanvas({
     [layout.bbox],
   );
 
-  // ── Custom wheel handler (pan semantics — unchanged from 5a) ──────────
+  // ── Custom wheel handler (pan semantics — unchanged from 5a/5b) ───────
   useEffect(() => {
     const wrapper = wrapperRef.current;
     if (!wrapper) return;
 
     const onWheel = (e: WheelEvent) => {
-      // Always preventDefault — covers both zoom (modifier held, lib
-      // handles) and pan (no modifier, we handle). Blocks browser
-      // native Cmd+wheel page-zoom.
       e.preventDefault();
-
-      if (e.ctrlKey || e.metaKey) return; // lib handles zoom
+      if (e.ctrlKey || e.metaKey) return;
       if (!transformRef.current) return;
 
       let dx = e.deltaX;
@@ -181,14 +286,136 @@ export function PipelineCanvas({
     return () => wrapper.removeEventListener("wheel", onWheel);
   }, []);
 
-  // ── Imperative controls ───────────────────────────────────────────────
-  // Recenter targets the current stage (passed from the server-derived
-  // currentStageId). Falls back to centerView if no current stage
-  // (empty-pipeline case) so the button still does something useful.
+  // ── Task mutation: toggle done ────────────────────────────────────────
+  // Optimistic update + UPDATE via the supabase client. The tightened
+  // tasks_update RLS gates the write (member can only toggle their own
+  // assigned tasks); the UI gate in StageNode → TaskRow mirrors that, so
+  // the server-side reject path should rarely fire — but we still revert
+  // optimistic state if it does, so the UI stays truthful.
+  //
+  // set_task_completion_metadata (BEFORE UPDATE) fires server-side on
+  // `done` flip — writes completed_at + completed_by on done=true,
+  // clears on done=false. auto_advance_stage (AFTER UPDATE) writes
+  // pipelines.current_stage_id but we don't read it; harmless.
+  const toggleTaskDone = useCallback(
+    async (taskId: string, nextDone: boolean) => {
+      // Optimistic: flip done locally. The useMemo re-derives
+      // immediately — stage counts update, current stage may advance,
+      // colors recompute.
+      setTasksState((prev) =>
+        prev.map((t) =>
+          t.id === taskId
+            ? {
+                ...t,
+                done: nextDone,
+                // completed_at + completed_by reflect what the trigger
+                // will write — keep them in sync with the optimistic
+                // done. The server will overwrite with the canonical
+                // values on next fetch, but the optimistic shape is
+                // close enough for any client-side reads in the same
+                // tick.
+                completed_at: nextDone ? new Date().toISOString() : null,
+                completed_by: nextDone ? currentUserId : null,
+              }
+            : t,
+        ),
+      );
+
+      const { error } = await supabase
+        .from("tasks")
+        .update({ done: nextDone })
+        .eq("id", taskId);
+
+      if (error) {
+        // Revert the optimistic update — UI snaps back to truthful.
+        console.error(
+          "[canvas] toggleTaskDone failed; reverting optimistic update:",
+          error.message,
+        );
+        setTasksState((prev) =>
+          prev.map((t) =>
+            t.id === taskId
+              ? {
+                  ...t,
+                  done: !nextDone,
+                  completed_at: !nextDone ? new Date().toISOString() : null,
+                  completed_by: !nextDone ? currentUserId : null,
+                }
+              : t,
+          ),
+        );
+      }
+    },
+    [currentUserId],
+  );
+
+  // ── Task mutation: add task via create_task RPC ───────────────────────
+  // Only callable for owner/admin (UI gate hides the affordance from
+  // members). The RPC re-enforces server-side via can_edit_pipeline so
+  // members can't bypass via direct call.
+  const addTask = useCallback(
+    async (stageId: string, title: string) => {
+      const { data, error } = await supabase.rpc("create_task", {
+        stage_id: stageId,
+        title,
+      });
+      if (error || !data) {
+        console.error(
+          "[canvas] addTask via create_task failed:",
+          error?.message,
+        );
+        return;
+      }
+
+      type CreateResult = {
+        id: string;
+        stage_id: string;
+        title: string;
+        position: number;
+        assignee_id: string;
+        deadline: string | null;
+        created_at: string;
+      };
+      const result = data as CreateResult;
+
+      // Append the new task to local state. Re-derivation re-runs via
+      // useMemo dependency on tasksState. Stage subtitle (X/Y task)
+      // updates immediately.
+      setTasksState((prev) => [
+        ...prev,
+        {
+          id: result.id,
+          stage_id: result.stage_id,
+          position: result.position,
+          title: result.title,
+          done: false,
+          assignee_id: result.assignee_id,
+          completed_at: null,
+          completed_by: null,
+        },
+      ]);
+    },
+    [],
+  );
+
+  // ── Task row click — step 6 stub ──────────────────────────────────────
+  const onTaskClick = useCallback(
+    (taskId: string) => {
+      // Step 6 wires this to the task detail side panel. For 5c, log
+      // the intent so we can verify the wiring without a panel.
+      console.log(
+        "[canvas 5c] task row clicked (body, not checkbox). step 6 opens detail panel.",
+        { taskId, pipelineId },
+      );
+    },
+    [pipelineId],
+  );
+
+  // ── Imperative controls (unchanged from 5b) ───────────────────────────
   const onRecenter = useCallback(() => {
-    if (currentStageId) {
+    if (anchorStageId) {
       transformRef.current?.zoomToElement(
-        currentStageId,
+        anchorStageId,
         1,
         280,
         "easeOut",
@@ -196,7 +423,7 @@ export function PipelineCanvas({
     } else {
       transformRef.current?.centerView(1, 280, "easeOut");
     }
-  }, [currentStageId]);
+  }, [anchorStageId]);
 
   const onZoomIn = useCallback(() => {
     transformRef.current?.zoomIn(0.25, 200, "easeOut");
@@ -205,22 +432,16 @@ export function PipelineCanvas({
     transformRef.current?.zoomOut(0.25, 200, "easeOut");
   }, []);
   const onFit = useCallback(() => {
-    // "Fit" in 5b recenters on the current stage at 1x — same as the
-    // pill click. True "fit-to-pipeline" with auto-zoom to frame all
-    // stages is a 5d polish item (needs the wrapper dimensions + cluster
-    // width to compute the right scale).
     onRecenter();
   }, [onRecenter]);
 
-  // Current stage's position (for the pill text). Defaults to 1 when
-  // empty so the pill doesn't render "stage 0 of 0" — though when
-  // stages.length === 0, the empty-state branch below renders something
-  // else anyway and the pill stays.
+  // Current stage's position (for the pill text). Recomputes on every
+  // re-derive — pill counter is live alongside the colors.
   const currentPosition = useMemo(() => {
-    if (!currentStageId) return 1;
-    const found = stages.find((s) => s.id === currentStageId);
+    if (!anchorStageId) return 1;
+    const found = stageVMs.find((s) => s.id === anchorStageId);
     return found?.position ?? 1;
-  }, [currentStageId, stages]);
+  }, [anchorStageId, stageVMs]);
 
   return (
     <div
@@ -234,9 +455,7 @@ export function PipelineCanvas({
         cursor: "grab",
       }}
     >
-      {/* Minimal header band — 5b still placeholder. The real header
-          (left rail + member cluster + Edit pipeline button) ships in 5d.
-          For now: back arrow + pipeline name. */}
+      {/* Minimal header band — still placeholder, real chrome in 5d. */}
       <div
         style={{
           position: "absolute",
@@ -298,30 +517,27 @@ export function PipelineCanvas({
         panning={{
           velocityDisabled: false,
           allowLeftClickPan: true,
+          // Exclude inputs + interactive descendants from triggering pan.
+          // Without this, clicking on the +add task input or a task
+          // checkbox could start a pan drag that swallows the click.
+          excluded: ["input", "button", "[role=button]"],
         }}
         trackPadPanning={{ disabled: true }}
         doubleClick={{ disabled: true }}
         onInit={(ref) => {
-          // Defer a frame so stage DOM is committed before zoomToElement
-          // measures it. Targets the current in-progress stage; if the
-          // pipeline has no stages OR no current stage somehow, fall
-          // back to centerView so the canvas still lands somewhere
-          // sensible (geometric plane center).
           requestAnimationFrame(() => {
-            if (currentStageId) {
-              const el = document.getElementById(currentStageId);
+            if (anchorStageId) {
+              const el = document.getElementById(anchorStageId);
               if (!el) {
                 console.warn(
                   "[canvas] auto-center: current stage element not found:",
-                  currentStageId,
+                  anchorStageId,
                 );
                 ref.centerView(1, 0);
               } else {
-                ref.zoomToElement(currentStageId, 1, 0);
+                ref.zoomToElement(anchorStageId, 1, 0);
               }
             } else {
-              // No current stage — empty pipeline. Center on the plane
-              // origin so the "no stages yet" pill is in view.
               ref.centerView(1, 0);
             }
             requestAnimationFrame(() => {
@@ -347,7 +563,7 @@ export function PipelineCanvas({
             position: "relative",
           }}
         >
-          {/* Dotted-grid background — pans + zooms with content. */}
+          {/* Dotted-grid background. */}
           <div
             aria-hidden
             style={{
@@ -360,10 +576,7 @@ export function PipelineCanvas({
             }}
           />
 
-          {/* Empty-state: pipeline has no stages yet. Small centered
-              pill so the user knows the canvas is live but empty.
-              5e ships the real "create stage" affordance. */}
-          {stages.length === 0 && (
+          {stageVMs.length === 0 && (
             <div
               style={{
                 position: "absolute",
@@ -384,25 +597,17 @@ export function PipelineCanvas({
             </div>
           )}
 
-          {/* Connectors render BEFORE stage nodes so the badges paint
-              on top of the line endings (line passes behind the
-              badge edges, not over them). */}
-          {stages.length >= 2 &&
-            stages.slice(0, -1).map((left, idx) => {
-              const right = stages[idx + 1];
+          {/* Badge-to-badge connectors (5b — between adjacent stages,
+              horizontal, state-driven solid/dashed/grey). */}
+          {stageVMs.length >= 2 &&
+            stageVMs.slice(0, -1).map((left, idx) => {
+              const right = stageVMs[idx + 1];
               const leftPos = layout.positions.get(left.id);
               const rightPos = layout.positions.get(right.id);
               if (!leftPos || !rightPos) return null;
-              // Badge centers in plane coords. Badges are LEFT-aligned
-              // with each stage's box (per figma), so badge center sits
-              // at `pos.x + BADGE_DIAMETER/2` — half a badge inward
-              // from the stage's left edge, not at the stage's
-              // horizontal midpoint.
               const leftBadgeCx = leftPos.x + BADGE_DIAMETER / 2;
               const rightBadgeCx = rightPos.x + BADGE_DIAMETER / 2;
               const badgeCy = leftPos.y + BADGE_DIAMETER / 2;
-              // Pull connector in by half-badge so the line starts
-              // at the badge edge, not the badge center.
               const fromX = leftBadgeCx + BADGE_DIAMETER / 2;
               const toX = rightBadgeCx - BADGE_DIAMETER / 2;
               return (
@@ -417,24 +622,32 @@ export function PipelineCanvas({
               );
             })}
 
-          {/* Stage nodes — one per stage. id on the wrapper for
-              zoomToElement targeting. */}
-          {stages.map((s) => {
+          {/* Stage nodes — now with their tasks beneath. */}
+          {stageVMs.map((s) => {
             const pos = layout.positions.get(s.id);
             if (!pos) return null;
             return (
-              <StageNode key={s.id} stage={s} x={pos.x} y={pos.y} />
+              <StageNode
+                key={s.id}
+                stage={s}
+                tasks={tasksByStage.get(s.id) ?? []}
+                x={pos.x}
+                y={pos.y}
+                currentUserId={currentUserId}
+                canEditPipeline={canEditPipeline}
+                onToggleDone={toggleTaskDone}
+                onAddTask={addTask}
+                onTaskClick={onTaskClick}
+              />
             );
           })}
         </TransformComponent>
       </TransformWrapper>
 
-      {/* Overlays — rendered OUTSIDE TransformWrapper so they don't pan
-          or zoom with the canvas. */}
       <EdgeFades edges={edges} />
       <StageIndicatorPill
         current={currentPosition}
-        total={stages.length}
+        total={stageVMs.length}
         onRecenter={onRecenter}
       />
       <ZoomControls onZoomIn={onZoomIn} onZoomOut={onZoomOut} onFit={onFit} />

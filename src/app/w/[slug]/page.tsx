@@ -6,7 +6,8 @@ import { ActivityCard } from "@/components/dashboard/ActivityCard";
 import { TeamChatStrip } from "@/components/dashboard/TeamChatStrip";
 import { PipelinesSection } from "@/components/dashboard/PipelinesSection";
 import type { AvatarUser } from "@/components/UserAvatar";
-import { deriveCurrentStage } from "@/lib/current-stage";
+import { pickAnchorStage, stageStateFromCounts } from "@/lib/current-stage";
+import type { StageState } from "@/lib/current-stage";
 
 /**
  * /w/[slug] — workspace dashboard. Phase 4a step 2.
@@ -340,15 +341,19 @@ export default async function WorkspaceDashboardPage({
     const stagesList = stagesByPipeline.get(p.id) ?? [];
     const totals = pipelineTotals.get(p.id) ?? { total: 0, completed: 0 };
 
-    // Current-stage derivation: shared helper, single source of truth.
-    // See src/lib/current-stage.ts for the locked 3-branch rule. This
-    // surface (dashboard PipelineCard) and the canvas (5b) call the
-    // same function — no duplicated logic.
-    const { currentStage, visual } = deriveCurrentStage(
-      stagesList,
-      stageCounts,
-      totals,
-    );
+    // Per-stage state classifier + headline picker — shared with canvas.
+    // See src/lib/current-stage.ts for the rules. New model (5c
+    // annotation polish): per-stage state independent of position;
+    // dashboard surfaces ONE focal stage as the tile headline, picked
+    // by the same rule the canvas uses for auto-center + pill (first
+    // in-progress → first not-started → last). Keeps headline + canvas
+    // focus in sync.
+    const stageStatesForPipeline = new Map<string, StageState>();
+    for (const s of stagesList) {
+      const c = stageCounts.get(s.id) ?? { total: 0, completed: 0 };
+      stageStatesForPipeline.set(s.id, stageStateFromCounts(c));
+    }
+    const headlineStage = pickAnchorStage(stagesList, stageStatesForPipeline);
 
     const memberRows = membersByPipeline.get(p.id) ?? [];
     const visibleMembers = memberRows.slice(0, 3).map((m) => ({
@@ -379,14 +384,13 @@ export default async function WorkspaceDashboardPage({
       company: (p as { company: string | null }).company ?? null,
       last_edited_at: p.last_edited_at,
       created_at: p.created_at,
-      currentStage: currentStage
+      currentStage: headlineStage
         ? {
-            id: currentStage.id,
-            name: currentStage.name,
-            color: currentStage.color,
+            id: headlineStage.id,
+            name: headlineStage.name,
+            color: headlineStage.color,
           }
         : null,
-      visual,
       progress: totals,
       unreadCount: unreadCountByPipeline.get(p.id) ?? 0,
       visibleMembers,

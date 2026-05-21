@@ -36,8 +36,11 @@ export type PipelineViewModel = {
   company: string | null;
   last_edited_at: string;
   created_at: string;
+  /** The pipeline's "focal" stage — picked by pickAnchorStage in the
+   *  shared helper. Surfaced as the headline text under the tile. Same
+   *  picker used by the canvas auto-center + pill anchor; the
+   *  dashboard headline + canvas focus stay in sync. */
   currentStage: { id: string; name: string; color: string | null } | null;
-  visual: "plain" | "in-progress" | "complete";
   progress: { completed: number; total: number };
   unreadCount: number;
   visibleMembers: PipelineMember[];
@@ -165,10 +168,10 @@ export function PipelineCard({
           {/* Solid colored dot — stage identity reads through color
               alone. The 3-state visual variant (plain ring / dashed ring /
               solid) didn't pay off at 8px; completion state is already
-              encoded in the progress bar below. The `visual` prop is still
-              computed server-side (and the data flow keeps it around for a
-              potential future treatment elsewhere — e.g., on canvas where
-              size is larger). */}
+              encoded in the progress bar below. The pre-5c `visual`
+              prop has been removed — it was dead data (computed but
+              never rendered). Per-stage state lives on the canvas
+              surface now (see src/lib/current-stage.ts). */}
           <span
             aria-hidden
             style={{

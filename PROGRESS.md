@@ -4,6 +4,227 @@ A running log of what shipped in each session. Newest first.
 
 ---
 
+## Phase 4a — step 5c: canvas task cards + completion + per-stage state model (2026-05-22)
+
+**Goal:** render each stage's tasks as checkable cards beneath the stage box, wire completion to a server UPDATE (with the existing `set_task_completion_metadata` trigger writing `completed_at`/`completed_by`), live-recolor the canvas as task completion shifts which stages are in progress, surface a `+ Add task` affordance per stage via the existing `create_task` RPC, and gate everything by the locked permission rule (workspace owner/admin → toggle any task; member → only their own assigned tasks). Got everything in 5c except the task detail side panel (step 6 — clicking a task body is stubbed) and the chrome (left rail + header = 5d).
+
+The big architectural shift in 5c was unrelated to tasks themselves: we replaced the **positional** stage-state model from 5b (one "current" stage, others demoted to "passed"/"future") with an honest **per-stage** model. Multiple stages can be in-progress at once now — agencies running parallel workstreams (sales mid-flight on stage 3, delivery mid-flight on stage 5) finally see both correctly.
+
+### State model change — positional → per-stage (LOCKED, supersedes 5b)
+
+**The bug it fixed.** Under 5b's positional rule, "current" was the highest-position stage with ANY completed task. Every other stage with completed tasks (or stages before the current) rendered as "passed" — visually green. So a partial stage (1/3 done) showing while the actual current was still mid-flight could be classified as "passed" if a later stage had picked up a single completed task. Concretely: stage 3 at 1/3 displayed GREEN while stage 4 was correctly purple — gave the user the false signal that stage 3 was done when it wasn't.
+
+**Real-world driver.** Agencies don't work strictly sequentially. Sales team is mid-pipeline on Lead Captured while the delivery team has started Discovery on the same client. Both stages are genuinely in progress. The positional model forced one to be "current" and demoted the other — visually wrong.
+
+**New rule** (locked Phase 4a step 5c, 2026-05-22; see `src/lib/current-stage.ts`):
+
+| state | when | color |
+| --- | --- | --- |
+| `not-started` | `total === 0` OR `completed === 0` | grey |
+| `in-progress` | at least one done, NOT all done | purple |
+| `done` | `completed >= total` AND `total > 0` | green |
+
+State is a **pure function of one stage's task counts**. No position, no other stages, no pipeline-level "current" concept. **Multiple stages can be `in-progress` simultaneously**, and that's correct.
+
+**Task coloring inside a stage** (this is what fixed the false-green):
+- Completed task → its stage's color (green if stage `done`; purple if stage `in-progress`)
+- Incomplete task → grey, always
+
+**Important — color is display-only.** Same lock from earlier rounds. A task marked "incomplete" inside an in-progress stage doesn't auto-anything; the checkbox still tells the truth. Color answers "where in the workflow," checkbox answers "is this individual thing done."
+
+### Anchor stage — for surfaces that need a SINGLE focal stage
+
+Some surfaces still need ONE stage to focus on:
+- Canvas auto-center target (on load + on pill click + on "fit" button)
+- Canvas stage-indicator pill ("showing stage X of Y")
+- Dashboard tile headline ("Current stage: Proposal Sent" text on each pipeline tile)
+
+New helper `pickAnchorStage()` returns ONE focal stage by the locked rule:
+1. **First in-progress** stage (leftmost purple) — most common case
+2. Else **first not-started** (leftmost grey) — fresh pipeline with no progress yet, anchors on the "next thing to start"
+3. Else **last stage** — all-done pipelines anchor on the final stage
+
+**Crucially, the dashboard + canvas + pill all call the same `pickAnchorStage`.** No desync where the dashboard says "we're on Stage 3" but the canvas centers on Stage 5. Same picker, same answer.
+
+**Parallel-stages case behavior change** (intentional + correct):
+- Old positional rule: multiple in-progress stages → "current" was the rightmost-with-completed-task. Dashboard would label "Stage 5."
+- New anchor rule: multiple in-progress → leftmost in-progress wins. Dashboard labels "Stage 3."
+- Consistent across surfaces ("the work we're earliest in"). If a future product decision wants "latest in flight," it's a one-line change in `pickAnchorStage` — but for MVP, leftmost-first matches the natural reading direction.
+
+### Helper API (deletions + additions)
+
+**Deleted** (positional model artifacts):
+- `deriveCurrentStage(stagesList, stageCounts, totals) → { currentStage, visual }`
+- `stateForStage(stage, currentStage, visual) → "passed" | "current" | "future"`
+
+**Added**:
+- `stageStateFromCounts(counts) → "not-started" | "in-progress" | "done"` — pure per-stage classifier
+- `pickAnchorStage(stagesList, stageStates) → S | null` — single focal-stage picker
+
+**Type rename**: `StageState` value union `"passed" | "current" | "future"` → `"not-started" | "in-progress" | "done"`. Same identifier, new values; all consumers updated in one pass.
+
+### Locked stage tokens (re-keyed — supersedes 5b's table)
+
+Hex values unchanged from 5b. Only the keys moved from positional words to state words:
+
+| State | Badge bg | Badge text/border | Box bg | Box text | Box subtitle | Box border | Wrapper opacity |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| in-progress | `#6E5BE8` | white / `#6E5BE8` | `#6E5BE8` | white | `rgba(255,255,255,0.75)` | `#6E5BE8` | 1.0 |
+| done | `#1F4535` | `#15B981` | `#1F4535` | `#15B981` | `rgba(21,185,129,0.7)` | `rgba(21,185,129,0.35)` | **0.7** |
+| not-started | `#2C2C2F` | `#979393` / `#36363A` | `#2C2C2F` | `#E4E4E7` | `rgba(151,147,147,0.7)` | `#36363A` | 1.0 |
+
+### Connector 3×3 table (replaces 5b's 4-row table)
+
+Decided from the LEFT stage's state:
+
+| Left | Right | Style | Color | Width |
+| --- | --- | --- | --- | --- |
+| done | (any) | solid | green `#15B981` | 2px |
+| in-progress | done | solid | green `#15B981` | 2px |
+| in-progress | in-progress | solid | **purple `#6E5BE8`** | 2px |
+| in-progress | not-started | **dashed** | purple `#6E5BE8` | 2px |
+| not-started | (any) | solid | grey `#36363A` | 1px |
+
+The `in-progress → in-progress` case (solid purple) is new under this model — it's the "parallel active region" visual. Two adjacent purple stages connected by solid purple reads as "this whole stretch is active work."
+
+### Task cards (5c feature work)
+
+Per task, beneath the stage box:
+- 8×8px state-colored dot on the left edge (matches the STAGE's color regardless of task done state — so the dot signals "which stage I'm in" while the card fill signals "am I done")
+- Checkbox (16px). Click toggles `tasks.done` via direct UPDATE — the `set_task_completion_metadata` BEFORE UPDATE trigger writes `completed_at` + `completed_by`. INVERTED on completed in-progress (white fill + purple check; same-color checkbox would blend into the purple card bg); STANDARD on completed done stages (green fill + white check against the dark green card bg gives enough contrast).
+- Title (13px, truncates at the card width, strikethrough when done, color matches the stage when done)
+- Click on the title body (not checkbox) is stubbed for step 6 — `console.log` only. The task detail side panel is the 6 surface.
+- Cards are 40px tall × 200px wide (200 = STAGE_NODE_WIDTH 220 minus TASK_STACK_PAD_LEFT 16 minus TASK_STACK_PAD_RIGHT 4)
+
+**Live re-derive on completion.** Mutating `tasksState` triggers a `useMemo` recompute: stage counts update → `stageStateFromCounts` re-classifies each stage → per-stage colors flip → connector colors re-evaluate → anchor stage may shift → pill text + auto-center recompute. All in one render tick, no server round-trip. Same `current-stage.ts` helper used for the initial server-side derivation and the client-side re-derive.
+
+**Optimistic + revert.** Toggle done locally first; UPDATE the row; if RLS rejects (member toggling a task not theirs), revert. UI snaps back to truthful.
+
+### + Add task affordance
+
+Card-styled affordance at the bottom of each stage's task stack. Owner/admin only (matches `canEditPipeline`); members don't see it. Collapsed = dashed-border "+ Add task" card; expanded = inline title input. Enter submits via `create_task` RPC (security-definer, re-enforces `can_edit_pipeline` server-side). New task appends to local state immediately; the parent's `useMemo` re-derives, stage's `X/Y task` subtitle updates live. Input clears + stays focused after submit for rapid multi-add.
+
+### RLS tightening — `20260521120000_tighten_member_task_update_to_assignee` (applied manually)
+
+**Applied to live Supabase via SQL editor — NOT a migration file in the repo.** Same pattern as the `canvas_hint_dismissed` column from 5a. The full SQL is in the chat transcript for 2026-05-22 and follows this shape:
+
+```sql
+drop policy if exists tasks_update on public.tasks;
+create policy tasks_update on public.tasks
+for update using (
+  exists (select 1 from public.stages s
+    where s.id = tasks.stage_id
+      and (
+        public.can_edit_pipeline(s.pipeline_id)
+        or (public.is_pipeline_client(s.pipeline_id)
+             and tasks.client_visible = true
+             and s.client_visible = true)
+        or (public.can_check_pipeline_task(s.pipeline_id)
+             and tasks.assignee_id = (select auth.uid()))  -- NEW: assignee gate
+      )))
+with check ( /* identical USING clause mirrored */ );
+```
+
+**The gap it closes.** Before this migration, the member branch of `tasks_update` (`can_check_pipeline_task(pipeline_id)`) allowed any member with `can_check_tasks = true` to UPDATE ANY task in the pipeline server-side. The 5c UI gates each checkbox by `canEditPipeline || task.assignee_id === userId`, but a member could bypass the UI via direct UPDATE. The migration adds `tasks.assignee_id = (select auth.uid())` to the member branch on both USING and WITH CHECK clauses — RLS rejects any member UPDATE on a task not assigned to them.
+
+**Side effect (intentional):** members can no longer reassign tasks via direct UPDATE (the WITH CHECK clause blocks an attempt to flip assignee_id to someone else mid-update). Reassignment is owner/admin-only — matches the spec.
+
+**TODO before public launch:** check this manual SQL into a proper migration file in `supabase/migrations/`. Acceptable to defer until 4c (when the manual SQL backlog gets reconciled in one sweep) since the policy is already live + verified via the audit `pg_policy` query.
+
+### Dashboard refactor (no behavior change)
+
+The dashboard tile headline used `currentStage.name` from the old positional `deriveCurrentStage()`. Now uses `headlineStage.name` from `pickAnchorStage()`. Same picker the canvas uses → no desync.
+
+**Dead data removed:** the `visual: "plain" | "in-progress" | "complete"` prop on PipelineCard was computed server-side but never read in render (the 3-state ring/dot variant was abandoned in step 2 polish). Dropped from the page.tsx view model + PipelineCard's prop type. -5 lines of dead code.
+
+### Audience-vs-`client_visible` clarification (closing an open question)
+
+The original audience model from early planning was a **three-state enum** on tasks (e.g. internal/shared/client-only). That model is NOT in the schema — there's no `audience` column or enum on `public.tasks`. The 4a phase audit explicitly confirmed: "zero custom enums in public schema (no speculative audience enum)."
+
+**The gating column is `tasks.client_visible boolean`** (initial schema, never renamed). It's a 2-state flag, not a 3-state enum. The client-portal filter in 4c will gate on this column.
+
+Locked terminology: when discussing "who sees what," refer to `client_visible`, not "audience." 5c doesn't apply this filter (agency-side surface — all agency users see all tasks regardless of `client_visible`); 4c is where the filter ships.
+
+### Permission gating (canvas-side, mirrors RLS exactly)
+
+| Surface | Owner/admin (`canEditPipeline === true`) | Member (`assignee_id === userId`) | Member (other tasks) |
+| --- | --- | --- | --- |
+| Task checkbox | interactive | interactive | disabled + reduced opacity |
+| `+ Add task` affordance | visible | hidden | hidden |
+| Title click → step 6 panel | interactive (stubbed for now) | interactive (stubbed) | interactive (stubbed) |
+
+`canEditPipeline` mirrors the `can_edit_pipeline` SQL helper in app code: `workspace_memberships.role === 'owner'` OR `pipeline_memberships.role ∈ {'owner','admin'}`. Computed server-side, passed to the canvas as a boolean.
+
+### Visual annotation polish (5 rounds against the figma)
+
+Iterated against `Figma_pipeline_stage_view.png` over 5 rounds. Final locked values:
+
+| Property | Initial | Final | Round |
+| --- | --- | --- | --- |
+| Task layout | plain rows | bordered cards | 1 |
+| Stage badge alignment | centered above box | **left-aligned with box** | 5b polish |
+| Task card width | 180 | **200** (inset 16 from stage box of 220) | 4 |
+| Stage box width | 180 | **220** | 4 |
+| Stage→tasks gap | 12 | 22 → 32 (2 nudges) | 3,5 |
+| Inter-card gap | 6 | 10 → 14 (2 nudges) | 3,5 |
+| Task card height | 32 | 40 | 5 |
+| Badge→task connector start | left edge | **box center** (`BOX_WIDTH/2`) | 4 |
+| Left-edge dot | n/a | 8px state-colored | 4 |
+| Dot color rule | uniform muted | **matches stage state** (purple/green/grey) | 5 |
+| Connector dimming | (uniform 0.12 white) | (same — uniform-dim, no state-aware path yet) | locked |
+
+### Files
+
+```
+new file:  src/components/canvas/TaskRow.tsx              (single task card, state-driven color + dot)
+
+modified:  src/lib/current-stage.ts                       (full rewrite: new state values, new helpers, old deleted)
+modified:  src/app/w/[slug]/p/[pipeline-id]/page.tsx     (full task fields fetched, canEditPipeline derived, pipeline_memberships joined)
+modified:  src/components/canvas/PipelineCanvas.tsx       (lifted tasksState, live re-derive, toggle + add handlers, anchor logic)
+modified:  src/components/canvas/StageNode.tsx            (tasks render, connectors, +add, color keys remapped, width/gap/height tuned)
+modified:  src/components/canvas/StageConnector.tsx       (3×3 table rewrite for new states)
+modified:  src/components/dashboard/PipelineCard.tsx      (visual prop removed)
+modified:  src/app/w/[slug]/page.tsx                      (uses pickAnchorStage + stageStateFromCounts; visual dropped)
+```
+
+### Verification (verified live by Jordan against the 7a seed)
+
+- Stage 1 + 2 (3/3, 2/2) render `done` / green ✓
+- Stage 3 (1/3) renders `in-progress` / **purple** (not green — the bug) ✓
+- Stages 4 + 5 (0/2, 0/2) render `not-started` / grey ✓
+- Connectors per new 3×3 table ✓
+- Live re-derive: check task in stage 4 → stage 4 turns purple, stage 3 stays purple (parallel active region) ✓
+- Complete stage 3 → stage 3 turns green, stage 4 stays purple ✓
+- Anchor stage consistency: dashboard tile headline + canvas auto-center + pill all anchor on same stage ✓
+- Task card visuals: state-colored left dot, inverted/standard checkbox depending on stage state, strikethrough + state color on done titles ✓
+- + Add task: owner sees the dashed-card affordance, types title, presses Enter → task lands at bottom of stage's list, stage X/Y count updates immediately ✓
+- Edge fades + pan + zoom from 5a/5b preserved ✓
+
+### Bugs caught + fixed during 5c verification
+
+1. **Positional model false-green.** Stage 3 at 1/3 displayed green while stage 4 was correctly purple. Root cause: positional `stateForStage` treated any stage with completed tasks as `passed` when a later stage had any completed task. **Fix:** per-stage `stageStateFromCounts` — each stage's state is a pure function of its own counts, independent of others. (The full model change is documented above.)
+2. **Task cards initially too tight.** First-pass card height 32 + inter-card gap 6 read as a single stack rather than individual cards. **Fix:** card height 32→40, inter-card gap 6→14, stage→tasks gap 12→32 (the parent/child visual relationship requires the stage→first-task gap to be CLEARLY larger than inter-card gap).
+3. **Badges centered above box instead of left-aligned.** Initial pass aligned badges centered horizontally above each stage box; figma showed them at the top-left corner. **Fix:** removed `margin: 0 auto`; updated connector x-math to anchor on `pos.x + BADGE_DIAMETER/2`.
+4. **Connector origin too far left.** First-pass connectors started near the box's left edge → looked like a "branched rail" pattern instead of a centered drop. **Fix:** `startX = BOX_WIDTH/2` so curves drop from the box midline.
+5. **Stale `setState` in effect (React 19 rule).** Initial PipelineCanvas had a defensive `useEffect(() => setTasksState(initialTasks), [initialTasks])` to re-sync on prop change. React 19's `react-hooks/set-state-in-effect` flagged it. **Fix:** removed the effect entirely — route remount creates a new component on pipeline-id change, so initial state is captured cleanly via `useState(initialTasks)` with no re-sync needed.
+
+### Deferred for later
+
+- **Coachmark auto-dismiss is window-scoped** (inherited from 5a). Scope to canvas-only when 5d's left rail + header land.
+- **5d inherits:** the left rail (cursor/chat/activity/links/members icons), the canvas header (member cluster + Edit pipeline button), role-gated affordances. Replaces the current minimal "back arrow + pipeline name" placeholder.
+- **5e inherits:** edit pipeline mode — add/rename/reorder/delete stages, drag tasks between stages, drag-to-reorder.
+- **Step 6 inherits:** the task detail side panel (deadline, assignee, description, comments). Title body click is already wired to a stubbed `onTaskClick` callback in PipelineCanvas — step 6 swaps the stub for the panel open.
+- **Connector-to-task state-awareness** — currently the SVG connector from stage box to each task card is uniform dimmed grey. Could make it state-aware (green to done tasks, purple to in-progress-stage tasks). Acceptable as polish later; uniform-dim is the locked default for 5c.
+- **RLS migration into the repo** — apply the manual SQL as a proper migration file alongside the canvas_hint_dismissed sweep. Deferred to a manual-SQL reconciliation step in 4c.
+
+### Lessons learned (apply forever)
+
+1. **Positional state derivations are a trap when "current" can branch.** The original 5b rule embedded an implicit assumption — pipelines have ONE current stage. The real world has multiple parallel workstreams. When a derivation rule embeds an assumption about the data's shape, write the assumption down explicitly and revisit it the first time you see real usage data. We didn't have real users yet, but the figma reference + the parallel-team scenario in conversation made the assumption visible — and we still missed it until the model produced false-green.
+2. **Pure functions of one thing's own data are robust against future model expansions.** `stageStateFromCounts(counts)` knows nothing about position, other stages, or the pipeline's overall state. If we later add per-stage flags (e.g. `stages.archived`), the classifier handles it by composition — wrap it with `archived → 'archived'` short-circuit, without touching the core. Functions that take a whole graph + return per-element results are harder to extend.
+3. **Surface-consistent anchor pickers prevent desync.** Three surfaces (dashboard tile, canvas auto-center, canvas pill) needed "one focal stage." Three surfaces with separate logic would have drifted — A team would tweak the canvas picker without thinking about the dashboard. `pickAnchorStage()` is the canonical answer, called by all three. Future surfaces (search results, AI summaries, notifications) call the same function. No "which one is correct?" arguments.
+
+---
+
 ## Phase 4a — step 5b: canvas stage rendering + state colors (2026-05-21)
 
 **Goal:** replace 5a's 4 throwaway placeholder boxes with real stage rendering from the database. Stage badges + boxes + connectors, state-colored per the locked rule (current=purple, passed=green, future=grey), auto-centered on the in-progress stage. Still NOT in scope until later sub-steps: task boxes (5c), left rail + header chrome (5d), edit pipeline mode (5e).

@@ -1,22 +1,29 @@
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { PipelineCanvas } from "@/components/canvas/PipelineCanvas";
-import { deriveCurrentStage, stateForStage } from "@/lib/current-stage";
-import type { StageState } from "@/lib/current-stage";
 
 /**
- * /w/[slug]/p/[pipeline-id] — pipeline canvas. Phase 4a step 5b.
+ * /w/[slug]/p/[pipeline-id] — pipeline canvas. Phase 4a step 5c.
  *
- * 5b scope: real stage rendering on the canvas core from 5a. Fetches
- * stages + tasks from the database, derives per-stage state (passed /
- * current / future) via the shared deriveCurrentStage helper, and hands
- * StageViewModel[] to PipelineCanvas which renders StageNode + connectors.
+ * 5c scope: real tasks rendered as checkbox + title rows beneath each
+ * stage box, completion writes to tasks.done (triggers set_task_completion
+ * _metadata BEFORE UPDATE for completed_at/_by), live re-derivation of the
+ * current stage after a toggle, badge→task connectors, +add task via
+ * create_task RPC (owner/admin only).
+ *
+ * Server fetches the raw data; the client (PipelineCanvas) does the
+ * derivation locally so post-toggle re-derive is immediate without a
+ * server round-trip. Both server-side initial render and client-side
+ * re-derive use the SAME helper (src/lib/current-stage.ts) — no
+ * duplicated logic. This page just passes the RAW stages + tasks now;
+ * derivation moved client-side.
  *
  * Still NOT in scope until later sub-steps:
- *   * Task boxes (5c)
  *   * Left rail + header chrome (5d)
  *   * Edit pipeline mode (5e)
- *   * Task detail panel (step 6)
+ *   * Task detail panel — clicking a task ROW is stubbed (step 6)
+ *   * Client portal — client_visible filtering NOT applied here; that's
+ *     4c. All agency members see all tasks regardless of client_visible.
  *
  * Auth + redirect rules mirror the dashboard:
  *   * Anon → /auth/signin?next=/w/[slug]/p/[pipeline-id]
@@ -24,27 +31,30 @@ import type { StageState } from "@/lib/current-stage";
  *     get a separate canvas surface in 4c, not this route.
  *   * Pipeline not found OR not in this workspace → /w/[slug] (dashboard)
  *
- * Data fetched server-side (single round-trip per table, no client
- * waterfalls):
- *   * Pipeline (id, name)
- *   * Stages (id, position, name) ordered by position asc
- *   * Tasks (id, stage_id, done) — only the fields needed for the
- *     completion count + per-stage state derivation. Task title +
- *     metadata not fetched here; that's 5c when task boxes render.
- *   * profiles.canvas_hint_dismissed — the coachmark only renders if
- *     this is false. SSR'd so we don't flash the coachmark on
- *     already-dismissed users.
+ * Permissions for task interactions (UI gate mirrors the tightened RLS
+ * from 20260521120000_tighten_member_task_update_to_assignee.sql):
+ *   * canEditPipeline = workspace owner OR pipeline owner/admin
+ *   * Per-task interactivity = canEditPipeline || task.assignee_id === userId
+ *   * +add task affordance: canEditPipeline only
  */
 
 export const dynamic = "force-dynamic";
 
-export type StageViewModel = {
+export type StageRaw = {
   id: string;
   position: number;
   name: string;
-  total: number;
-  completed: number;
-  state: StageState;
+};
+
+export type TaskRaw = {
+  id: string;
+  stage_id: string;
+  position: number;
+  title: string;
+  done: boolean;
+  assignee_id: string | null;
+  completed_at: string | null;
+  completed_by: string | null;
 };
 
 export default async function PipelineCanvasPage({
@@ -97,75 +107,78 @@ export default async function PipelineCanvasPage({
     redirect(`/w/${slug}`);
   }
 
-  // ── Stages + tasks + coachmark flag in parallel ───────────────────────
-  const [stagesRes, tasksRes, profileRes] = await Promise.all([
-    supabase
-      .from("stages")
-      .select("id, position, name")
-      .eq("pipeline_id", pipelineRes.data.id)
-      .order("position", { ascending: true }),
+  // ── Stages + tasks + pipeline membership + coachmark in parallel ──────
+  const [stagesRes, tasksRes, pipelineMembershipRes, profileRes] =
+    await Promise.all([
+      supabase
+        .from("stages")
+        .select("id, position, name")
+        .eq("pipeline_id", pipelineRes.data.id)
+        .order("position", { ascending: true }),
 
-    // Only need stage_id + done for the per-stage count derivation.
-    // Task title/metadata is fetched in 5c when task boxes render.
-    //
-    // Filtering by stage.pipeline_id via the FK join, scoped to this
-    // pipeline only — keeps the query tight even on workspaces with
-    // many pipelines.
-    supabase
-      .from("tasks")
-      .select(
-        `id, done, stage_id,
-         stage:stages!inner(pipeline_id)`,
-      )
-      .eq("stage.pipeline_id", pipelineRes.data.id),
+      // Full task fields needed for rendering: title, position, assignee,
+      // done, completed metadata. Filter to this pipeline only by joining
+      // through stages.
+      supabase
+        .from("tasks")
+        .select(
+          `id, stage_id, position, title, done, assignee_id,
+           completed_at, completed_by,
+           stage:stages!inner(pipeline_id)`,
+        )
+        .eq("stage.pipeline_id", pipelineRes.data.id)
+        .order("position", { ascending: true }),
 
-    // Pulled at SSR so we don't render the coachmark for users who
-    // dismissed it long ago. profiles.canvas_hint_dismissed defaults
-    // false, so brand-new users see the coachmark on their first
-    // canvas visit. Per-user (not per-pipeline) — once dismissed,
-    // never shows on any canvas.
-    supabase
-      .from("profiles")
-      .select("canvas_hint_dismissed")
-      .eq("id", user.id)
-      .maybeSingle(),
-  ]);
+      // Pipeline membership for the can_edit_pipeline computation.
+      // can_edit_pipeline (per the SQL helper in
+      // 20260509120000_rls_policies.sql) = workspace owner OR
+      // pipeline_memberships.role IN ('owner','admin'). We fetch the
+      // calling user's pipeline_memberships row (if any) to mirror the
+      // helper in app code — keeps the UI gate consistent with RLS.
+      supabase
+        .from("pipeline_memberships")
+        .select("role")
+        .eq("pipeline_id", pipelineRes.data.id)
+        .eq("user_id", user.id)
+        .maybeSingle(),
 
-  // ── Per-stage task counts + pipeline totals ───────────────────────────
-  const stageCounts = new Map<string, { total: number; completed: number }>();
-  let pipelineTotal = 0;
-  let pipelineCompleted = 0;
-  for (const t of tasksRes.data ?? []) {
-    const counts = stageCounts.get(t.stage_id) ?? { total: 0, completed: 0 };
-    counts.total += 1;
-    if (t.done) counts.completed += 1;
-    stageCounts.set(t.stage_id, counts);
-    pipelineTotal += 1;
-    if (t.done) pipelineCompleted += 1;
-  }
+      // Coachmark flag — SSR'd to avoid flashing on already-dismissed users.
+      supabase
+        .from("profiles")
+        .select("canvas_hint_dismissed")
+        .eq("id", user.id)
+        .maybeSingle(),
+    ]);
 
-  // ── Derive current stage via the shared helper ────────────────────────
-  // Single source of truth — the same function the dashboard's PipelineCard
-  // uses. See src/lib/current-stage.ts for the locked 3-branch rule.
-  const stagesList = stagesRes.data ?? [];
-  const { currentStage, visual } = deriveCurrentStage(
-    stagesList,
-    stageCounts,
-    { total: pipelineTotal, completed: pipelineCompleted },
-  );
+  // ── Derive canEditPipeline (mirrors the SQL helper) ───────────────────
+  // Workspace owner → can edit any pipeline in the workspace.
+  // Pipeline owner/admin → can edit this specific pipeline.
+  // Members (workspace OR pipeline member without admin role) → cannot.
+  const isWorkspaceOwner = wsMembershipResult.data.role === "owner";
+  const pipelineRole = pipelineMembershipRes.data?.role ?? null;
+  const isPipelineOwnerOrAdmin =
+    pipelineRole === "owner" || pipelineRole === "admin";
+  const canEditPipeline = isWorkspaceOwner || isPipelineOwnerOrAdmin;
 
-  // ── Build the per-stage view model ─────────────────────────────────────
-  const stages: StageViewModel[] = stagesList.map((s) => {
-    const counts = stageCounts.get(s.id) ?? { total: 0, completed: 0 };
-    return {
-      id: s.id,
-      position: s.position,
-      name: s.name,
-      total: counts.total,
-      completed: counts.completed,
-      state: stateForStage(s, currentStage, visual),
-    };
-  });
+  // ── Cast to typed RawStage/RawTask shapes for the client ──────────────
+  const stages: StageRaw[] = (stagesRes.data ?? []).map((s) => ({
+    id: s.id,
+    position: s.position,
+    name: s.name,
+  }));
+
+  // Server-side TaskRaw cast. The stage join was for filtering, not for
+  // shape — strip it out before passing to the client.
+  const tasks: TaskRaw[] = (tasksRes.data ?? []).map((t) => ({
+    id: t.id,
+    stage_id: t.stage_id,
+    position: t.position,
+    title: t.title,
+    done: t.done,
+    assignee_id: (t as { assignee_id: string | null }).assignee_id,
+    completed_at: (t as { completed_at: string | null }).completed_at,
+    completed_by: (t as { completed_by: string | null }).completed_by,
+  }));
 
   const coachmarkInitiallyDismissed =
     (profileRes.data?.canvas_hint_dismissed as boolean | null | undefined) ??
@@ -178,7 +191,9 @@ export default async function PipelineCanvasPage({
       workspaceSlug={ws.slug}
       coachmarkInitiallyDismissed={coachmarkInitiallyDismissed}
       stages={stages}
-      currentStageId={currentStage?.id ?? null}
+      tasks={tasks}
+      currentUserId={user.id}
+      canEditPipeline={canEditPipeline}
     />
   );
 }

@@ -1,44 +1,54 @@
 "use client";
 
+import type { StageState } from "@/lib/current-stage";
+
 /**
  * Horizontal connector line between two adjacent badge centers on the
- * pipeline canvas. Phase 4a step 5b.
+ * pipeline canvas. Phase 4a step 5c (annotation polish 2026-05-22).
  *
- * Connector type is determined by the LEFT and RIGHT stage states:
+ * Connector type is decided from the LEFT + RIGHT stage states under
+ * the NEW per-stage state model (passed/current/future replaced with
+ * not-started/in-progress/done). Full 3×3 truth table:
  *
- *   left.state    | right.state    | type    | visual
- *   ──────────────┼────────────────┼─────────┼──────────────────────────
- *   passed        | passed         | solid   | solid green (#15B981)
- *   passed        | current        | solid   | solid green (still behind
- *                                              the current — the line
- *                                              represents completed
- *                                              path, not the active
- *                                              frontier)
- *   current       | future         | dashed  | dashed purple (#6E5BE8 —
- *                                              the active frontier from
- *                                              current → immediate-next)
- *   future        | future         | inert   | thin flat grey (#36363A)
+ *   left         | right         | style   | color           | width
+ *   ─────────────┼───────────────┼─────────┼─────────────────┼──────
+ *   done         | done          | solid   | green #15B981   | 2px
+ *   done         | in-progress   | solid   | green #15B981   | 2px
+ *   done         | not-started   | solid   | green #15B981   | 2px
+ *   in-progress  | done          | solid   | green #15B981   | 2px
+ *   in-progress  | in-progress   | solid   | purple #6E5BE8  | 2px  ← parallel active region
+ *   in-progress  | not-started   | dashed  | purple #6E5BE8  | 2px  ← frontier
+ *   not-started  | done          | solid   | grey  #36363A   | 1px  ← edge case
+ *   not-started  | in-progress   | solid   | grey  #36363A   | 1px
+ *   not-started  | not-started   | solid   | grey  #36363A   | 1px
  *
- * No other combinations occur given the locked state derivation —
- * states monotonically progress passed → current → future as position
- * increases. (passed → future would mean a future stage is to the left
- * of a passed stage, which can't happen.)
+ * Simplification rule the table follows:
+ *   * LEFT done            → solid green (path behind is complete)
+ *   * LEFT in-progress:
+ *       RIGHT done         → solid green (crossed into done)
+ *       RIGHT in-progress  → solid purple (parallel active flow)
+ *       RIGHT not-started  → dashed purple (frontier into untouched)
+ *   * LEFT not-started     → thin flat grey (left has nothing to show)
  *
- * Rendered as an absolutely-positioned <div> inside the canvas plane
- * (so it pans + zooms with the content). pointerEvents none so it
- * never intercepts pan drags.
+ * Rendered absolutely inside the canvas plane (pans + zooms with
+ * content). pointerEvents: none — never intercepts pan drags.
  */
 
-type ConnectorType = "solid-passed" | "dashed-frontier" | "inert-future";
+type ConnectorType =
+  | "solid-done"
+  | "solid-parallel"
+  | "dashed-frontier"
+  | "inert-grey";
 
-function connectorType(
-  left: "passed" | "current" | "future",
-  right: "passed" | "current" | "future",
-): ConnectorType {
-  if (left === "current" && right === "future") return "dashed-frontier";
-  if (left === "future") return "inert-future";
-  // passed→passed, passed→current — both behind the active frontier
-  return "solid-passed";
+function connectorType(left: StageState, right: StageState): ConnectorType {
+  if (left === "done") return "solid-done";
+  if (left === "in-progress") {
+    if (right === "done") return "solid-done";
+    if (right === "in-progress") return "solid-parallel";
+    return "dashed-frontier"; // in-progress → not-started
+  }
+  // left === "not-started"
+  return "inert-grey";
 }
 
 type Props = {
@@ -48,8 +58,8 @@ type Props = {
   toX: number;
   /** y of the connector — should match the badge centerline. */
   y: number;
-  leftState: "passed" | "current" | "future";
-  rightState: "passed" | "current" | "future";
+  leftState: StageState;
+  rightState: StageState;
 };
 
 export function StageConnector({
@@ -61,24 +71,31 @@ export function StageConnector({
 }: Props) {
   const type = connectorType(leftState, rightState);
 
-  // Border style + color by type.
   let borderTopStyle: "solid" | "dashed";
   let borderTopColor: string;
   let borderTopWidth: number;
 
-  if (type === "solid-passed") {
-    borderTopStyle = "solid";
-    borderTopColor = "#15B981";
-    borderTopWidth = 2;
-  } else if (type === "dashed-frontier") {
-    borderTopStyle = "dashed";
-    borderTopColor = "#6E5BE8";
-    borderTopWidth = 2;
-  } else {
-    // inert-future
-    borderTopStyle = "solid";
-    borderTopColor = "#36363A";
-    borderTopWidth = 1;
+  switch (type) {
+    case "solid-done":
+      borderTopStyle = "solid";
+      borderTopColor = "#15B981";
+      borderTopWidth = 2;
+      break;
+    case "solid-parallel":
+      borderTopStyle = "solid";
+      borderTopColor = "#6E5BE8";
+      borderTopWidth = 2;
+      break;
+    case "dashed-frontier":
+      borderTopStyle = "dashed";
+      borderTopColor = "#6E5BE8";
+      borderTopWidth = 2;
+      break;
+    case "inert-grey":
+      borderTopStyle = "solid";
+      borderTopColor = "#36363A";
+      borderTopWidth = 1;
+      break;
   }
 
   return (

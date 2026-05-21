@@ -1,27 +1,41 @@
 /**
- * Current-stage derivation — the canonical rule for "which stage of a
- * pipeline is the in-progress one." Single source of truth, imported by
- * the dashboard (Phase 4a step 2) and the pipeline canvas (Phase 4a
- * step 5b). DO NOT duplicate this logic anywhere else. If the rule
- * needs to change, change it here.
+ * Per-stage state classifier + anchor-stage picker — the canonical
+ * rules for pipeline canvas + dashboard surfaces.
  *
- * The 3-branch rule (Phase 4a):
- *   1. No tasks OR zero completed → current = stage at position 1
- *      ("plain" visual — pipeline hasn't started)
- *   2. All tasks completed       → current = last stage
- *      ("complete" visual — pipeline is done)
- *   3. Partial completion        → current = highest-position stage with
- *      any completed task ("in-progress" visual — work in flight)
+ * Phase 4a step 5c (annotation polish, 2026-05-22): the positional
+ * "one current stage" model was replaced with this honest per-stage
+ * model. Reason: agencies run parallel workstreams (sales + delivery
+ * on different stages simultaneously). The positional rule forced ONE
+ * "current" stage and demoted others to "passed" (visually = done),
+ * which was a real bug — stage 3 at 1/3 displayed green while stage 4
+ * was already partially in progress.
  *
- * Why "highest-position with any completed task" rather than "highest
- * fully-completed stage": the user's progress signal is "I checked
- * something off in stage N, I'm working in N now." We don't require the
- * stage to be fully done — partial completion is the truest "you are
- * here."
+ * NEW MODEL (per stage, independent of position):
+ *   * `not-started` (grey)  — zero completed tasks
+ *   * `in-progress` (purple) — at least one completed task, NOT all done
+ *   * `done` (green)        — all tasks complete (and total > 0)
  *
- * Per-stage state coloring (purple/green/grey) is positional, NOT a
- * per-stage task-completion check. See stateForStage() below for the
- * rule + edge cases.
+ * **Multiple stages can be `in-progress` simultaneously.** That's
+ * correct and intended. Empty stages (total=0) are `not-started`.
+ *
+ * Task coloring (consumed in TaskRow):
+ *   * Done task → its stage's color (green if stage done, purple if
+ *                                    stage in-progress)
+ *   * Incomplete task → always grey
+ *
+ * For surfaces that need a SINGLE "focal point" (dashboard tile
+ * headline, canvas auto-center, canvas pill anchor), use
+ * `pickAnchorStage()`. Same picker rule across all surfaces keeps the
+ * focal stage CONSISTENT between dashboard and canvas — there's no
+ * "the dashboard says we're on Stage 3 but the canvas centered on
+ * Stage 1" desync.
+ *
+ * History of replaced functions:
+ *   * `deriveCurrentStage()`  — positional 3-branch rule; deleted
+ *   * `stateForStage()`       — positional `passed/current/future`
+ *                               classifier; deleted (its result was
+ *                               only correct for single-current
+ *                               pipelines)
  */
 
 export type StageLike = {
@@ -31,102 +45,69 @@ export type StageLike = {
 
 export type StageCounts = Map<string, { total: number; completed: number }>;
 
-export type PipelineVisual = "plain" | "in-progress" | "complete";
-
-export type CurrentStageResult<S extends StageLike> = {
-  /** The derived in-progress stage, or null if the pipeline has no
-   *  stages at all. */
-  currentStage: S | null;
-  /** Pipeline-level visual hint: "plain" = nothing started yet,
-   *  "in-progress" = partial completion, "complete" = everything done. */
-  visual: PipelineVisual;
-};
+/** Per-stage state. NEW model — state words, no position words. */
+export type StageState = "not-started" | "in-progress" | "done";
 
 /**
- * Compute the current stage + pipeline visual from stages + task counts.
+ * Classify a single stage from its task counts. Pure function — does
+ * NOT consider position, other stages, or pipeline-level state.
  *
- * @param stagesList — sorted by position ascending. Caller's responsibility.
- * @param stageCounts — map of stage_id → { total, completed } task counts.
- *                     Stages not in the map are treated as 0/0.
- * @param totals — pipeline-wide totals across all stages.
+ * Rules:
+ *   total === 0                  → "not-started" (empty stage)
+ *   completed >= total           → "done"
+ *   completed > 0 (& not done)   → "in-progress"
+ *   completed === 0              → "not-started"
  */
-export function deriveCurrentStage<S extends StageLike>(
-  stagesList: S[],
-  stageCounts: StageCounts,
-  totals: { total: number; completed: number },
-): CurrentStageResult<S> {
-  if (stagesList.length === 0) {
-    return { currentStage: null, visual: "plain" };
-  }
-
-  // Branch 1: pipeline hasn't started — no tasks anywhere OR none done.
-  // Current = first stage, visual = plain.
-  if (totals.total === 0 || totals.completed === 0) {
-    return { currentStage: stagesList[0], visual: "plain" };
-  }
-
-  // Branch 2: pipeline is done — every task complete. Current = last
-  // stage (anchor for auto-center), visual = complete. Note: in this
-  // state, the last stage renders GREEN (not purple) — see
-  // stateForStage() — because a done pipeline has zero purple.
-  if (totals.completed >= totals.total) {
-    return {
-      currentStage: stagesList[stagesList.length - 1],
-      visual: "complete",
-    };
-  }
-
-  // Branch 3: partial completion. Highest-position stage with any
-  // completed task is the in-progress stage. If no candidates somehow
-  // (defensive — shouldn't happen since totals.completed > 0 means
-  // SOME stage has a completed task), fall back to position 1.
-  const candidates = stagesList.filter(
-    (s) => (stageCounts.get(s.id)?.completed ?? 0) > 0,
-  );
-  const currentStage =
-    candidates.length > 0
-      ? candidates[candidates.length - 1]
-      : stagesList[0];
-  return { currentStage, visual: "in-progress" };
+export function stageStateFromCounts(counts: {
+  total: number;
+  completed: number;
+}): StageState {
+  if (counts.total === 0) return "not-started";
+  if (counts.completed >= counts.total) return "done";
+  if (counts.completed > 0) return "in-progress";
+  return "not-started";
 }
 
 /**
- * Per-stage visual state for the pipeline canvas (Phase 4a step 5b).
+ * Pick a single "focal" stage for surfaces that need one (dashboard
+ * tile headline, canvas auto-center target, canvas pill anchor).
  *
- * **Positional rule (locked):** state is purely a function of the
- * stage's position relative to the current stage's position. NOT a
- * per-stage task-completion check.
+ * Rule (locked Phase 4a step 5c, 2026-05-22):
+ *   a. First in-progress (leftmost purple stage), ELSE
+ *   b. First not-started (leftmost grey stage),    ELSE
+ *   c. Last stage in the list (all-done case anchors on the final
+ *      stage, where the user just finished)
  *
- *   position <  current.position  → "passed"   (green)
- *   position === current.position → "current"  (purple)
- *   position >  current.position  → "future"   (grey)
+ * Returns null only when `stagesList` is empty.
  *
- * **The visual === "complete" override:** in a done-pipeline state, ALL
- * stages render as "passed" (green). The last stage is the auto-center
- * anchor but does NOT render purple — done pipelines have zero purple.
+ * Same rule across canvas + dashboard so the focal stage is consistent
+ * across surfaces — no desync between "what the dashboard says we're
+ * on" and "what the canvas auto-centers on."
  *
- * **Important — color is display-only:** "passed" is a journey signal,
- * not a data mutation. A stage marked "passed" because the user moved
- * past it does NOT have its tasks auto-completed. When the user opens
- * a passed-but-incomplete stage, individual task checkboxes still show
- * truthful done/undone state. Confirmed by Jordan 2026-05-21.
+ * Parallel-workstreams behavior: multiple in-progress stages → picker
+ * returns the LEFTMOST. This is the "newest active step in workflow
+ * order" by convention. If you want to override (e.g., "remember which
+ * stage the user was last looking at"), add a per-user
+ * last_active_stage_id field and prefer that here. Not in 5c.
  */
-export type StageState = "passed" | "current" | "future";
+export function pickAnchorStage<S extends StageLike>(
+  stagesList: S[],
+  stageStates: Map<string, StageState>,
+): S | null {
+  if (stagesList.length === 0) return null;
 
-export function stateForStage<S extends StageLike>(
-  stage: S,
-  current: S | null,
-  visual: PipelineVisual,
-): StageState {
-  // Defensive: a pipeline with no stages can't have a current stage.
-  // Every stage in that (impossible) state would render "future."
-  if (!current) return "future";
+  // (a) First in-progress.
+  const inProgress = stagesList.find(
+    (s) => stageStates.get(s.id) === "in-progress",
+  );
+  if (inProgress) return inProgress;
 
-  // Done-pipeline override: every stage is "passed" green; the last
-  // stage is the anchor for auto-center but is NOT highlighted purple.
-  if (visual === "complete") return "passed";
+  // (b) First not-started.
+  const notStarted = stagesList.find(
+    (s) => stageStates.get(s.id) === "not-started",
+  );
+  if (notStarted) return notStarted;
 
-  if (stage.position < current.position) return "passed";
-  if (stage.position === current.position) return "current";
-  return "future";
+  // (c) All done — anchor on the last stage.
+  return stagesList[stagesList.length - 1];
 }
