@@ -223,11 +223,10 @@ export function MyTasksCard({
               👍
             </span>
             <p
-              className="text-[13px] max-w-[280px]"
+              className="text-[13px]"
               style={{ color: "rgba(255,255,255,0.5)" }}
             >
-              no tasks assigned to you yet. ask a teammate to assign you
-              something, or add one yourself.
+              no task created yet
             </p>
           </div>
         ) : (

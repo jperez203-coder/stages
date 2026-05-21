@@ -119,11 +119,10 @@ export function ActivityCard({ workspaceSlug, events, error }: Props) {
               🔕
             </span>
             <p
-              className="text-[13px] max-w-[320px]"
+              className="text-[13px]"
               style={{ color: "rgba(255,255,255,0.5)" }}
             >
-              nothing&apos;s happened yet. activity will show up here as
-              your team works.
+              nothing&apos;s happened yet
             </p>
           </div>
         ) : (
