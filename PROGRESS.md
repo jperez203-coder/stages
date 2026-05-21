@@ -4,6 +4,171 @@ A running log of what shipped in each session. Newest first.
 
 ---
 
+## Phase 4a — step 5b: canvas stage rendering + state colors (2026-05-21)
+
+**Goal:** replace 5a's 4 throwaway placeholder boxes with real stage rendering from the database. Stage badges + boxes + connectors, state-colored per the locked rule (current=purple, passed=green, future=grey), auto-centered on the in-progress stage. Still NOT in scope until later sub-steps: task boxes (5c), left rail + header chrome (5d), edit pipeline mode (5e).
+
+### Shared helper — `src/lib/current-stage.ts` (extracted, not duplicated)
+
+Phase 4a step 2's dashboard had the canonical current-stage derivation inline. 5b promotes that into a shared helper so both surfaces use the SAME code path — locked rule: "no second derivation written." Two functions exported:
+
+- **`deriveCurrentStage(stagesList, stageCounts, totals)`** — returns `{ currentStage, visual }`. Three-branch rule: zero completed → position 1 ("plain"); all complete → last stage ("complete"); partial → highest-position stage with any completed task ("in-progress").
+- **`stateForStage(stage, currentStage, visual)`** — returns `"passed" | "current" | "future"`. Positional rule (not per-stage task-completion). Visual override: when pipeline visual is `"complete"`, ALL stages render `"passed"` (done pipeline has zero purple).
+
+The dashboard (`/w/[slug]/page.tsx`) was refactored to call `deriveCurrentStage()` — its inline 18-line block deleted, replaced with a single function call. Single source of truth confirmed.
+
+### Per-stage state rule (locked — affects 5b/5c/5d/5e and Phase 4b)
+
+**Positional, not task-completion-strict.** A stage's state is purely a function of its position relative to the derived current stage's position:
+- `position < current.position` → `passed` (green, receded)
+- `position === current.position` → `current` (purple, brightest)
+- `position > current.position` → `future` (grey, dim)
+
+**Important — color is display-only.** A stage marked "passed" because the user moved past it does NOT have its tasks auto-completed. When the user opens a passed-but-incomplete stage, individual task checkboxes still show truthful done/undone state. This is a journey signal, not a data mutation. Confirmed with Jordan during the 5b gate.
+
+**Done-pipeline override.** When pipeline `visual === "complete"`, every stage renders `passed`/green — there's no `current` at all. Last stage is the auto-center anchor but is NOT highlighted purple. A done pipeline has zero purple.
+
+### Visual hierarchy (locked — verified against figma)
+
+After two polish passes during 5b verification:
+
+- **Current (purple)** — full `#6E5BE8` saturation, box shadow (~16px purple glow), white text, opacity 1.0. Brightest element on canvas, unambiguous "you are here."
+- **Passed (green)** — `#1F4535` bg + `#15B981` accents, BUT rendered at **opacity 0.7 on the StageNode wrapper** so the bright green tokens don't compete with purple's prominence. Connectors representing the completed path stay at full saturation (rendered as siblings outside the wrapper) — the line story should still read while the stage cards themselves recede. Initial implementation at full opacity flattened the hierarchy: green text + border read nearly as prominent as purple. Mute applied as a single-knob opacity drop on the wrapper.
+- **Future (grey)** — `#2C2C2F` bg + `#979393` text, full opacity but the tokens are already-muted. Naturally dimmest.
+
+**Locked hierarchy:** `current > passed > future`. The 0.7 opacity for passed is the tunable; anything 0.65–0.75 is in the right range.
+
+### Locked stage tokens (DO NOT redefine ad-hoc; reuse in 5c task boxes + 5d chrome)
+
+| State | Badge bg | Badge text/border | Box bg | Box text | Box subtitle | Box border | Wrapper opacity |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| current | `#6E5BE8` | white / `#6E5BE8` | `#6E5BE8` | white | `rgba(255,255,255,0.75)` | `#6E5BE8` | 1.0 |
+| passed | `#1F4535` | `#15B981` | `#1F4535` | `#15B981` | `rgba(21,185,129,0.7)` | `rgba(21,185,129,0.35)` | **0.7** |
+| future | `#2C2C2F` | `#979393` / `#36363A` | `#2C2C2F` | `#E4E4E7` | `rgba(151,147,147,0.7)` | `#36363A` | 1.0 |
+
+### Locked connector rules (DO NOT redefine in 5c+)
+
+Horizontal line between adjacent badge centers, color/style driven by the left + right stage states:
+
+| Left | Right | Style | Color | Width |
+| --- | --- | --- | --- | --- |
+| passed | passed | solid | `#15B981` | 2px |
+| passed | current | solid | `#15B981` | 2px |
+| current | future | **dashed** | `#6E5BE8` (purple) | 2px |
+| future | future | solid | `#36363A` | 1px |
+
+The dashed purple connector is "the active frontier" — the one connection from current → immediate-next. Stages beyond that get the flat thin grey treatment. No other combinations occur given the monotonic positional state derivation.
+
+### Badge layout (locked — per figma annotation polish)
+
+**Left-aligned to the box's left edge, not centered above it.** First pass centered the badge horizontally over each box; figma `Figma_pipeline_stage_view.png` showed the badge at the top-left corner. Two-line fix: removed `margin: "0 auto"` from the badge div, updated connector x-math in PipelineCanvas from `pos.x + STAGE_NODE_WIDTH/2` (centered) to `pos.x + BADGE_DIAMETER/2` (left-aligned). Connector length unchanged at 248px between adjacent badges; just anchored 74px further left.
+
+### Layout math (5b stage row)
+
+Stages laid out left-to-right at the geometric center of the 4000×4000 transform plane:
+
+```
+PLANE_CX = 2000, PLANE_CY = 2000
+STAGE_NODE_WIDTH = 180, STAGE_NODE_HEIGHT = 110 (badge 32 + gap 14 + box 64)
+STAGE_GAP = 100  →  badge centers ~280px apart
+BBOX_PADDING = 40  →  buffer between cluster edge and edge-fade activation
+
+For N stages:
+  totalWidth = N * 180 + (N - 1) * 100
+  startX = 2000 - totalWidth / 2
+  yTop = 2000 - 110 / 2
+  stage[i].position = (startX + i * 280, yTop)
+```
+
+For the 5-stage seed: layout starts at x=1350, ends at x=2650. All 5 stages span ~1300px horizontally. Auto-center on stage 3 puts the cluster center near viewport center; stages 4-5 extend off-screen right at typical viewport widths, exercising the right edge fade.
+
+### Auto-center + pill
+
+- **Auto-center:** `transformRef.zoomToElement(currentStageId)` in TransformWrapper's `onInit`. Falls back to `centerView()` if `currentStageId` is null (empty pipeline, no stages yet).
+- **Stage indicator pill:** "showing stage X of Y" where X = current stage's position, Y = `stages.length`. Click recenters via same `zoomToElement` call.
+- **Empty pipeline fallback:** when `stages.length === 0`, the canvas renders the grid + a small "no stages yet" dashed pill at plane center. Auto-center calls `centerView` instead of `zoomToElement`. Real "create your first stage" affordance is 5e.
+
+### Edge fades from real stage bbox
+
+5a's bbox was hardcoded from placeholder positions. 5b derives it from the laid-out stage cluster: leftmost stage's x − 40 padding through rightmost stage's right edge + 40 padding (and similar for y). Edge fades activate the moment the user pans past this padded boundary, not at the literal cluster edge — gives a "you haven't quite hit the wall" buffer.
+
+### Files (this round)
+
+```
+new file:  src/lib/current-stage.ts                    (118 lines — shared derivation + per-stage state helper)
+new file:  src/components/canvas/StageNode.tsx        (~180 lines — badge + box, state-colored, left-aligned per figma, opacity-muted on passed)
+new file:  src/components/canvas/StageConnector.tsx   ( 99 lines — line between adjacent badges, rule-driven)
+modified:  src/app/w/[slug]/p/[pipeline-id]/page.tsx  (110 → 175 lines — fetches stages + tasks, derives state, exports StageViewModel)
+modified:  src/components/canvas/PipelineCanvas.tsx   (-130 / +85 — real stages instead of placeholders, layout math, bbox from cluster, badge left-anchor in connector math)
+modified:  src/app/w/[slug]/page.tsx                  (-19 / +6 — dashboard uses shared helper, no duplicate derivation)
+modified:  next.config.ts                              (+ turbopackFileSystemCacheForDev: false — see standalone Build-infra entry below)
+modified:  PROGRESS.md                                 (this entry + the Build-infra entry below)
+```
+
+### Verification (verified by Jordan against the live seed)
+
+- Stage 1 + 2: green/passed, "Stage N · X/Y tasks" with accurate counts ✓
+- Stage 3: purple/current, brightest treatment, auto-centered on load ✓
+- Stage 4 + 5: grey/future, "Stage N · 0/2 tasks" ✓
+- Connectors: 1→2 solid green, 2→3 solid green, 3→4 dashed purple, 4→5 thin flat grey ✓
+- Pill: "showing stage 3 of 5", click recenters on stage 3 ✓
+- Auto-center lands on stage 3 ✓
+- Edge fades activate when stage 4 / 5 pan off-screen right ✓
+- Pan + zoom from 5a still work — no regressions ✓
+- Visual hierarchy reads correctly: purple unambiguously brightest, green present-but-receded, grey dim ✓
+
+### Bugs caught + fixed during 5b verification
+
+1. **Green completed stages too prominent at full opacity.** First pass used `#15B981` text + border at full saturation on `#1F4535` backgrounds. Read nearly as bright as the purple current stage, flattening the locked "current is brightest" hierarchy. **Fix:** opacity `0.7` on the entire StageNode wrapper when `state === "passed"`. Single knob, easy to tune, preserves color relationships within the passed state. Connectors stay at full saturation (rendered as siblings outside the wrapper) — they tell the path story.
+2. **Badge centered above box instead of left-aligned.** First pass used `margin: "0 auto"` to center the numbered badge above the stage box. Figma `Figma_pipeline_stage_view.png` shows the badge at the top-left corner. **Fix:** removed the auto margin; updated connector x-math in PipelineCanvas to anchor on `pos.x + BADGE_DIAMETER/2` (badge center is now half-a-badge-diameter from the stage's left edge) instead of `pos.x + STAGE_NODE_WIDTH/2` (badge center was at the stage's horizontal midpoint).
+
+### Deferred / known follow-ups
+
+- **`stages.completed` is a dead column.** Confirmed during the 5b gate that `stages.completed boolean` (from the initial schema, exists as a leftover from the prototype's per-stage completion flag) is NOT written by any code path in the migrated codebase. 5b's state derivation uses task-count completion only — `stages.completed` is the dead column. **Cleanup target: v1.1 schema sweep** — drop the column via migration once we're confident nothing reads it. NOT touched in 5b to keep the change scope tight; flagging here so a future maintainer scanning the schema sees this is intentional dead weight, not a feature that lost its writer.
+- **Coachmark auto-dismiss is window-scoped** (inherited from 5a deferred list). Scope to canvas-only when the 5d left rail + header land.
+- **5c inherits:** real task boxes inside each stage box, "X/Y task" subtitle reactive to task completion writes, checkbox affordance for toggling done. Locked color tokens from this entry's "Locked stage tokens" table apply (don't redefine purple/green/grey ad-hoc).
+- **5d inherits:** left rail + canvas header (replacing the current minimal "back arrow + pipeline name" placeholder), member cluster, Edit pipeline button.
+- **5e inherits:** edit mode — add/rename/reorder/delete stages.
+
+### Lessons learned
+
+1. **Extract derivations to a single helper before the second consumer ships.** The dashboard had the current-stage rule inline since step 2; the 5b canvas would have been the second consumer. Extracting the helper at the moment of second use (rather than upfront in step 2) felt slightly late but was the right time — a helper extracted before a second consumer exists is a guess about its shape; one extracted at the second use is informed by both consumers' needs. The 5b helper has cleaner ergonomics (positional `StageState` enum, defensive null handling) than what a pre-emptive extraction would have produced.
+2. **Color tokens at full saturation are surface-dependent prominence cues.** `#15B981` reads "subtle / accent" on the dashboard's Done badge (against a dark surface, small element). The SAME `#15B981` text + border on a 180×64px stage box at full saturation reads "primary action" — competes with the actually-primary purple current stage. Lesson: when porting a token from one surface to another, audit whether its perceived prominence is still appropriate. The 0.7 opacity fix here was effectively "preserve the token, dampen the surface-specific intensity."
+
+---
+
+## Build infra — disable Turbopack persistent FS cache for dev (2026-05-21)
+
+**Symptom.** `next dev` crashed on startup 3 times across Phase 4a step 5 sessions with the same signature: Rust-side panic on SST (Sorted String Table) file deserialization + ENOENT on `.next/dev/build-manifest.json`. Each time, recovery required `rm -rf .next` + restart, costing ~10 min of debugging + a cold rebuild. Symptom appeared after machine sleep mid-session, after a sibling process wiped `.next` while the dev server was running, and once with no obvious trigger.
+
+**Root cause.** Next 16.1.0 enabled Turbopack's FileSystem Cache by default for `next dev` (see `node_modules/next/dist/docs/.../turbopackFileSystemCache.md`). The cache layer writes incremental compilation state to `.next/dev/cache/turbopack/*.sst` files between starts to skip rebuild work. When an SST write is interrupted (sleep, crash, process kill, concurrent wipe), the file's header can land in an unreadable state. Subsequent starts panic on read.
+
+This is a documented sharp edge — the docs caveat the feature as "stable for development and experimental for production builds." Stable doesn't mean crash-proof against interrupted writes; it means "shipped on by default in 16.1." The SST format predates the hardening work that's still in progress in the Next/Turbopack repo.
+
+**Fix.** Disable just the persistent FS cache layer; keep Turbopack itself enabled for compilation + HMR. Two-line addition to `next.config.ts`:
+
+```ts
+experimental: {
+  turbopackFileSystemCacheForDev: false,
+}
+```
+
+What this changes:
+- Turbopack stays the dev compiler (no fallback to webpack, no HMR regression)
+- Nothing is written to `.next/dev/cache/turbopack/` — the corruption layer is removed from the loop entirely
+- Cold-start cost: ~+500ms-1s per `npm run dev`. Measured on Stages: was ~285ms ready, still ~285ms ready (project is small enough that the cache wasn't saving much anyway — the SST corruption was costing 10 min/session for ~0ms of speed gained)
+- HMR / hot reload during a running session: unchanged (that's in-memory incremental compilation, not the on-disk cache)
+
+Verified post-fix: `.next/dev/cache/` contains only `.rscinfo` (a tiny RSC marker, unrelated); no `turbopack/` subdir gets created. Startup line confirms: `Experiments (use with caution): ⨯ turbopackFileSystemCacheForDev` (the `⨯` indicates OFF).
+
+**Revisit when:** the SST format gains crash-safety, likely Next 16.3 or 16.4. The Turbopack team has been actively hardening it on canary. When the upstream fix lands, this flag can be deleted (the default `true` restored) and the cache speedup recovered. Verify the fix took by running `next dev`, force-killing it during compilation, restarting — should not panic.
+
+**Hands-off rule for future maintainers:** DO NOT re-enable this in a "speed it up" sweep without first confirming the SST corruption class is fixed upstream. The fix is reversible but the corruption recovery cost is asymmetric — flipping it back to `true` and then hitting corruption mid-week loses far more time than the ~500ms cold-start it saves.
+
+Webpack fallback (`next dev --webpack`) is in the back pocket if this disable isn't enough — but it shouldn't be needed; the persistent cache was the entire crash class.
+
+---
+
 ## Phase 4a — step 5a: pipeline canvas core (pan/zoom shell) (2026-05-21)
 
 **Goal:** replace the 404 stub at `/w/[slug]/p/[pipeline-id]` with a real route that renders a pan/zoom canvas shell — the gesture surface that 5b's stage boxes, 5c's tasks, 5d's left rail + header, and 5e's edit mode will all sit on top of. The point of isolating 5a from the rest of step 5 was to nail the gesture feel before adding visual complexity that would make it harder to A/B the interaction layer.

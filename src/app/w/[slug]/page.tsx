@@ -6,6 +6,7 @@ import { ActivityCard } from "@/components/dashboard/ActivityCard";
 import { TeamChatStrip } from "@/components/dashboard/TeamChatStrip";
 import { PipelinesSection } from "@/components/dashboard/PipelinesSection";
 import type { AvatarUser } from "@/components/UserAvatar";
+import { deriveCurrentStage } from "@/lib/current-stage";
 
 /**
  * /w/[slug] — workspace dashboard. Phase 4a step 2.
@@ -339,26 +340,15 @@ export default async function WorkspaceDashboardPage({
     const stagesList = stagesByPipeline.get(p.id) ?? [];
     const totals = pipelineTotals.get(p.id) ?? { total: 0, completed: 0 };
 
-    let currentStage = stagesList[0] ?? null;
-    let visual: "plain" | "in-progress" | "complete" = "plain";
-    if (stagesList.length > 0) {
-      if (totals.total === 0 || totals.completed === 0) {
-        currentStage = stagesList[0];
-        visual = "plain";
-      } else if (totals.completed >= totals.total) {
-        currentStage = stagesList[stagesList.length - 1];
-        visual = "complete";
-      } else {
-        const candidates = stagesList.filter(
-          (s) => (stageCounts.get(s.id)?.completed ?? 0) > 0,
-        );
-        currentStage =
-          candidates.length > 0
-            ? candidates[candidates.length - 1]
-            : stagesList[0];
-        visual = "in-progress";
-      }
-    }
+    // Current-stage derivation: shared helper, single source of truth.
+    // See src/lib/current-stage.ts for the locked 3-branch rule. This
+    // surface (dashboard PipelineCard) and the canvas (5b) call the
+    // same function — no duplicated logic.
+    const { currentStage, visual } = deriveCurrentStage(
+      stagesList,
+      stageCounts,
+      totals,
+    );
 
     const memberRows = membersByPipeline.get(p.id) ?? [];
     const visibleMembers = memberRows.slice(0, 3).map((m) => ({

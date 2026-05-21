@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import {
@@ -12,31 +12,34 @@ import { EdgeFades } from "./EdgeFades";
 import { CanvasCoachmark } from "./CanvasCoachmark";
 import { StageIndicatorPill } from "./StageIndicatorPill";
 import { ZoomControls } from "./ZoomControls";
+import {
+  StageNode,
+  STAGE_NODE_WIDTH,
+  STAGE_NODE_HEIGHT,
+  BADGE_DIAMETER,
+} from "./StageNode";
+import { StageConnector } from "./StageConnector";
+import type { StageViewModel } from "@/app/w/[slug]/p/[pipeline-id]/page";
 
 /**
- * Pipeline canvas — Phase 4a step 5a (canvas core only).
+ * Pipeline canvas — Phase 4a step 5b (real stage rendering on the 5a shell).
  *
- * Empty pan/zoom shell built on react-zoom-pan-pinch v4. Library handles:
- *   * click-drag pan (mouse) + velocity inertia
- *   * Cmd/Ctrl + wheel zoom (via `wheel.activationKeys`)
- *   * trackpad pinch zoom (browser fires synthetic ctrlKey on pinch,
- *     caught by the same activationKeys)
- *   * touch pinch zoom (`pinch.disabled: false`)
+ * Stages laid out left-to-right horizontally at the geometric center of
+ * the 4000×4000 transform plane. Each stage renders as a StageNode
+ * (badge + box) with a StageConnector between adjacent badges. State
+ * coloring (passed/current/future → green/purple/grey) is derived
+ * server-side via deriveCurrentStage + stateForStage and arrives in the
+ * `stages` prop as `StageViewModel[]`.
  *
- * We add a custom wheel handler on top for figma-parity pan semantics
- * that the library doesn't cover natively:
- *   * mouse wheel (no modifier) → vertical pan
- *   * shift + wheel → horizontal pan
- *   * trackpad two-finger pan (deltaX + deltaY both non-zero) → free pan
+ * 5a's wheel handling (pan via custom listener, Cmd/Ctrl+wheel zoom via
+ * lib activationKeys), edge fades, coachmark, and zoom controls are all
+ * preserved unchanged. The placeholder boxes from 5a are deleted; the
+ * content-bbox now derives from real stage positions.
  *
- * `trackPadPanning` is disabled in the library config so the lib's own
- * trackpad pan logic doesn't fight our custom wheel handler. Net effect:
- * every wheel event is routed deterministically — Cmd/Ctrl → library zoom,
- * everything else → our pan handler.
- *
- * 5a renders 3-4 throwaway placeholder boxes spread across the canvas plane
- * to test gesture feel against real content + edge fades. These go away in
- * 5b when real stages render.
+ * Empty-stage fallback: when the pipeline has zero stages, the canvas
+ * renders the grid + a small "no stages yet" pill at the plane center.
+ * Auto-center is skipped (nothing to target). 5e will surface a real
+ * "create your first stage" affordance.
  */
 
 type Props = {
@@ -44,66 +47,78 @@ type Props = {
   pipelineName: string;
   workspaceSlug: string;
   coachmarkInitiallyDismissed: boolean;
+  stages: StageViewModel[];
+  currentStageId: string | null;
 };
 
 // Canvas plane size — big enough that pan + edge fades have room to
 // breathe at all zoom levels. The plane is the transformed inner content
-// (dotted grid + placeholders). When zoomed to 1x and centered on the
+// (dotted grid + stage nodes). When zoomed to 1x and centered on the
 // origin, the visible area shows a small slice of this plane.
 const PLANE_W = 4000;
 const PLANE_H = 4000;
 
-// Placeholder box positions in canvas-plane coordinates. Spread across
-// the plane to exercise pan, edge fades, and the "first placeholder
-// auto-center" affordance. Removed in 5b when real stages render.
-const PLACEHOLDERS: Array<{
-  id: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  label: string;
-}> = [
-  // Clustered near the geometric center of the 4000×4000 plane so that
-  // auto-center on placeholder-1 keeps the other 3 within (or just past)
-  // the viewport edges — that way "off-screen content" is true on the
-  // right side immediately after mount, exercising the right edge fade.
-  { id: "placeholder-1", x: 1800, y: 1940, w: 220, h: 120, label: "Stage 1 (placeholder)" },
-  { id: "placeholder-2", x: 2050, y: 1940, w: 220, h: 120, label: "Stage 2" },
-  { id: "placeholder-3", x: 2300, y: 1940, w: 220, h: 120, label: "Stage 3" },
-  { id: "placeholder-4", x: 2550, y: 1940, w: 220, h: 120, label: "Stage 4" },
-];
+// Plane center — where the stage row is anchored.
+const PLANE_CX = PLANE_W / 2;
+const PLANE_CY = PLANE_H / 2;
 
-// Content bounding box in plane coords, derived from placeholder spread.
-// EdgeFades uses this + the current transform to decide which side fades.
-// In 5b this becomes "min/max stage position with padding."
-const CONTENT_BBOX = (() => {
-  const xs = PLACEHOLDERS.map((p) => p.x);
-  const xsR = PLACEHOLDERS.map((p) => p.x + p.w);
-  const ys = PLACEHOLDERS.map((p) => p.y);
-  const ysB = PLACEHOLDERS.map((p) => p.y + p.h);
-  return {
-    left: Math.min(...xs) - 24,
-    right: Math.max(...xsR) + 24,
-    top: Math.min(...ys) - 24,
-    bottom: Math.max(...ysB) + 24,
-  };
-})();
+// Horizontal gap between stages. STAGE_NODE_WIDTH (180) + STAGE_GAP (100)
+// = 280px between adjacent stage left edges, which puts badge centers
+// ~280px apart — matches the figma's spacing rhythm.
+const STAGE_GAP = 100;
+
+// Bounding-box padding around the stage cluster for the edge fades.
+// Fades activate when the user pans content past this padded boundary
+// instead of right at the cluster's literal edge — gives a small "you
+// haven't quite reached the limit" buffer.
+const BBOX_PADDING = 40;
 
 export function PipelineCanvas({
   pipelineId,
   pipelineName,
   workspaceSlug,
   coachmarkInitiallyDismissed,
+  stages,
+  currentStageId,
 }: Props) {
   const transformRef = useRef<ReactZoomPanPinchRef | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
 
-  // Edge-fade visibility — computed from the live transform state + the
-  // hardcoded content bbox + the wrapper's measured size. Lifted up to
-  // PipelineCanvas (rather than inside EdgeFades via useTransformEffect)
-  // so EdgeFades doesn't need to live inside TransformWrapper's React
-  // context.
+  // ── Layout coordinates for each stage ─────────────────────────────────
+  // Stages laid out left-to-right horizontally, centered on the plane.
+  // All stages share the same y (badge centers aligned on one axis).
+  //
+  // Recomputed only when `stages` changes (rare — typically once per
+  // page load).
+  const layout = useMemo(() => {
+    const n = stages.length;
+    if (n === 0) {
+      return { positions: new Map<string, { x: number; y: number }>(), bbox: null };
+    }
+    const totalWidth = n * STAGE_NODE_WIDTH + (n - 1) * STAGE_GAP;
+    const startX = PLANE_CX - totalWidth / 2;
+    const yTop = PLANE_CY - STAGE_NODE_HEIGHT / 2;
+
+    const positions = new Map<string, { x: number; y: number }>();
+    stages.forEach((s, idx) => {
+      const x = startX + idx * (STAGE_NODE_WIDTH + STAGE_GAP);
+      positions.set(s.id, { x, y: yTop });
+    });
+
+    // Content bbox in canvas-plane coords for edge-fade detection,
+    // padded a bit so fades activate slightly past the literal cluster
+    // edge.
+    const bbox = {
+      left: startX - BBOX_PADDING,
+      right: startX + totalWidth + BBOX_PADDING,
+      top: yTop - BBOX_PADDING,
+      bottom: yTop + STAGE_NODE_HEIGHT + BBOX_PADDING,
+    };
+
+    return { positions, bbox };
+  }, [stages]);
+
+  // ── Edge-fade visibility ──────────────────────────────────────────────
   const [edges, setEdges] = useState({
     left: false,
     right: false,
@@ -111,79 +126,43 @@ export function PipelineCanvas({
     bottom: false,
   });
 
-  // Recomputes which edges have off-screen content given the current
-  // transform. Called from onTransform (every tick) and from an initial
-  // post-mount effect so the fades are correct on first paint.
   const recomputeEdges = useCallback(
     (positionX: number, positionY: number, scale: number) => {
       const wrapper = wrapperRef.current;
-      if (!wrapper) return;
+      if (!wrapper || !layout.bbox) return;
       const W = wrapper.clientWidth;
       const H = wrapper.clientHeight;
-      // Visible-region edges in canvas-plane coordinates:
-      //   plane_x_at_screen_0 = -positionX / scale
-      //   plane_x_at_screen_W = (W - positionX) / scale
       const planeLeft = -positionX / scale;
       const planeRight = (W - positionX) / scale;
       const planeTop = -positionY / scale;
       const planeBottom = (H - positionY) / scale;
-
-      const EPS = 1; // avoid edge-case flicker right at the boundary
+      const EPS = 1;
       setEdges({
-        left: CONTENT_BBOX.left + EPS < planeLeft,
-        right: CONTENT_BBOX.right - EPS > planeRight,
-        top: CONTENT_BBOX.top + EPS < planeTop,
-        bottom: CONTENT_BBOX.bottom - EPS > planeBottom,
+        left: layout.bbox.left + EPS < planeLeft,
+        right: layout.bbox.right - EPS > planeRight,
+        top: layout.bbox.top + EPS < planeTop,
+        bottom: layout.bbox.bottom - EPS > planeBottom,
       });
     },
-    [],
+    [layout.bbox],
   );
 
-  // Auto-center is wired via TransformWrapper's `onInit` callback below,
-  // not via a setTimeout from a useEffect. The lib's onInit fires AFTER
-  // its internal DOM measurements + ref setup are complete; setTimeout(0)
-  // can race that init and result in zoomToElement no-op'ing because the
-  // lib's internal state isn't ready. onInit is the lib-blessed entry
-  // point for first-paint transforms.
-
-  // ── Custom wheel handler — pan semantics ────────────────────────────
-  // Attached natively (not via JSX) so we can call preventDefault on a
-  // non-passive listener. React 19 + browser conventions: synthetic wheel
-  // events default to passive, which blocks preventDefault. The native
-  // `{ passive: false }` registration is the workaround.
-  //
-  // Routing:
-  //   * ctrlKey || metaKey  → return (let library handle zoom)
-  //   * shiftKey + dx≈0     → swap deltaY into deltaX (horizontal pan)
-  //   * otherwise           → free pan via setTransform(positionX-dx, ...)
+  // ── Custom wheel handler (pan semantics — unchanged from 5a) ──────────
   useEffect(() => {
     const wrapper = wrapperRef.current;
     if (!wrapper) return;
 
     const onWheel = (e: WheelEvent) => {
-      // Always preventDefault — covers both the zoom path (modifier held)
-      // and the pan path (no modifier). Without this, Cmd/Ctrl+wheel
-      // triggers the BROWSER's native page-zoom shortcut, which scales
-      // the entire app chrome and makes the canvas feel like it's
-      // navigating to a different page. The lib's own wheel handler
-      // also calls preventDefault when its zoom path activates, but
-      // doing it here unconditionally ensures we never lose a race
-      // against the browser default.
+      // Always preventDefault — covers both zoom (modifier held, lib
+      // handles) and pan (no modifier, we handle). Blocks browser
+      // native Cmd+wheel page-zoom.
       e.preventDefault();
 
-      // ctrlKey here covers BOTH the keyboard Ctrl key AND the synthetic
-      // ctrlKey browsers set on trackpad pinch gestures. Both should
-      // route to the library's zoom handler — which they will, because
-      // the wheel.activationKeys function below returns true for either
-      // Meta or Control. Our handler simply gets out of the way.
-      if (e.ctrlKey || e.metaKey) return;
+      if (e.ctrlKey || e.metaKey) return; // lib handles zoom
       if (!transformRef.current) return;
 
       let dx = e.deltaX;
       let dy = e.deltaY;
-      // Shift+wheel on mouse: some browsers auto-swap deltaY→deltaX,
-      // others don't. If we see shift held but no horizontal delta,
-      // promote deltaY manually so behavior is consistent.
       if (e.shiftKey && Math.abs(dx) < 0.01) {
         dx = dy;
         dy = 0;
@@ -194,7 +173,7 @@ export function PipelineCanvas({
         positionX - dx,
         positionY - dy,
         scale,
-        0, // instant — no animation on wheel pan; native scroll feel
+        0,
       );
     };
 
@@ -202,13 +181,22 @@ export function PipelineCanvas({
     return () => wrapper.removeEventListener("wheel", onWheel);
   }, []);
 
-  // Recenter — used by the StageIndicatorPill click + the zoom-controls
-  // "fit" button. For 5a, both target placeholder-1; in 5b the pill
-  // targets the current in-progress stage and the fit button frames the
-  // entire pipeline.
+  // ── Imperative controls ───────────────────────────────────────────────
+  // Recenter targets the current stage (passed from the server-derived
+  // currentStageId). Falls back to centerView if no current stage
+  // (empty-pipeline case) so the button still does something useful.
   const onRecenter = useCallback(() => {
-    transformRef.current?.zoomToElement("placeholder-1", 1, 280, "easeOut");
-  }, []);
+    if (currentStageId) {
+      transformRef.current?.zoomToElement(
+        currentStageId,
+        1,
+        280,
+        "easeOut",
+      );
+    } else {
+      transformRef.current?.centerView(1, 280, "easeOut");
+    }
+  }, [currentStageId]);
 
   const onZoomIn = useCallback(() => {
     transformRef.current?.zoomIn(0.25, 200, "easeOut");
@@ -217,12 +205,22 @@ export function PipelineCanvas({
     transformRef.current?.zoomOut(0.25, 200, "easeOut");
   }, []);
   const onFit = useCallback(() => {
-    // For 5a "fit" frames the placeholder cluster. In 5b this should fit
-    // the actual stage bounding box. Identical implementation either way
-    // — the call is `zoomToElement('placeholder-1')` in 5a vs
-    // `centerView()` against a stage-bbox in 5b.
-    transformRef.current?.zoomToElement("placeholder-1", 1, 280, "easeOut");
-  }, []);
+    // "Fit" in 5b recenters on the current stage at 1x — same as the
+    // pill click. True "fit-to-pipeline" with auto-zoom to frame all
+    // stages is a 5d polish item (needs the wrapper dimensions + cluster
+    // width to compute the right scale).
+    onRecenter();
+  }, [onRecenter]);
+
+  // Current stage's position (for the pill text). Defaults to 1 when
+  // empty so the pill doesn't render "stage 0 of 0" — though when
+  // stages.length === 0, the empty-state branch below renders something
+  // else anyway and the pill stays.
+  const currentPosition = useMemo(() => {
+    if (!currentStageId) return 1;
+    const found = stages.find((s) => s.id === currentStageId);
+    return found?.position ?? 1;
+  }, [currentStageId, stages]);
 
   return (
     <div
@@ -233,14 +231,12 @@ export function PipelineCanvas({
         position: "relative",
         overflow: "hidden",
         background: "#212124",
-        // Cursor hint: "grab" when not actively panning (lib swaps to
-        // "grabbing" on press). Lib doesn't set this itself.
         cursor: "grab",
       }}
     >
-      {/* Minimal header band — 5a placeholder. The real header (left rail
-          + member cluster + Edit pipeline button) is 5d. For now: back
-          arrow + pipeline name, so the canvas isn't an unlabeled abyss. */}
+      {/* Minimal header band — 5b still placeholder. The real header
+          (left rail + member cluster + Edit pipeline button) ships in 5d.
+          For now: back arrow + pipeline name. */}
       <div
         style={{
           position: "absolute",
@@ -288,69 +284,46 @@ export function PipelineCanvas({
       <TransformWrapper
         ref={transformRef}
         initialScale={1}
-        // Clamps zoom to 0.25x–2x — prevents runaway zoom-in (lib default
-        // max is 8x which is unusable here) and the inverse zoom-out
-        // shrink to nothing. 2x is plenty of detail for stage/task work
-        // and matches Figma's typical "zoom for legibility" range.
         minScale={0.25}
         maxScale={2}
         limitToBounds={false}
         centerOnInit={false}
         smooth
         wheel={{
-          // activationKeys MUST be the function form here. The array form
-          // (`["Meta", "Control"]`) is interpreted by the lib as "ALL
-          // keys in this array must be pressed simultaneously" — its
-          // internal check is `keys.every(k => pressedKeys[k])`. So
-          // `["Meta", "Control"]` required the user to hold Cmd AND Ctrl
-          // at the same time, which is wrong for figma-parity (Cmd OR
-          // Ctrl, either alone, should activate zoom). The function form
-          // lets us return true on EITHER. Without this, Cmd+wheel never
-          // activated the lib's zoom path — the browser then handled
-          // Cmd+wheel as native page zoom, scaling the entire app chrome
-          // and making the canvas feel like it was navigating elsewhere.
           activationKeys: (keys: string[]) =>
             keys.includes("Meta") || keys.includes("Control"),
-          // Per-wheel-tick scale step. The lib multiplies this by the
-          // wheel delta. With step=0.15 (10x the lib's default 0.015) a
-          // single trackpad swipe slammed from min to max. step=0.03
-          // (2x the lib default) gives gradual, controllable, Figma-like
-          // zoom that lands cleanly on intermediate scales.
           step: 0.03,
         }}
-        pinch={{
-          step: 5,
-        }}
+        pinch={{ step: 5 }}
         panning={{
           velocityDisabled: false,
           allowLeftClickPan: true,
         }}
-        trackPadPanning={{
-          // Disabled — our custom wheel handler covers trackpad two-finger
-          // pan via raw deltaX/deltaY. Letting the lib's trackpad handler
-          // also run would double-apply the pan and feel "fast/jumpy."
-          disabled: true,
-        }}
-        doubleClick={{
-          disabled: true,
-        }}
+        trackPadPanning={{ disabled: true }}
+        doubleClick={{ disabled: true }}
         onInit={(ref) => {
-          // Lib has finished measuring + setting up refs. Safe to read
-          // state and call zoomToElement. Defer one frame so the
-          // placeholder DOM is definitely committed (TransformComponent
-          // renders children after the lib's own init in some race
-          // conditions).
+          // Defer a frame so stage DOM is committed before zoomToElement
+          // measures it. Targets the current in-progress stage; if the
+          // pipeline has no stages OR no current stage somehow, fall
+          // back to centerView so the canvas still lands somewhere
+          // sensible (geometric plane center).
           requestAnimationFrame(() => {
-            const el = document.getElementById("placeholder-1");
-            if (!el) {
-              console.warn(
-                "[canvas] auto-center: placeholder-1 element not found in DOM",
-              );
-              return;
+            if (currentStageId) {
+              const el = document.getElementById(currentStageId);
+              if (!el) {
+                console.warn(
+                  "[canvas] auto-center: current stage element not found:",
+                  currentStageId,
+                );
+                ref.centerView(1, 0);
+              } else {
+                ref.zoomToElement(currentStageId, 1, 0);
+              }
+            } else {
+              // No current stage — empty pipeline. Center on the plane
+              // origin so the "no stages yet" pill is in view.
+              ref.centerView(1, 0);
             }
-            ref.zoomToElement("placeholder-1", 1, 0);
-            // Defer once more so the transform applies before we read it
-            // back for the initial edge-fade computation.
             requestAnimationFrame(() => {
               const s = ref.state;
               recomputeEdges(s.positionX, s.positionY, s.scale);
@@ -363,14 +336,6 @@ export function PipelineCanvas({
       >
         <TransformComponent
           wrapperStyle={{
-            // position: absolute + inset: 0 is the bulletproof way to
-            // fill a position: relative parent. width/height 100% alone
-            // can collapse when the lib's default CSS class (`.transform
-            // -component-module_wrapper__SPB86`) competes with inline
-            // styles in certain rendering states — position: absolute
-            // sidesteps the resolution chain entirely. The parent
-            // PipelineCanvas root has position: relative, so this
-            // anchors correctly.
             position: "absolute",
             inset: 0,
             width: "100%",
@@ -382,18 +347,7 @@ export function PipelineCanvas({
             position: "relative",
           }}
         >
-          {/* Dotted-grid background INSIDE the transform plane so it
-              pans + zooms with the content. Dot color is #4A4A4A —
-              one notch above the dashboard's #424242 token to nudge
-              the dots back to dashboard-parity visibility against the
-              transform context's sub-pixel softening, but pulled back
-              from #525252 (tried first, read too prominent / "in your
-              face"). #4A4A4A is the goldilocks middle. Spacing (24px)
-              and dot size (1px) unchanged. Kept inline rather than
-              applying the global .dotted-grid class because that class
-              also sets a background-color, and we want the plane
-              transparent so the wrapper's #212124 shows through at
-              zoom-out. */}
+          {/* Dotted-grid background — pans + zooms with content. */}
           <div
             aria-hidden
             style={{
@@ -406,48 +360,81 @@ export function PipelineCanvas({
             }}
           />
 
-          {/* Placeholder boxes — 5a only, removed in 5b. Bright blue
-              dashed treatment so they're visually unmistakable against
-              the grid pattern (the earlier #2C2C2F + #4A4A50 dark grey
-              dashed treatment was too subtle to pop). Blue token chosen
-              over green because green is reserved for the Done badge
-              semantic; blue says "placeholder / informational" without
-              colliding with any future stage state color. zoomToElement
-              targets them by HTML id. */}
-          {PLACEHOLDERS.map((p) => (
+          {/* Empty-state: pipeline has no stages yet. Small centered
+              pill so the user knows the canvas is live but empty.
+              5e ships the real "create stage" affordance. */}
+          {stages.length === 0 && (
             <div
-              key={p.id}
-              id={p.id}
               style={{
                 position: "absolute",
-                left: p.x,
-                top: p.y,
-                width: p.w,
-                height: p.h,
-                background: "rgba(16,140,233,0.12)",
-                border: "2px dashed #108CE9",
-                borderRadius: 12,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                color: "#7FA7D9",
+                left: PLANE_CX - 110,
+                top: PLANE_CY - 24,
+                width: 220,
+                padding: "12px 16px",
+                background: "rgba(33,33,36,0.85)",
+                border: "1px dashed #4A4A50",
+                borderRadius: 10,
+                color: "rgba(255,255,255,0.6)",
                 fontSize: 13,
-                fontWeight: 500,
+                textAlign: "center",
+                fontStyle: "italic",
               }}
             >
-              {p.label}
+              no stages yet
             </div>
-          ))}
+          )}
+
+          {/* Connectors render BEFORE stage nodes so the badges paint
+              on top of the line endings (line passes behind the
+              badge edges, not over them). */}
+          {stages.length >= 2 &&
+            stages.slice(0, -1).map((left, idx) => {
+              const right = stages[idx + 1];
+              const leftPos = layout.positions.get(left.id);
+              const rightPos = layout.positions.get(right.id);
+              if (!leftPos || !rightPos) return null;
+              // Badge centers in plane coords. Badges are LEFT-aligned
+              // with each stage's box (per figma), so badge center sits
+              // at `pos.x + BADGE_DIAMETER/2` — half a badge inward
+              // from the stage's left edge, not at the stage's
+              // horizontal midpoint.
+              const leftBadgeCx = leftPos.x + BADGE_DIAMETER / 2;
+              const rightBadgeCx = rightPos.x + BADGE_DIAMETER / 2;
+              const badgeCy = leftPos.y + BADGE_DIAMETER / 2;
+              // Pull connector in by half-badge so the line starts
+              // at the badge edge, not the badge center.
+              const fromX = leftBadgeCx + BADGE_DIAMETER / 2;
+              const toX = rightBadgeCx - BADGE_DIAMETER / 2;
+              return (
+                <StageConnector
+                  key={`${left.id}->${right.id}`}
+                  fromX={fromX}
+                  toX={toX}
+                  y={badgeCy}
+                  leftState={left.state}
+                  rightState={right.state}
+                />
+              );
+            })}
+
+          {/* Stage nodes — one per stage. id on the wrapper for
+              zoomToElement targeting. */}
+          {stages.map((s) => {
+            const pos = layout.positions.get(s.id);
+            if (!pos) return null;
+            return (
+              <StageNode key={s.id} stage={s} x={pos.x} y={pos.y} />
+            );
+          })}
         </TransformComponent>
       </TransformWrapper>
 
       {/* Overlays — rendered OUTSIDE TransformWrapper so they don't pan
-          or zoom with the canvas. zIndex stacking above the canvas
-          content. */}
+          or zoom with the canvas. */}
       <EdgeFades edges={edges} />
       <StageIndicatorPill
-        current={1}
-        total={PLACEHOLDERS.length}
+        current={currentPosition}
+        total={stages.length}
         onRecenter={onRecenter}
       />
       <ZoomControls onZoomIn={onZoomIn} onZoomOut={onZoomOut} onFit={onFit} />
