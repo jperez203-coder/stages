@@ -181,15 +181,18 @@ export default function CreatePipelinePage() {
   // intermediate states.
   // All five render branches below share the same outer chrome: the
   // dotted-grid background (same .dotted-grid class used by the dashboard)
-  // + min-h-full to fill the AppShell content area. Inner max-w-2xl keeps
-  // the form/panel centered with reasonable reading width.
+  // + flex-1 so the wrapper grows to fill the AppShell's flex content
+  // area regardless of how short the inner content is. (min-h-full
+  // doesn't reliably resolve here because the parent height isn't
+  // explicit; flex-1 on a flex-col child works exactly.) Inner max-w-2xl
+  // keeps the form/panel centered with reasonable reading width.
   if (
     session.status === "loading" ||
     session.status === "anonymous" ||
     contexts.status === "loading"
   ) {
     return (
-      <div className="dotted-grid min-h-full px-4 sm:px-6 py-12">
+      <div className="dotted-grid flex-1 px-4 sm:px-6 py-12">
         <div className="max-w-2xl mx-auto">
           <div className="text-[13px] text-zinc-500">Loading…</div>
         </div>
@@ -199,7 +202,7 @@ export default function CreatePipelinePage() {
 
   if (contexts.status === "error") {
     return (
-      <div className="dotted-grid min-h-full px-4 sm:px-6 py-12">
+      <div className="dotted-grid flex-1 px-4 sm:px-6 py-12">
         <div className="max-w-2xl mx-auto">
           <div className="panel-card p-6 flex items-start gap-3 text-[13px] text-stages-red">
             <AlertCircle size={16} className="flex-shrink-0 mt-0.5" />
@@ -215,7 +218,7 @@ export default function CreatePipelinePage() {
   // "no permission" UI mid-redirect.
   if (!workspace) {
     return (
-      <div className="dotted-grid min-h-full px-4 sm:px-6 py-12">
+      <div className="dotted-grid flex-1 px-4 sm:px-6 py-12">
         <div className="max-w-2xl mx-auto">
           <div className="text-[13px] text-zinc-500">Loading…</div>
         </div>
@@ -225,7 +228,7 @@ export default function CreatePipelinePage() {
 
   if (!canCreate) {
     return (
-      <div className="dotted-grid min-h-full px-4 sm:px-6 py-12">
+      <div className="dotted-grid flex-1 px-4 sm:px-6 py-12">
         <div className="max-w-2xl mx-auto">
           <button
             onClick={() => router.push(`/w/${slug}`)}
@@ -257,7 +260,7 @@ export default function CreatePipelinePage() {
   }
 
   return (
-    <div className="dotted-grid min-h-full px-4 sm:px-6 py-8">
+    <div className="dotted-grid flex-1 px-4 sm:px-6 py-8">
       <div className="max-w-2xl mx-auto">
       <button
         onClick={() => router.push(`/w/${slug}`)}

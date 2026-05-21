@@ -25,12 +25,18 @@ type Props = {
   workspaceSlug: string;
   pipelines: PipelineViewModel[];
   error: string | null;
+  /** Workspace owner/admin or workspace member. Owner/admin sees the
+   *  "Create pipeline" CTA in the empty state; members see the member-
+   *  appropriate empty-state copy without the CTA (since the action
+   *  would just bounce them to a no-permission panel anyway). */
+  canCreatePipeline: boolean;
 };
 
 export function PipelinesSection({
   workspaceSlug,
   pipelines,
   error,
+  canCreatePipeline,
 }: Props) {
   const [filter, setFilter] = useState<Filter>("progress");
   // Per-filter direction. Progress defaults asc (stalled first). Name
@@ -115,7 +121,10 @@ export function PipelinesSection({
           <span>Couldn&apos;t load pipelines — refresh to try again.</span>
         </div>
       ) : sorted.length === 0 ? (
-        <EmptyState workspaceSlug={workspaceSlug} />
+        <EmptyState
+          workspaceSlug={workspaceSlug}
+          canCreatePipeline={canCreatePipeline}
+        />
       ) : (
         // Responsive grid breakpoints scale columns with viewport:
         //   sm/default 1 → md 2 → lg 3 → xl 4 → 2xl 5
@@ -216,7 +225,13 @@ function FilterChip({
   );
 }
 
-function EmptyState({ workspaceSlug }: { workspaceSlug: string }) {
+function EmptyState({
+  workspaceSlug,
+  canCreatePipeline,
+}: {
+  workspaceSlug: string;
+  canCreatePipeline: boolean;
+}) {
   return (
     <div
       className="rounded-2xl flex flex-col items-center text-center"
@@ -230,24 +245,39 @@ function EmptyState({ workspaceSlug }: { workspaceSlug: string }) {
       <h3 className="text-[18px] font-medium text-white mb-1">
         no pipelines yet
       </h3>
-      <p
-        className="text-[14px] mb-5"
-        style={{ color: "rgba(255,255,255,0.6)" }}
-      >
-        create your first pipeline to get started
-      </p>
-      <Link
-        href={`/w/${workspaceSlug}/p/new`}
-        className="inline-flex items-center gap-1.5 text-[14px] font-medium text-white"
-        style={{
-          background: "#108CE9",
-          padding: "10px 18px",
-          borderRadius: 8,
-        }}
-      >
-        <Plus size={14} strokeWidth={2.5} />
-        Create pipeline
-      </Link>
+      {/* Copy + CTA branch on permission. Owner/admin gets the action
+          ("create your first pipeline to get started" + button).
+          Members get a member-appropriate explanation and no CTA — the
+          action would just hit a no-permission panel for them. */}
+      {canCreatePipeline ? (
+        <>
+          <p
+            className="text-[14px] mb-5"
+            style={{ color: "rgba(255,255,255,0.6)" }}
+          >
+            create your first pipeline to get started
+          </p>
+          <Link
+            href={`/w/${workspaceSlug}/p/new`}
+            className="inline-flex items-center gap-1.5 text-[14px] font-medium text-white"
+            style={{
+              background: "#108CE9",
+              padding: "10px 18px",
+              borderRadius: 8,
+            }}
+          >
+            <Plus size={14} strokeWidth={2.5} />
+            Create pipeline
+          </Link>
+        </>
+      ) : (
+        <p
+          className="text-[14px]"
+          style={{ color: "rgba(255,255,255,0.6)" }}
+        >
+          an owner or admin will set things up here.
+        </p>
+      )}
     </div>
   );
 }

@@ -4,6 +4,122 @@ A running log of what shipped in each session. Newest first.
 
 ---
 
+## Phase 4a — step 4 polish round + storage-free recently-done (2026-05-20)
+
+**Goal:** annotate the populated My Tasks view across all six buckets, lock the visual surface, address the questions step 4 exposed (how long do completed tasks stay on screen? what's the keyboard story? what's the multi-plan story for headers?), and decide what step 5 inherits as locked tokens vs. open decisions.
+
+**No net new migrations.** A `tasks.dismissed_at` migration (`20260520150000`) was authored mid-round to support a per-user soft-dismiss, then ripped out (file deleted from disk before commit, column + partial index dropped from the live DB by hand). See [Storage-free dismiss design](#storage-free-dismiss-design-replaces-dismissed_at) below for the reasoning.
+
+### Storage-free dismiss design (replaces `dismissed_at`)
+
+**The question that drove it:** how long does a completed task stay on the My Tasks list — forever (clutter), or auto-hide (and recover from where)?
+
+**First-pass design (built, then rejected):**
+
+- New column `tasks.dismissed_at timestamptz` + partial index `tasks_assignee_active_idx (assignee_id) WHERE dismissed_at IS NULL`.
+- Hover-trash icon on completed rows for explicit dismiss.
+- End-of-day auto-hide of completed tasks.
+- New `/my-tasks/archived` route with Restore action.
+
+Worked. But: an entire column + index + UI affordance + a recovery route, all to encode a flag that completion already implies. The same UX falls out for free from `completed_at`.
+
+**Final design (storage-free):**
+
+1. **Completion stays global** (`tasks.completed_at`, unchanged).
+2. **Active My Tasks** auto-hides completed past end-of-day: server query filter `completed_at IS NULL OR completed_at >= today_boundary`. Reuses the existing day-boundary helper. No new state.
+3. **Recently-done view** at `/w/[slug]/my-tasks/recently-done`: tasks assigned to me, completed in the last 7 days. Server-computed cutoff `now() - interval '7 days'`, sorted `completed_at DESC`. Read-only — no Restore action. Rolling window slides naturally with no cron / cleanup needed.
+4. **Permanent delete moves to the task detail panel (step 6)** with a confirm dialog. NOT on My Tasks rows, NOT in recently-done.
+
+**Cleanup performed live (no reverse migration, manual SQL):**
+
+```sql
+drop index if exists public.tasks_assignee_active_idx;
+alter table public.tasks drop column if exists dismissed_at;
+```
+
+The migration file was uncommitted, so deleting it from disk leaves git history clean. Same Supabase SQL editor session that ran the cleanup also wiped the 11 polish-round seed tasks + all seed stages in `test-workspace-4b` (verified `0 | 0 | 0` post-wipe). Pipelines kept; workspace is now a clean slate for the proper demo build.
+
+### Pill color tokens (LOCKED — step 5 canvas + step 6 task detail must reuse)
+
+The locked urgency gradient for the `/my-tasks` view, after one mid-round swap to fix a Done-vs-thisWeek collision:
+
+| Bucket / state | Pill text | Pill bg | Section dot |
+| --- | --- | --- | --- |
+| **Overdue** | `#DF1E5A` (red) | `rgba(223,30,90,0.18)` | `#DF1E5A` |
+| **Today** | `#DF1E5A` (red) | `rgba(223,30,90,0.18)` | `#DF1E5A` |
+| **Tomorrow** | `#E273C1` (pink) | `rgba(226,115,193,0.15)` | `#E273C1` |
+| **This week** | `#108CE9` (blue) | `rgba(16,140,233,0.15)` | `#108CE9` |
+| **Later** | `#979393` (grey) | `rgba(151,147,147,0.12)` | `#6B6B6B` |
+| **No date** | `#979393` (grey) | `transparent` | `#6B6B6B` |
+| **Done badge** | `#15B981` (green) | `#1F4535` | — |
+
+**Why blue for This week, not green:** earlier rev used green (`#15B981` / `#1F4535`) for both the Done badge AND the thisWeek pill. With completed tasks sinking to the bottom of each bucket and Done pills sitting at the row end, a row showing "Sun" (thisWeek green) read identically to a row showing "Done" (completion green) at a glance — the disambiguation only landed once you noticed the strikethrough title. Moving thisWeek to blue (`#108CE9` — same Stages primary used on `+ Pipeline` and the active chip) frees green as the universal "completed" signal. Urgency gradient is preserved: red (now) → pink (next) → blue (this week) → grey (distant / untimed).
+
+**For step 5 canvas:** when canvas surfaces task pills (stage column headers, mini task previews, etc.), reuse these exact tokens. Surface-dependent pill treatment was locked in step 4 — dashboard uses pipeline-colored, /my-tasks uses bucket-colored. Canvas needs its own decision documented when it ships; default expectation is bucket-colored for any canvas-side "my tasks" widget, pipeline-colored when grouping by stage.
+
+### Visual + interaction polish (what shipped)
+
+- **Dotted-grid background extension** — `min-h-full` → `flex-1` on all three workspace-scoped page wrappers (dashboard, my-tasks, p/new). `min-h-full` only extended to content height for short pages; `flex-1` extends through the AppShell content area to the bottom of the viewport.
+- **Quick add row restyle** — bg `#222933`, dashed border `#25476B`, text + icon `#35C4EE`. Visual hint changed from `⌘N` to `N` (see Keyboard shortcuts below).
+- **"Hide completed" toggle** — custom-styled to match the TaskRow checkboxes: native `<input type="checkbox">` inside the `<label>` (visually hidden, kept for click target + keyboard + screen-reader semantics), styled `<span>` shows the visual state. Grey fill + `#36363A` stroke unchecked, blue `#108CE9` fill checked.
+- **Header avatar stroke** — 2px → 1px on `HeaderProfileMenu`. Subtler ring, doesn't pull attention from active workspace text.
+- **My Tasks page header band** — pulled out of the dotted-grid area so the high-density header (search + count + subtitle) sits on a solid surface; dotted pattern only appears behind the section list below. Subtle bottom stroke separates the two regions.
+- **TaskRow checkbox** — custom-styled (was relying on system checkbox before): 18×18px, 4px radius, blue fill + check on completion, white stroke at 30% opacity unchecked. Same visual language as the hide-completed toggle.
+- **MyTasksCard row spacing (dashboard)** — vertical padding tightened from 12px to 8px to match the figma's at-a-glance density. Calibrated in two passes (first 6px read too cramped, settled at 8px). The full /my-tasks view keeps its looser 14px row padding — different surface, different density rule.
+- **Stages logo → clickable** — wraps the header logo in a `<Link>` to the active workspace dashboard (or `/` if no active slug). Opacity hover. Standard webapp convention (Linear, Notion, Slack all do this). Falls back to `/` only on workspace-agnostic routes; on normal `/w/[slug]/*` navigation the slug is always known.
+- **Avatar sizing fixes** — explicit `boxSizing: "border-box"` on `next/image` (Tailwind preflight doesn't reach next/image's inline styles, so the 2px border was rendering outside the 40px footprint and making the avatar visually 44px). `HeaderProfileMenu` internal Avatar's rounded-square ↔ circle threshold bumped from `<= 36` to `<= 40` to keep size 40 rendering as rounded-square (was flipping into circle mode at the threshold).
+- **Dashboard task-click payload** — `MyTasksCard` and `/my-tasks` `TaskRow` click handlers now log `{ taskId, pipelineId, stageId }`. Step 5 canvas wires this to `router.push('/w/${slug}/p/${pipelineId}?stage=${stageId}')` — payload already loaded, the wire-up is one line. Step 6 may then auto-open the task detail panel overlay on top of the canvas.
+
+### Keyboard shortcuts (LOCKED)
+
+Two shortcuts, two conventions. Both gate on "active element is not an input/textarea/contenteditable" so typing the letter in a search box doesn't trigger them.
+
+- **Bare `N`** — focuses the My Tasks quick-add input from anywhere on the page. Expands the collapsed row if needed (the input isn't mounted in collapsed state, so `setQuickAddExpanded(true)` + `setTimeout(focus, 0)` is the focus sequence). Originally spec'd as `⌘N` until we discovered live that **Cmd+N is browser-reserved for "New Window" — `e.preventDefault()` cannot override it**. Same fate as ⌘T, ⌘W, ⌘R. Industry pattern in webapps is a single-key shortcut (Linear: C, Todoist: Q, Trello: C). `N` matches the original "N for new" intent.
+- **`⌘K`** — reserved for the global search / command palette. NOT wired to a handler yet — the actual palette ships post-4a — but the header search input has a `<kbd>⌘K</kbd>` badge as the public commitment. **Don't bind ⌘K to anything else.** Slack and Linear both establish this convention; users land in Stages expecting it.
+
+### Role-gated affordances (first plan-aware code in the app)
+
+Stages MVP has two plans: **Solo $29/mo** (single-user, always owner, always sees admin affordances) and **Team $39/mo/user** (multi-role: owner / admin / member, role is per-workspace). Two surfaces now respect the role.
+
+- **`+ Pipeline` header button** (`AppShell`) — derives `activeWorkspaceContext` from `useUserContexts` (filters: `type='agency' AND source='workspace' AND workspaceSlug=activeSlug`). `canCreatePipeline = role === 'owner' || role === 'admin'`. Members + pipeline-only agency users have the button hidden; `flex-1` search bar to its left absorbs the freed space with no layout jump.
+- **Dashboard empty-state CTA** (`PipelinesSection`) — same gate. Owner/admin gets "create your first pipeline to get started" + button. Members get "an owner or admin will set things up here." (no CTA — would just bounce to a no-permission panel anyway).
+
+Multi-workspace setups: role is per-workspace, so the same user can have the button visible in workspace A (their own) and hidden in workspace B (where they're a member). While contexts is loading, `canCreatePipeline` defaults to `false` (no flash of button); once contexts ready, the correct state renders.
+
+### Files touched
+
+```
+modified:   src/app/w/[slug]/my-tasks/page.tsx
+modified:   src/app/w/[slug]/p/new/page.tsx
+modified:   src/app/w/[slug]/page.tsx
+modified:   src/components/app/AppShell.tsx
+modified:   src/components/app/HeaderProfileMenu.tsx
+modified:   src/components/dashboard/MyTasksCard.tsx
+modified:   src/components/dashboard/PipelinesSection.tsx
+modified:   src/components/my-tasks/MyTasksView.tsx
+modified:   src/components/my-tasks/QuickAddRow.tsx
+modified:   src/components/my-tasks/TaskRow.tsx
+new file:   src/app/w/[slug]/my-tasks/recently-done/page.tsx
+new file:   src/components/my-tasks/RecentlyDoneView.tsx
+```
+
+### Strategic decisions captured (deferred work, affect step 5 and beyond)
+
+- **Task click routing (step 5 must wire).** Click on a task in /my-tasks or the dashboard's MyTasksCard → `router.push('/w/${slug}/p/${pipelineId}?stage=${stageId}')`. Pipeline canvas loads with the relevant stage focused/scrolled-to. Step 6 may then auto-open the task detail panel overlay. Click handler payload already includes `{taskId, pipelineId, stageId}` — wire-up is one line.
+- **Client-facing dashboard / OAuth integrations.** Decision: build the architectural seam in step 5, defer real OAuth to v2.0 post-PMF. v1.1 ships orchestration-only checklist (no OAuth, no tokens, low risk). Architectural seam requirement: provider config supports both modes (held vs orchestrated) from day one; audit log table exists at v1 even if only logging checklist events; `hipaa_safe` flag baked into provider config shape from the start.
+- **HIPAA target (new).** Medical is a target vertical later. Means: SOC 2 Type II + HITRUST become non-negotiable on the path to medical; `hipaa_safe` flag must be in provider config from day one; some providers stay orchestration-only forever even when others move to held-token mode.
+- **Long-term token storage thesis.** At scale, hold tokens for most providers — gated by SOC 2 Type II → dedicated SecEng hire → cyber insurance with token-vault rider → per-provider legal/ToS review → customer signal → per-provider ROI. Roughly Series A / $5-10M ARR. Never-hold list: banking-tier credentials (Plaid/Stripe Issuing holds those), PHI/HIPAA-adjacent, gov SSO root tokens. The "business hub" thesis at scale REQUIRES owning the integration surface — Salesforce/HubSpot/Zapier all became hubs by holding more credentials over time.
+- **Team vs Client pipeline types — REJECTED.** No type picker at creation. Use `pipelines.company` field as the implicit distinction (set = client, null = team). Surface the distinction on the dashboard when it earns its keep (>8 pipelines in a workspace, or when client-facing dashboard ships). Step 5 implication: keep `company` optional (already is), no schema work, purely "don't accidentally make `company` required."
+- **Soft-delete pipelines** — deferred to step 5. Spec: `pipelines.archived_at timestamptz` nullable + filter on dashboard list + archived pipelines route similar to recently-done shape.
+
+### Lessons learned (apply forever)
+
+1. **Reach for the storage-free design first.** When a feature can be expressed as a query over existing data (completion + day-boundary helper + 7-day window), don't reach for a new column. The dismiss flag we built and ripped out was a useful object lesson: an entire column + index + UI affordance + recovery route, all to encode a flag that completion already implies. Same UX falls out for free. **New column = new failure mode + new schema cost forever. Validate that no existing column + query combination delivers the same UX before adding one.**
+2. **Browser-reserved keyboard shortcuts must be tested live.** ⌘N, ⌘T, ⌘W, ⌘R, ⌘Q are all unrecoverable in JavaScript — `e.preventDefault()` does not override them. Industry pattern is single-key shortcuts (Linear: C, Todoist: Q). Confirm with a manual press before spec'ing `⌘<letter>` for any in-app action. The visual hint badge (`<kbd>`) is ALSO a public commitment — don't add one until the shortcut has been live-tested in the target browser/OS.
+3. **Color tokens are surface-dependent, not global.** Two greens on the same surface (Done badge + thisWeek pill in /my-tasks) collide visually even when "semantically distinct" — context is too thin to disambiguate at a glance. Color choices that look fine in isolation can fail when surfaced together. Audit color pairings as the surface populates, not in component-level previews.
+
+---
+
 ## Phase 4a — step 4: My Tasks full view + deadlines (2026-05-20)
 
 **Goal:** turn the `/w/[slug]/my-tasks` placeholder route (from step 2's "See all N →" link) into the real surface — all tasks assigned to the current user across pipelines, grouped by deadline, with inline date editing and quick-add. Step 3 (deadlines) folded into step 4 because `tasks.deadline` already exists from the step-0 migration; the work was UI + the date picker, not schema.

@@ -29,15 +29,26 @@ function pickFallbackColor(seed: string): string {
   return PALETTE[Math.abs(hash) % PALETTE.length];
 }
 
-// Bucket → pill color treatment. Today / Overdue use the same red token
-// but Overdue ALSO gets the red-title + original-date treatment below.
-const BUCKET_PILL: Record<Bucket, { color: string; bgOpacity: number }> = {
-  overdue: { color: "#DF1E5A", bgOpacity: 0.18 },
-  today: { color: "#DF1E5A", bgOpacity: 0.18 },
-  tomorrow: { color: "#E273C1", bgOpacity: 0.15 },
-  thisWeek: { color: "#21B159", bgOpacity: 0.15 },
-  later: { color: "#979393", bgOpacity: 0.12 },
-  noDate: { color: "#979393", bgOpacity: 0 },
+// Bucket → pill color treatment. Urgency gradient runs:
+//   red (Overdue/Today) → pink (Tomorrow) → blue (This week)
+//   → grey (Later / No date)
+// Green is RESERVED for the "Done" badge (rendered separately below) so a
+// completed row and an upcoming "Sun"/"Wed" row never look the same color
+// at a glance. Earlier rev used green for thisWeek too — fine in isolation,
+// but a screen with a Done and a thisWeek pill side-by-side was hard to
+// scan. Blue keeps the "calm, planned, not urgent" semantic without
+// colliding with completion green.
+//
+// `bg` is explicit (rgba or hex) rather than derived from color+opacity —
+// lets specific buckets use locked figma tokens without breaking the
+// shared rendering path.
+const BUCKET_PILL: Record<Bucket, { color: string; bg: string }> = {
+  overdue:  { color: "#DF1E5A", bg: "rgba(223,30,90,0.18)" },
+  today:    { color: "#DF1E5A", bg: "rgba(223,30,90,0.18)" },
+  tomorrow: { color: "#E273C1", bg: "rgba(226,115,193,0.15)" },
+  thisWeek: { color: "#108CE9", bg: "rgba(16,140,233,0.15)" },
+  later:    { color: "#979393", bg: "rgba(151,147,147,0.12)" },
+  noDate:   { color: "#979393", bg: "transparent" },
 };
 
 // Pill label derivation. Same calendar-day boundaries as the bucketing
@@ -102,12 +113,12 @@ export function TaskRow({
         padding: "14px 16px",
         borderBottom: isLast ? "none" : "1px solid rgba(255,255,255,0.04)",
       }}
-      onMouseEnter={(e) =>
-        (e.currentTarget.style.background = "rgba(255,255,255,0.02)")
-      }
-      onMouseLeave={(e) =>
-        (e.currentTarget.style.background = "transparent")
-      }
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = "rgba(255,255,255,0.02)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "transparent";
+      }}
     >
       {/* Checkbox — toggles completed_at via the parent's mutation handler */}
       <button
@@ -133,32 +144,61 @@ export function TaskRow({
         {task.done && <Check size={12} color="white" strokeWidth={3} />}
       </button>
 
-      {/* Title + subtitle */}
-      <button
-        type="button"
+      {/* Title + subtitle. `<div role="button">` rather than a real
+          `<button>` because step 5 wires the row click to route to the
+          pipeline+stage and step 6 may want to nest additional inline
+          controls here (assignee chip, deadline chip) — keeping the
+          outer role-button avoids invalid nested-button HTML when those
+          land. Today it's just the click+keyboard surface. */}
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => {
+          // Step 5 wires this: router.push(`/w/${slug}/p/${pipelineId}
+          // ?stage=${stageId}`) — pipeline canvas loads with the
+          // relevant stage focused. Step 6 may then auto-open the task
+          // detail panel overlay (Asana/Trello pattern). Payload already
+          // includes the routing target so step 5 is a one-line wire-up.
           console.log(
-            "[step 4] task row clicked, detail panel arrives step 6.",
-            { taskId: task.id },
+            "[step 4] task row clicked. step 5 routes to pipeline+stage; step 6 opens detail panel.",
+            {
+              taskId: task.id,
+              pipelineId: task.stage.pipelineId,
+              stageId: task.stage.id,
+            },
           );
         }}
-        className="flex-1 min-w-0 text-left"
-        style={{
-          background: "transparent",
-          border: "none",
-          padding: 0,
-          cursor: "pointer",
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            console.log(
+              "[step 4] task row clicked (kbd). step 5 routes to pipeline+stage; step 6 opens detail panel.",
+              {
+                taskId: task.id,
+                pipelineId: task.stage.pipelineId,
+                stageId: task.stage.id,
+              },
+            );
+          }
         }}
+        className="flex-1 min-w-0 text-left"
+        style={{ cursor: "pointer" }}
       >
-        <div
-          className="text-[14px] truncate"
-          style={{
-            color: titleColor,
-            textDecoration: titleDecoration,
-            fontWeight: 500,
-          }}
-        >
-          {task.title}
+        {/* Title line. flex-1 + truncate on the span so long titles
+            ellipsis-truncate inside the row's content area. */}
+        <div className="flex items-center gap-1.5">
+          <span
+            className="text-[14px] truncate"
+            style={{
+              color: titleColor,
+              textDecoration: titleDecoration,
+              fontWeight: 500,
+              flex: 1,
+              minWidth: 0,
+            }}
+          >
+            {task.title}
+          </span>
         </div>
         <div
           className="flex items-center gap-1.5 mt-0.5 text-[12px] truncate"
@@ -185,7 +225,7 @@ export function TaskRow({
             {task.stage.name}
           </span>
         </div>
-      </button>
+      </div>
 
       {/* Date pill — clicking opens the picker. Null deadline shows
           "+ add date" affordance instead. */}
@@ -194,8 +234,8 @@ export function TaskRow({
           <span
             className="text-[11px] font-medium"
             style={{
-              background: "rgba(33,177,89,0.15)",
-              color: "#21B159",
+              background: "#1F4535",
+              color: "#15B981",
               padding: "4px 10px",
               borderRadius: 6,
             }}
@@ -231,7 +271,7 @@ export function TaskRow({
             }}
             className="text-[11px] font-medium transition-opacity"
             style={{
-              background: `rgba(${hexToRgb(pillTreatment.color)},${pillTreatment.bgOpacity})`,
+              background: pillTreatment.bg,
               color: pillTreatment.color,
               padding: "4px 10px",
               borderRadius: 6,
@@ -258,12 +298,3 @@ export function TaskRow({
   );
 }
 
-// Tiny inline helper to keep the JSX clean. The bucket palette uses hex
-// colors; the pill needs rgba bg for opacity control.
-function hexToRgb(hex: string): string {
-  const h = hex.replace("#", "");
-  const r = parseInt(h.substring(0, 2), 16);
-  const g = parseInt(h.substring(2, 4), 16);
-  const b = parseInt(h.substring(4, 6), 16);
-  return `${r},${g},${b}`;
-}

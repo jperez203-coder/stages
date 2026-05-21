@@ -201,7 +201,7 @@ function Avatar({
           boxSizing: "border-box",
           borderRadius: size <= 40 ? "10px" : "50%",
           objectFit: "cover",
-          border: `2px solid ${color}66`,
+          border: `1px solid ${color}66`,
           display: "block",
         }}
       />

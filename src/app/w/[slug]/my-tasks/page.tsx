@@ -120,7 +120,15 @@ export default async function MyTasksPage({
       .eq("workspace_id", ws.id)
       .order("name", { ascending: true }),
 
-    // All tasks assigned to current user in this workspace.
+    // All tasks assigned to current user in this workspace that aren't
+    // completed-before-today. End-of-day auto-hide threshold uses
+    // server-UTC midnight (current_date), same caveat as the bucketing
+    // logic — migrates to user-TZ via the cookie fix when that ships.
+    //
+    // Completed-before-today tasks are not gone — they surface in
+    // /my-tasks/recently-done with a rolling 7-day window. There is no
+    // "dismiss" affordance on this view; permanent delete lives in the
+    // task detail panel (step 6) with a confirm.
     supabase
       .from("tasks")
       .select(
@@ -131,7 +139,14 @@ export default async function MyTasksPage({
          )`,
       )
       .eq("assignee_id", user.id)
-      .eq("stage.pipeline.workspace_id", ws.id),
+      .eq("stage.pipeline.workspace_id", ws.id)
+      .or(
+        `completed_at.is.null,completed_at.gte.${new Date(
+          new Date().getFullYear(),
+          new Date().getMonth(),
+          new Date().getDate(),
+        ).toISOString()}`,
+      ),
 
     // Stages list for quick-add's current-stage derivation. Bounded by
     // workspace so the result stays small.

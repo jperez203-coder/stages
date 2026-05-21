@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Plus, Search } from "lucide-react";
 import { StagesLogo } from "@/components/icons/StagesLogo";
@@ -52,6 +53,34 @@ export function AppShell({ children }: Props) {
       : null;
   const activeSlug = slugFromUrl ?? lastActiveSlug;
 
+  // Role gate for the "+ Pipeline" header button. Only workspace-level
+  // owners + admins can create pipelines (matches the
+  // is_workspace_owner_or_admin gate on the create_pipeline_with_channels
+  // RPC). Members + pipeline-only agency users see the button hidden;
+  // the search bar's flex-1 absorbs the freed space.
+  //
+  // Connects to the plan model: Solo ($29/mo, single-user, always owner
+  // → always sees the button) and Team ($39/mo/user, multi-role, only
+  // owner/admin in a given workspace sees it). In multi-workspace
+  // setups, the role is per-workspace, so the same user can have the
+  // button visible in workspace A (their own) and hidden in workspace B
+  // (where they're a member).
+  //
+  // While contexts is loading, canCreatePipeline is false (no flash of
+  // button); once contexts ready, the right state renders.
+  const activeWorkspaceContext =
+    contexts.status === "ready" && activeSlug
+      ? contexts.contexts.find(
+          (c) =>
+            c.workspaceSlug === activeSlug &&
+            c.type === "agency" &&
+            c.source === "workspace",
+        ) ?? null
+      : null;
+  const canCreatePipeline =
+    activeWorkspaceContext?.role === "owner" ||
+    activeWorkspaceContext?.role === "admin";
+
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "#212124" }}>
       <header
@@ -75,10 +104,21 @@ export function AppShell({ children }: Props) {
           className="max-w-[1600px] mx-auto px-6 sm:px-12 h-full flex items-center"
           style={{ gap: "16px" }}
         >
-          {/* Logo */}
-          <div className="flex-shrink-0 flex items-center">
+          {/* Logo — clicking routes to the active workspace's dashboard
+              (or workspace selector if no active slug). Standard webapp
+              pattern (Linear, Notion, Slack all do this). Falls back to
+              `/` if activeSlug isn't resolved yet — won't happen on
+              normal /w/[slug]/* navigation since the URL has the slug. */}
+          <Link
+            href={activeSlug ? `/w/${activeSlug}` : "/"}
+            className="flex-shrink-0 flex items-center transition-opacity"
+            style={{ cursor: "pointer" }}
+            onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.8")}
+            onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
+            aria-label="Go to dashboard"
+          >
             <StagesLogo size={28} />
-          </div>
+          </Link>
 
           {/* Workspace switcher. Empty slot during the brief load window
               (no placeholder flash). */}
@@ -90,10 +130,13 @@ export function AppShell({ children }: Props) {
             />
           )}
 
-          {/* Search bar — Phase 4a step 2 visual placeholder. cmd+K wire-
-              up is post-4a; styled non-functional input. flex-1 absorbs
-              all leftover space; hidden below md so mobile chrome stays
-              tight. */}
+          {/* Search bar — Phase 4a visual placeholder. The actual search
+              + command palette wire-up is post-4a, but the ⌘K hint badge
+              on the right is the public commitment that this shortcut
+              is RESERVED for search (Slack / Linear convention). When
+              search ships, ⌘K opens it from anywhere; no other shortcut
+              should claim ⌘K. flex-1 absorbs leftover header space;
+              hidden below md so mobile chrome stays tight. */}
           <div className="flex-1 min-w-0 hidden md:block">
             <div
               className="flex items-center gap-2"
@@ -110,17 +153,36 @@ export function AppShell({ children }: Props) {
             >
               <Search size={14} style={{ color: "rgba(255,255,255,0.5)" }} />
               <span
-                className="text-[13px] truncate"
+                className="flex-1 text-[13px] truncate"
                 style={{ color: "rgba(255,255,255,0.4)" }}
               >
                 Search by name or company…
               </span>
+              {/* ⌘K hint badge — reserved for search. Don't bind this
+                  combo elsewhere. */}
+              <kbd
+                className="text-[11px] flex-shrink-0"
+                style={{
+                  background: "rgba(255,255,255,0.06)",
+                  color: "rgba(255,255,255,0.5)",
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  borderRadius: 4,
+                  padding: "2px 6px",
+                  fontFamily:
+                    "ui-monospace, SFMono-Regular, Menlo, monospace",
+                }}
+              >
+                ⌘K
+              </kbd>
             </div>
           </div>
 
           {/* + Pipeline button — only on workspace-scoped routes where
-              activeSlug is known. */}
-          {activeSlug && (
+              activeSlug is known AND the current user is a workspace
+              owner/admin. Members and pipeline-only agency users have
+              this hidden; the flex-1 search bar to its left grows to
+              fill the freed space, no layout jump. */}
+          {activeSlug && canCreatePipeline && (
             <button
               type="button"
               onClick={() => router.push(`/w/${activeSlug}/p/new`)}

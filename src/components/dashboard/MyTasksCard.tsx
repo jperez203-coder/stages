@@ -241,9 +241,21 @@ export function MyTasksCard({
                   <button
                     type="button"
                     onClick={() => {
+                      // Step 5 wires this: router.push(`/w/${slug}/p/
+                      // ${pipelineId}?stage=${stageId}`) — pipeline canvas
+                      // loads with the relevant stage focused/scrolled-to.
+                      // Step 6 may then auto-open the task detail panel
+                      // overlay on top of the canvas (Asana/Trello pattern).
+                      // Payload already includes the routing target so the
+                      // step 5 wire-up is one line.
                       console.log(
-                        "[step 2 stub] task row clicked. task detail panel arrives in step 6.",
-                        { taskId: task.id, source: "dashboard_my_tasks" },
+                        "[step 2 stub] task row clicked. step 5 routes to pipeline+stage; step 6 opens detail panel.",
+                        {
+                          taskId: task.id,
+                          pipelineId: task.stage.pipelineId,
+                          stageId: task.stage.id,
+                          source: "dashboard_my_tasks",
+                        },
                       );
                     }}
                     className="w-full flex items-center gap-3 transition-colors text-left"
@@ -252,7 +264,16 @@ export function MyTasksCard({
                       // the hover pill extends 12px into the card's outer
                       // padding on each side. Effect: wider hover surface
                       // without the dot/title content visually shifting.
-                      padding: "12px 12px",
+                      //
+                      // Vertical padding is 8px (not 12px) per the figma's
+                      // tighter dashboard density. Calibrated in two passes:
+                      // first compaction to 6px read too cramped, 8px keeps
+                      // rows clearly tighter than the original 12px while
+                      // leaving enough breathing room between titles. The
+                      // full /my-tasks view keeps its looser 14px for
+                      // scan-and-act readability — different surface,
+                      // different density rule.
+                      padding: "8px 12px",
                       margin: "0 -12px",
                       borderRadius: 10,
                       cursor: "pointer",

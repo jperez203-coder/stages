@@ -572,7 +572,7 @@ export default async function WorkspaceDashboardPage({
     : null;
 
   return (
-    <div className="dotted-grid px-6 sm:px-12 py-6 min-h-full">
+    <div className="dotted-grid flex-1 px-6 sm:px-12 py-6">
       <div className="max-w-[1600px] mx-auto">
         <DashboardGreeting firstName={firstName} />
 
@@ -597,6 +597,14 @@ export default async function WorkspaceDashboardPage({
           workspaceSlug={ws.slug}
           pipelines={pipelines}
           error={pipelinesRes.error?.message ?? null}
+          // Role gate for the "Create pipeline" CTA on the empty-state
+          // card. Same rule as the AppShell header button + the RPC's
+          // is_workspace_owner_or_admin gate. Members see a member-
+          // appropriate empty-state message instead of the CTA.
+          canCreatePipeline={
+            wsMembershipResult.data?.role === "owner" ||
+            wsMembershipResult.data?.role === "admin"
+          }
         />
       </div>
     </div>

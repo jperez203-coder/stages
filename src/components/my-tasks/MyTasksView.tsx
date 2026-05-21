@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import Link from "next/link";
-import { ArrowLeft, Search } from "lucide-react";
+import { ArrowLeft, Search, Check } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import {
   bucketForDeadline,
@@ -65,14 +65,42 @@ export function MyTasksView({
   const [activeChip, setActiveChip] = useState<Chip>("all");
   const [search, setSearch] = useState("");
   const [hideCompleted, setHideCompleted] = useState(false);
+  // Quick-add expansion state lives here (not inside QuickAddRow) so the
+  // bare-`N` keyboard handler can flip it from anywhere on the page. When
+  // the row is collapsed, its <input> isn't mounted — so a direct
+  // ref.focus() does nothing. Lifting `expanded` up lets us expand first,
+  // then focus the input on the next tick after it mounts.
+  const [quickAddExpanded, setQuickAddExpanded] = useState(false);
   const quickAddInputRef = useRef<HTMLInputElement | null>(null);
 
-  // ⌘N (or Ctrl+N on non-Mac) focuses the quick-add input from anywhere.
+  // Bare `N` focuses the quick-add input from anywhere on the page.
+  //
+  // History: spec originally called for ⌘N, but Cmd+N is reserved by the
+  // browser/OS for "New Window" — e.preventDefault() can't override it.
+  // Same fate as ⌘T, ⌘W, ⌘R, etc. Industry pattern in webapps is a
+  // single-key shortcut (Linear: C, Todoist: Q, Trello: C). We use `N`
+  // here because it matches the original intent ("N for new") and the
+  // visual hint stays short. ⌘K is reserved for the global search /
+  // command palette (Slack/Linear convention).
+  //
+  // Skips when the active element is an input / textarea / contenteditable
+  // so typing the letter "n" in the search box doesn't fire the shortcut.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.key.toLowerCase() === "n" && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
-        quickAddInputRef.current?.focus();
+        // Expand first (mounts the input), then focus on next tick.
+        setQuickAddExpanded(true);
+        setTimeout(() => quickAddInputRef.current?.focus(), 0);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -100,7 +128,7 @@ export function MyTasksView({
         dotColor: "#E273C1",
         dateLabel: DATE_FMT_FULL.format(tomorrow),
       },
-      { bucket: "thisWeek", label: "This week", dotColor: "#21B159" },
+      { bucket: "thisWeek", label: "This week", dotColor: "#108CE9" },
       { bucket: "later", label: "Later", dotColor: "#6B6B6B" },
       { bucket: "noDate", label: "No date", dotColor: "#6B6B6B" },
     ];
@@ -321,10 +349,24 @@ export function MyTasksView({
   const hasAnyTasks = tasks.length > 0;
 
   return (
-    <div className="dotted-grid min-h-full px-6 sm:px-12 py-6">
-      <div className="max-w-[1600px] mx-auto">
-        {/* Header row */}
-        <header className="flex items-center gap-3 mb-6">
+    <div className="flex-1 flex flex-col">
+      {/* Page header band — solid bg, no dots, with a subtle bottom
+          stroke. Pulled out of the dotted-grid area below so the header
+          stays a high-density text region (search + count + subtitle)
+          without the dot pattern showing through behind the readable
+          surfaces. Full-bleed background; content centered at max-w
+          matching the AppShell header's wrap. */}
+      <div
+        className="px-6 sm:px-12"
+        style={{
+          background: "#212124",
+          borderBottom: "1px solid #36363A",
+          paddingTop: 20,
+          paddingBottom: 20,
+        }}
+      >
+        <div className="max-w-[1600px] mx-auto">
+          <header className="flex items-center gap-3">
           <Link
             href={`/w/${workspaceSlug}`}
             className="flex items-center justify-center flex-shrink-0 transition-colors"
@@ -404,23 +446,54 @@ export function MyTasksView({
                 aria-label="Search tasks"
               />
             </div>
+            {/* Custom checkbox styled to match the TaskRow checkboxes —
+                grey fill + #36363A stroke when unchecked, blue fill when
+                checked. Native <input type="checkbox"> kept inside the
+                label (visually hidden) so the click target + keyboard
+                + screen-reader semantics are preserved without us
+                re-implementing them. */}
             <label
-              className="flex items-center gap-2 text-[13px] cursor-pointer select-none"
+              className="flex items-center gap-2 text-[13px] cursor-pointer select-none relative"
               style={{ color: "rgba(255,255,255,0.7)" }}
             >
               <input
                 type="checkbox"
                 checked={hideCompleted}
                 onChange={(e) => setHideCompleted(e.target.checked)}
-                style={{ cursor: "pointer" }}
+                className="sr-only"
               />
+              <span
+                aria-hidden
+                className="flex items-center justify-center flex-shrink-0 transition-colors"
+                style={{
+                  width: 16,
+                  height: 16,
+                  borderRadius: 4,
+                  background: hideCompleted ? "#108CE9" : "#212124",
+                  border: hideCompleted
+                    ? "1px solid #108CE9"
+                    : "1px solid #36363A",
+                }}
+              >
+                {hideCompleted && (
+                  <Check size={11} color="white" strokeWidth={3} />
+                )}
+              </span>
               Hide completed
             </label>
           </div>
-        </header>
+          </header>
+        </div>
+      </div>
 
-        {/* Filter chips */}
-        <div className="flex items-center gap-2 mb-6 flex-wrap">
+      {/* Dotted-grid content area — chips + sections + quick-add. Same
+          treatment as the dashboard page: dotted background, max-w-1600
+          inner wrap, flex-1 so the background extends past the last row
+          to the bottom of the viewport. */}
+      <div className="dotted-grid flex-1 px-6 sm:px-12 py-6">
+        <div className="max-w-[1600px] mx-auto">
+          {/* Filter chips */}
+          <div className="flex items-center gap-2 mb-6 flex-wrap">
           <FilterChip
             label="All"
             count={chipCounts.all}
@@ -560,19 +633,40 @@ export function MyTasksView({
           </div>
         )}
 
-        {/* Quick add row */}
+        {/* Quick add row — expanded state lifted up so the bare-`N`
+            keyboard shortcut can transition collapsed → expanded
+            (input is only mounted in expanded state, so focus alone
+            doesn't suffice). */}
         <div className="mt-8">
           <QuickAddRow
             pipelines={pipelines}
             lastActivePipelineId={lastActivePipelineId}
             inputRef={quickAddInputRef}
+            expanded={quickAddExpanded}
+            onExpandedChange={setQuickAddExpanded}
             onCreate={addTask}
           />
         </div>
 
-        {/* currentUserId kept in scope for future per-row author checks
-            (e.g., showing "you" in subtitle for tasks created by self). */}
-        <span className="sr-only">{currentUserId}</span>
+        {/* Recently-done link — soft secondary action, intentionally below
+            the primary list so it stays out of daily attention. Surfaces
+            the rolling 7-day completed list (assignee_id = me AND
+            completed_at >= now() - 7 days). No "Restore" affordance there;
+            permanent delete lives in the task detail panel (step 6). */}
+        <div className="mt-6 text-center">
+          <Link
+            href={`/w/${workspaceSlug}/my-tasks/recently-done`}
+            className="text-[13px] transition-colors"
+            style={{ color: "rgba(255,255,255,0.4)" }}
+          >
+            Recently done →
+          </Link>
+        </div>
+
+          {/* currentUserId kept in scope for future per-row author checks
+              (e.g., showing "you" in subtitle for tasks created by self). */}
+          <span className="sr-only">{currentUserId}</span>
+        </div>
       </div>
     </div>
   );

@@ -28,9 +28,14 @@ import type { PipelineLite } from "./types";
 type Props = {
   pipelines: PipelineLite[];
   lastActivePipelineId: string | null;
-  /** Parent passes a ref so ⌘N from anywhere in MyTasksView can focus
-   *  the input directly without expanding through a click. */
+  /** Parent passes a ref so the bare-`N` keyboard handler in MyTasksView
+   *  can focus the input directly after expanding the row. */
   inputRef: RefObject<HTMLInputElement | null>;
+  /** Controlled expansion state — lifted to MyTasksView so the keyboard
+   *  shortcut can expand from anywhere on the page (the input isn't
+   *  mounted while collapsed, so focus alone can't transition states). */
+  expanded: boolean;
+  onExpandedChange: (next: boolean) => void;
   onCreate: (stageId: string, title: string) => Promise<void>;
 };
 
@@ -38,9 +43,10 @@ export function QuickAddRow({
   pipelines,
   lastActivePipelineId,
   inputRef,
+  expanded,
+  onExpandedChange,
   onCreate,
 }: Props) {
-  const [expanded, setExpanded] = useState(false);
   const [title, setTitle] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -69,10 +75,10 @@ export function QuickAddRow({
   useEffect(() => {
     const node = inputRef.current;
     if (!node) return;
-    const onFocus = () => setExpanded(true);
+    const onFocus = () => onExpandedChange(true);
     node.addEventListener("focus", onFocus);
     return () => node.removeEventListener("focus", onFocus);
-  }, [inputRef]);
+  }, [inputRef, onExpandedChange]);
 
   const canSubmit =
     title.trim().length > 0 &&
@@ -94,17 +100,17 @@ export function QuickAddRow({
       <button
         type="button"
         onClick={() => {
-          setExpanded(true);
+          onExpandedChange(true);
           // Defer to next tick so the input is mounted before we focus it.
           setTimeout(() => inputRef.current?.focus(), 0);
         }}
         className="w-full flex items-center gap-2 transition-colors"
         style={{
           padding: "16px 20px",
-          background: "transparent",
-          border: "1.5px dashed rgba(255,255,255,0.15)",
+          background: "#222933",
+          border: "1.5px dashed #25476B",
           borderRadius: 12,
-          color: "rgba(255,255,255,0.5)",
+          color: "#35C4EE",
           cursor: "pointer",
           fontSize: 14,
           fontWeight: 500,
@@ -113,11 +119,12 @@ export function QuickAddRow({
         <Plus size={14} />
         <span>Quick add task</span>
         <span className="flex-1" />
-        <span
-          className="text-[11px]"
-          style={{ color: "rgba(255,255,255,0.35)" }}
-        >
-          ⌘N
+        {/* Hint is the bare key `N` — Cmd+N is reserved by the browser
+            for New Window and can't be intercepted; ⌘K is reserved for
+            the global search/command palette per the Slack/Linear
+            convention. See MyTasksView keyboard handler. */}
+        <span className="text-[11px]" style={{ color: "#35C4EE" }}>
+          N
         </span>
       </button>
     );
@@ -143,7 +150,7 @@ export function QuickAddRow({
             e.preventDefault();
             void submit();
           } else if (e.key === "Escape") {
-            setExpanded(false);
+            onExpandedChange(false);
             setTitle("");
           }
         }}
