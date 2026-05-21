@@ -4,6 +4,141 @@ A running log of what shipped in each session. Newest first.
 
 ---
 
+## Phase 4a — step 5a: pipeline canvas core (pan/zoom shell) (2026-05-21)
+
+**Goal:** replace the 404 stub at `/w/[slug]/p/[pipeline-id]` with a real route that renders a pan/zoom canvas shell — the gesture surface that 5b's stage boxes, 5c's tasks, 5d's left rail + header, and 5e's edit mode will all sit on top of. The point of isolating 5a from the rest of step 5 was to nail the gesture feel before adding visual complexity that would make it harder to A/B the interaction layer.
+
+**Scope intentionally narrow:** empty pan/zoom shell only. NO real stages, NO tasks, NO left rail, NO edit mode, NO task detail panel. 5a renders 3-4 throwaway blue-dashed placeholder boxes that get deleted in 5b when real stage rendering arrives.
+
+### Migration (applied manually, no file in repo)
+
+```sql
+alter table public.profiles
+  add column if not exists canvas_hint_dismissed boolean not null default false;
+```
+
+Per-user (not per-pipeline, not per-workspace) flag tracking whether the user has dismissed the canvas coachmark. Defaults `false` so brand-new + existing users both see the hint on their next canvas visit. Applied by hand in the Supabase SQL editor; no migration file checked in (matches the pattern from the dismissed_at rollback — manual app-once SQL when there's no CLI workflow). PROGRESS.md is the only audit trail for this.
+
+### Library — react-zoom-pan-pinch v4.0.3
+
+Chosen for the spec's locked recommendation. Figma-parity gestures are non-trivial to get right (delta normalization, trackpad vs mouse disambiguation, pinch detection, velocity inertia) — rolling our own would have eaten a week. The lib delivers all of that out of the box with the right config knobs.
+
+**Configured for figma-parity:**
+
+| Prop | Value | Rationale |
+| --- | --- | --- |
+| `wheel.activationKeys` | `(keys) => keys.includes("Meta") \|\| keys.includes("Control")` | **Critical bug caught:** array form `["Meta","Control"]` is interpreted by the lib as `keys.every(k => pressedKeys[k])` — i.e., requires BOTH simultaneously. Cmd+wheel alone never satisfied this, so the lib never activated zoom and the browser took over with native page zoom (the "leads me to another place" symptom in verification). Function form lets us return true for EITHER. |
+| `wheel.step` | `0.03` | Lib default is `0.015`. Initial config was `0.15` = 10× default — single trackpad swipe slammed scale from min to max. `0.03` = 2× default, gradual + controllable, lands cleanly on intermediate scales. |
+| `minScale / maxScale` | `0.25 / 2` | Clamps zoom to a usable range. 2x is plenty for stage/task work; lib default 8x is unusable. |
+| `limitToBounds` | `false` | Free pan beyond content — required for the user to pan placeholders off-screen and exercise edge fades. |
+| `centerOnInit` | `false` | We manually `zoomToElement("placeholder-1")` in `onInit` to target a specific element instead of the geometric center. In 5b this targets the current in-progress stage. |
+| `trackPadPanning.disabled` | `true` | Our custom wheel handler covers trackpad two-finger pan. Letting the lib's trackpad handler also run would double-apply the pan delta. |
+| `panning.allowLeftClickPan` | `true` | Click+drag pan, with velocity inertia (`velocityDisabled: false`). |
+| `doubleClick.disabled` | `true` | No double-click zoom — would conflict with future task-row double-click semantics in step 6. |
+| `pinch.step: 5` | default | Trackpad pinch zoom (browser fires synthetic ctrlKey, caught by activationKeys). |
+| `smooth: true` | — | Smooth interpolation on all transforms. |
+
+### Wheel handling (custom + lib, split deterministically)
+
+react-zoom-pan-pinch handles all pan/zoom natively EXCEPT for the spec's "plain mouse wheel pans vertically, shift+wheel pans horizontally" requirement. We add a custom native wheel listener on the canvas wrapper:
+
+```ts
+const onWheel = (e: WheelEvent) => {
+  e.preventDefault(); // unconditional — see below
+
+  if (e.ctrlKey || e.metaKey) return; // lib handles zoom
+  if (!transformRef.current) return;
+
+  let dx = e.deltaX, dy = e.deltaY;
+  if (e.shiftKey && Math.abs(dx) < 0.01) { dx = dy; dy = 0; }
+
+  const { positionX, positionY, scale } = transformRef.current.state;
+  transformRef.current.setTransform(positionX - dx, positionY - dy, scale, 0);
+};
+wrapper.addEventListener("wheel", onWheel, { passive: false });
+```
+
+**Two non-obvious points:**
+
+1. **`preventDefault` is unconditional**, before the modifier-key branch. Without this, Cmd+wheel cascades to the browser's native page-zoom shortcut (the "navigated to another place" symptom — the entire app chrome scales up/down). The lib's own zoom path also calls preventDefault, but unconditional preventDefault in our handler guarantees we never lose a race against the browser default.
+2. **`{ passive: false }` registration** — React 19's synthetic wheel events default to passive, which blocks preventDefault. Native registration with `passive: false` is required.
+
+### Edge fade math (content-aware, all 4 sides)
+
+```ts
+const planeLeft   = -positionX / scale;
+const planeRight  = (W - positionX) / scale;
+const planeTop    = -positionY / scale;
+const planeBottom = (H - positionY) / scale;
+
+setEdges({
+  left:   bbox.left   + EPS < planeLeft,
+  right:  bbox.right  - EPS > planeRight,
+  top:    bbox.top    + EPS < planeTop,
+  bottom: bbox.bottom - EPS > planeBottom,
+});
+```
+
+Recompute fires on every transform tick via `onTransform` callback. State is lifted to PipelineCanvas (rather than EdgeFades using `useTransformEffect` directly) so the fade component can live as a sibling of TransformWrapper without needing access to the lib's React context. Initial state computed via post-`onInit` `requestAnimationFrame` so the first paint has correct fades.
+
+**Tokens locked:** 60px gradient strip per edge, `linear-gradient(direction, rgba(0,0,0,0.55), rgba(0,0,0,0))`, 180ms ease-out opacity transition. The 0.55 alpha was bumped from an initial 0.35 during verification — 0.35 read as a faint hint users could miss; 0.55 is the sweet spot where the fade clearly signals "more content over there" without obscuring nearby content. `pointer-events: none` so they never intercept pan drags. zIndex 10 (above content, below pill / coachmark / zoom controls at 20+).
+
+### Other locked details
+
+- **Dotted grid** lives inside the TransformComponent content plane so it pans + zooms with the canvas. Dot color `#4A4A4A` (one step brighter than the dashboard's `#424242` token) — the dots live inside a translate3d+scale parent, and the browser's transform render pipeline antialiases them slightly more than the dashboard's static grid; the brighter token brings perceived visibility back to dashboard-parity without making them "in your face."
+- **Stage-indicator pill** top-center, persistent, "showing stage X of Y" — 5a shows "stage 1 of 4" against the placeholders. Click recenters via `zoomToElement("placeholder-1")`. 5b wires this to the real current-stage derivation.
+- **Zoom controls** bottom-right, three buttons (+/−/fit) stacked vertically with 8px gap. 38px square buttons with backdrop-blur.
+- **Coachmark** "drag to pan · scroll to zoom" bottom-center pill, renders once per user. Reads `canvas_hint_dismissed` SSR-side (so already-dismissed users don't see a flash). Dismisses on X click OR any pointerdown/wheel anywhere on the window. UPDATE persists the flag.
+
+### Files added (this commit)
+
+```
+new file: src/app/w/[slug]/p/[pipeline-id]/page.tsx       (server, auth gate, 110 lines)
+new file: src/components/canvas/PipelineCanvas.tsx        (client orchestrator, ~395 lines)
+new file: src/components/canvas/EdgeFades.tsx             (4-edge fade overlay, ~105 lines)
+new file: src/components/canvas/CanvasCoachmark.tsx       (first-time hint, ~120 lines)
+new file: src/components/canvas/StageIndicatorPill.tsx    (top-center recenter pill, 61 lines)
+new file: src/components/canvas/ZoomControls.tsx          (+/−/fit buttons, 92 lines)
+modified: package.json + package-lock.json                (+ react-zoom-pan-pinch@4.0.3)
+```
+
+### Bugs caught + fixed during verification (in order)
+
+1. **Corrupted `.next` cache (self-inflicted).** I ran `rm -rf .next` while Jordan's dev server was still running — wiped cache files his Turbopack workers had open handles into, surfaced as a 500 with ENOENT on `.next/dev/cache/turbopack`. Clean rebuild fixed it. **Lesson:** don't wipe `.next` while another dev server is alive; coordinate first.
+2. **TransformWrapper / TransformComponent sizing collapse.** `TransformWrapper` renders NO DOM (just a Context.Provider); the only div is TransformComponent's outer wrapper. My initial `wrapperStyle={{ width: "100%", height: "100%" }}` competed with the lib's default class CSS (`width: fit-content; height: fit-content`) in a way that didn't fully resolve — visible as a partial-coverage grid with a dark band at the top. **Fix:** added `position: absolute; inset: 0;` to wrapperStyle alongside the width/height. Position absolute + inset 0 is the bulletproof CSS way to fill a `position: relative` parent.
+3. **`setTimeout(0)` auto-center race.** Initial impl called `zoomToElement("placeholder-1")` from a `setTimeout` inside `useEffect`. The lib's internal init runs in ITS own useEffect on mount — `setTimeout(0)` raced that init and `zoomToElement` no-op'd when the lib's internal state wasn't ready. Placeholders sat at plane (1700, 1700) far off-screen. **Fix:** switched to the lib's `onInit` callback, which fires AFTER internal state + DOM refs are ready. Wrapped in `requestAnimationFrame` for one extra safety frame.
+4. **Placeholders too subtle.** Initial `#2C2C2F` bg + `1px dashed #4A4A50` border = nearly invisible against the dotted grid. **Fix:** `rgba(16,140,233,0.12)` bg + `2px dashed #108CE9` border (Stages primary blue) + `#7FA7D9` text. Blue chosen because green is reserved for the Done badge semantic.
+5. **`wheel.step` 10× too high.** Original `step: 0.15` vs lib default `0.015` made single trackpad swipes slam from min to max. **Fix:** `0.03` (2× default).
+6. **`activationKeys` array form required BOTH keys simultaneously.** Lib uses `keys.every(...)` internally. With `["Meta", "Control"]` the user had to hold Cmd AND Ctrl together to activate zoom — they never did, so lib zoom never fired and the browser's native page-zoom kicked in. **Fix:** function form `(keys) => keys.includes("Meta") || keys.includes("Control")`.
+7. **`preventDefault` conditional in custom wheel handler.** Initial impl only called preventDefault on the pan path (no modifier); the zoom-path branch returned early without preventing. When the lib's zoom path was slow to activate, browser default ran first and zoomed the page. **Fix:** unconditional preventDefault at the top of the wheel handler.
+8. **Edge fade too subtle.** Initial `rgba(0,0,0,0.35)` read as a faint hint users could miss. **Fix:** `rgba(0,0,0,0.55)`.
+9. **Canvas dots dimmer than dashboard dots despite same token.** Subpixel softening under CSS transform. **Fix:** bumped `#424242` → `#4A4A4A` on the canvas only (one notch brighter); dashboard stays `#424242`.
+
+### Verification (verified by Jordan, gesture pass)
+
+- `/w/[slug]/p/[pipeline-id]` renders the canvas (was 404 stub)
+- Pan: click-drag, plain scroll, shift+scroll horizontal, trackpad two-finger — all smooth
+- Zoom: Cmd+scroll, Ctrl+scroll, trackpad pinch, +/−/fit buttons — controllable and clamps at 0.25x–2x
+- Edge fades visible at 0.55 opacity, content-aware, all 4 sides
+- Coachmark renders bottom-center on first load (verified after resetting the dismissed flag), X dismisses, persists across reloads
+- Stage-indicator pill top-center, recenter-on-click works
+- Auto-center on load lands placeholder-1 in viewport center
+- Unauthed → /auth/signin?next= (307)
+
+### Deferred for later sub-steps
+
+- **Coachmark auto-dismiss is window-scoped** (`window.addEventListener` for pointerdown/wheel). Any interaction anywhere on the page — header click, search bar focus, scroll on a non-canvas element — dismisses the hint. **Scope this to canvas-only in 5d** when the left rail + header land and there's a cleaner separation of what counts as "the canvas." Acceptable trade for MVP.
+- **5b inherits:** real stage rendering with the locked 3-state coloring (grey/purple/green) per the figma. Placeholders go away. Stage-indicator pill wires to real current-stage derivation. Auto-center targets the in-progress stage.
+- **5d inherits:** the left rail (cursor/chat/activity/links/members/+invite icons), the real header (member cluster + Edit pipeline button), and the role-gated affordances.
+
+### Lessons learned (apply forever)
+
+1. **Read library prop type semantics before configuring.** `activationKeys: string[]` vs `(keys) => boolean` look interchangeable in TypeScript — both compile, both typecheck. But the array form internally means `keys.every(...)` (ALL must be pressed); the function form lets you express EITHER. Cost: one verification round where Cmd+wheel triggered browser page zoom instead of canvas zoom because the lib's zoom path never activated. Lesson: when a prop accepts multiple type shapes, the JSON-style one usually has surprising semantics. Read the lib source if the docs don't explain.
+2. **Always `preventDefault` on canvas wheel events unconditionally.** Browser-native Cmd+wheel = page zoom, plain wheel = page scroll if any ancestor has overflow. Both will steal the gesture from your in-app handler if your preventDefault has any conditional branches. Cover all cases at the top of the handler.
+3. **Don't wipe `.next` while another dev server is running.** Turbopack workers hold file handles into the cache; wiping under them surfaces as cryptic 500s on the OTHER server. Coordinate cache cleanup, or just don't bother — `next build` is enough verification signal in most cases.
+
+---
+
 ## Phase 4a — step 4 polish round + storage-free recently-done (2026-05-20)
 
 **Goal:** annotate the populated My Tasks view across all six buckets, lock the visual surface, address the questions step 4 exposed (how long do completed tasks stay on screen? what's the keyboard story? what's the multi-plan story for headers?), and decide what step 5 inherits as locked tokens vs. open decisions.
