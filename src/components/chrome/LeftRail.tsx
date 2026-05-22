@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import {
   MousePointer2,
   Activity,
@@ -57,6 +58,20 @@ export function LeftRail({
   canEditPipeline,
 }: Props) {
   const [membersOpen, setMembersOpen] = useState(false);
+  const pathname = usePathname();
+
+  // Section-icon active state derives from the current pathname:
+  //   * Canvas (cursor)   → pathname is exactly `/w/<slug>/p/<id>`
+  //   * Chat              → pathname ends with `/chat`
+  // The +invite icon is not a section toggle — it's an action that takes
+  // you to /clients — so /clients renders with no section icon active
+  // (cursor and chat both correctly read as "not the current surface").
+  // 4b slice 1 wires the chat icon active state; chat surface ships
+  // with this commit.
+  const canvasPath = `/w/${workspaceSlug}/p/${pipelineId}`;
+  const chatPath = `${canvasPath}/chat`;
+  const onCanvas = pathname === canvasPath;
+  const onChat = pathname === chatPath;
 
   return (
     <>
@@ -74,28 +89,18 @@ export function LeftRail({
           gap: 4,
         }}
       >
-        {/* Cursor / canvas view — LIVE + currently active. The canvas
-            IS what we built; this is just the indicator. Clicking does
-            nothing useful (we're already here). */}
-        <RailIcon
-          label="Canvas"
-          active
-          onClick={() => {
-            /* Already viewing canvas — no-op */
-          }}
-        >
+        {/* Cursor / canvas view — LIVE. Active when on the canvas
+            route exactly. Renders as a Link back to the canvas from
+            sibling routes (/clients, /chat) so users can return to
+            the canvas surface in one click. */}
+        <RailIcon label="Canvas" href={canvasPath} active={onCanvas}>
           <MousePointer2 size={18} />
         </RailIcon>
 
-        {/* Chat — COMING SOON (4b). Custom SVG: round speech bubble
-            outline (adapted from lucide MessageCircle) + 2 horizontal
-            lines inside to suggest message text. Lucide ships
-            MessageCircleMore (with dots) and MessageCircle (empty) but
-            not a "circle bubble with text lines" variant — closest to
-            the figma reference is this inline custom. Second line
-            shorter than the first so it reads "second line of a
-            message" rather than two parallel bars. */}
-        <RailIcon label="Chat — coming soon" comingSoon>
+        {/* Chat — LIVE as of 4b slice 1. Active when pathname ends
+            /chat. Round speech bubble + two horizontal text lines —
+            see ChatBubbleLinesIcon below. */}
+        <RailIcon label="Chat" href={chatPath} active={onChat}>
           <ChatBubbleLinesIcon size={18} />
         </RailIcon>
 

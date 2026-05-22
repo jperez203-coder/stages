@@ -23,9 +23,34 @@ import Image from "next/image";
 
 // Hash → palette. Same hash math as HeaderProfileMenu.tsx so the modulo
 // produces stable color per user across surfaces (within the same palette
-// size; cross-palette identity isn't a goal). The four-color palette below
-// is the Phase 4a brand subset per the spec.
-const COLORS = ["#DF1E5A", "#E273C1", "#21B159", "#36C5EF"];
+// size; cross-palette identity isn't a goal).
+//
+// 2026-05-22 polish: switched from a 4-color single-tone palette
+// (saturated fill + white letter) to a paired palette where each slot
+// has a DARK muted fill + a VIVID letter color. Matches the figma
+// reference for the header member cluster (#192526/#15B981,
+// #351E2E/#ED4899, #293C4D/#3A97D8). The vivid letter color is the
+// "user's brand color" identity-wise; the muted fill is the tile bg
+// behind it. Photo avatars always render flat (no colored ring) —
+// the previously-supported `bordered` variant was dropped in the
+// 2026-05-22 polish pass alongside the HeaderProfileMenu stroke
+// removal; ring-around-photo is no longer used on any surface.
+//
+// 4 pairs (bumped from 3 on 2026-05-22 polish — added amber for
+// better differentiation in larger member rosters). The letter
+// colors here MUST stay in sync with HeaderProfileMenu.tsx's COLORS
+// array, in this exact order, so the modulo-N slot semantics line up
+// across surfaces. Note: cross-surface color stability for the SAME
+// user requires that both surfaces also hash the same input — they
+// don't today (UserAvatar hashes user.id, HeaderProfileMenu hashes
+// email), so a user may land in different slots on the two surfaces.
+// Flagged but not fixed in this polish.
+const AVATAR_PALETTE: ReadonlyArray<{ fill: string; letter: string }> = [
+  { fill: "#192526", letter: "#15B981" }, // green
+  { fill: "#351E2E", letter: "#ED4899" }, // pink
+  { fill: "#293C4D", letter: "#3A97D8" }, // blue
+  { fill: "#2B221E", letter: "#F59E0C" }, // amber
+];
 
 export type AvatarUser = {
   id: string;
@@ -44,28 +69,25 @@ export type AvatarUser = {
 
 type Props = {
   user: AvatarUser;
-  /** Pixel diameter. Font size is 0.4× this. */
+  /** Pixel diameter. Font size is 0.5× this. */
   size: number;
-  /** When true, photo-variant avatars get a 2px colored stroke (the
-   *  deterministic per-user color, full saturation). Initial-variant
-   *  avatars already render the color as their background — no border
-   *  added since it'd be the same color as the fill. Used by the
-   *  pipeline header's MembersPopover per figma (each member row
-   *  has a colored ring around their photo). Default false to keep
-   *  existing dashboard avatars untouched. */
-  bordered?: boolean;
 };
 
-export function UserAvatar({ user, size, bordered = false }: Props) {
+export function UserAvatar({ user, size }: Props) {
   // Deterministic color from user.id so the same person gets the same
   // color across renders, sessions, devices. id is a uuid string;
   // charCodeAt over the whole string gives enough entropy to spread
-  // evenly across the 4-color palette.
+  // evenly across the 3-pair palette. The assignment LOOKS random to
+  // an observer (no obvious letter→color relationship) but is stable
+  // per-user — Casey always gets her hash slot, Taylor always gets
+  // hers, etc. Locked behavior 2026-05-22 (rolled back a brief
+  // letter-based experiment because the spec is "random per user with
+  // no photo," not "color follows letter").
   let hash = 0;
   for (let i = 0; i < user.id.length; i++) {
     hash = user.id.charCodeAt(i) + ((hash << 5) - hash);
   }
-  const color = COLORS[Math.abs(hash) % COLORS.length];
+  const palette = AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length];
 
   // Initial fallback chain: avatar_url (handled below) → display_name → email → "?"
   // Email is used only for the initial char; never exposed to alt/aria.
@@ -78,7 +100,11 @@ export function UserAvatar({ user, size, bordered = false }: Props) {
     "?"
   ).toUpperCase();
 
-  const fontSize = Math.round(size * 0.4);
+  // Initial scale bumped 0.4 → 0.5 of avatar diameter so CSS-rendered
+  // letters match the visual size of photo-rendered avatars from
+  // Google's default-avatar service (whose glyph fills more of the
+  // tile than our previous 40% scale). Polish 2026-05-22.
+  const fontSize = Math.round(size * 0.5);
   // Proportional rounded-square corner — matches the header avatar's
   // 10px-on-40px aesthetic (25% of size, clamped at 4px minimum). At
   // common dashboard sizes: 24→6, 32→8, 40→10. Replaces the previous
@@ -105,11 +131,12 @@ export function UserAvatar({ user, size, bordered = false }: Props) {
           objectFit: "cover",
           flexShrink: 0,
           display: "block",
-          // Bordered variant: 2px colored stroke around the photo.
-          // box-sizing: border-box (above) keeps the visible footprint
-          // exactly `size`px regardless of whether the border is on,
-          // so the avatar doesn't grow when `bordered` is true.
-          border: bordered ? `2px solid ${color}` : "none",
+          // No stroke around photo avatars anywhere — Jordan polish
+          // 2026-05-22. The previously-supported `bordered` variant
+          // (2px colored ring used by MembersPopover) was removed
+          // alongside the prop; photo avatars render flat across all
+          // surfaces.
+          border: "none",
         }}
       />
     );
@@ -117,12 +144,19 @@ export function UserAvatar({ user, size, bordered = false }: Props) {
 
   return (
     <div
-      className="flex items-center justify-center font-medium flex-shrink-0"
+      // font-bold (700) so CSS-rendered initials match the visual
+      // weight of photo-rendered avatars from Google's default-avatar
+      // service (whose baked-in glyph reads bolder than font-medium).
+      // Polish 2026-05-22.
+      className="flex items-center justify-center font-bold flex-shrink-0"
       style={{
         width: `${size}px`,
         height: `${size}px`,
-        background: color,
-        color: "white",
+        // Paired palette: muted dark fill behind a vivid letter — the
+        // letter color is the user's identity color. Matches the figma
+        // member-cluster reference and the chunky chip aesthetic.
+        background: palette.fill,
+        color: palette.letter,
         borderRadius: cornerRadius,
         fontSize: `${fontSize}px`,
         lineHeight: 1,

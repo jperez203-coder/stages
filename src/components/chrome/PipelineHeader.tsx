@@ -311,40 +311,44 @@ function MemberCluster({
       onClick={onClick}
       aria-label={`Pipeline members${overflow > 0 ? ` (+${overflow} more)` : ""}`}
       style={{
+        // Pill container wrapping the cluster — matches the figma
+        // reference's outer rect: fill #121212, 1px #36363A stroke,
+        // rx proportional to height (~0.21). Hover deepens border to
+        // #4A4A50. Sized down 2026-05-22 polish round (was padding
+        // 4px/5px + radius 9 around a 34px tile; now 3px/4px + radius 8
+        // around a 30px tile — same proportions, ~12% smaller overall).
         display: "flex",
         alignItems: "center",
-        background: "transparent",
-        border: "none",
-        padding: "4px 4px",
+        background: "#121212",
+        border: "1px solid #36363A",
+        padding: "3px 4px",
         cursor: "pointer",
-        borderRadius: 6,
+        borderRadius: 8,
         flexShrink: 0,
-        transition: "background 120ms ease-out",
+        transition: "border-color 120ms ease-out",
       }}
       onMouseEnter={(e) =>
-        (e.currentTarget.style.background = "rgba(255,255,255,0.04)")
+        (e.currentTarget.style.borderColor = "#4A4A50")
       }
       onMouseLeave={(e) =>
-        (e.currentTarget.style.background = "transparent")
+        (e.currentTarget.style.borderColor = "#36363A")
       }
     >
       {visible.map((m, idx) => (
         <span
           key={m.user.id}
           style={{
-            // Overlap each avatar slightly into the previous one — the
-            // canonical "cluster" treatment from the dashboard's
-            // PipelineCard.
-            marginLeft: idx === 0 ? 0 : -8,
-            // Square-ish wrapper (6px corners) so the cluster reads as
-            // rounded-SQUARE chips matching the profile menu's avatar +
-            // the popover's avatars. Previously used borderRadius:"50%"
-            // which made the dark wrapper background show as a circular
-            // halo at the corners of the rounded-square inner avatar,
-            // making the whole thing read more circular than intended.
-            borderRadius: 6,
+            // Tiles: 30×30 wrapper (24px UserAvatar + 3px #121212 ring
+            // on each side) with rx ≈ 0.3 × wrapper = 9 → keeps the
+            // figma reference's wrapper-rx ratio (11.5/39 ≈ 0.295).
+            // The 3px ring is the dark separator that shows between
+            // overlapping tiles — preserved at original thickness so
+            // the separator remains visually crisp at the smaller
+            // tile size. Overlap proportional to wrapper.
+            marginLeft: idx === 0 ? 0 : -7,
+            borderRadius: 9,
             background: "#121212",
-            padding: 2,
+            padding: 3,
             display: "inline-flex",
           }}
         >
@@ -354,21 +358,34 @@ function MemberCluster({
       {overflow > 0 && (
         <span
           style={{
-            marginLeft: -8,
-            width: 24,
-            height: 24,
-            borderRadius: 6,
-            background: "#36363A",
-            color: "rgba(255,255,255,0.7)",
-            fontSize: 10,
-            fontWeight: 600,
+            // Same tile treatment as a member avatar — wrapper ring +
+            // proportional corner radius — but with #36363A fill +
+            // white text instead of a deterministic per-user color.
+            // Reads as "more members, none of them individually" while
+            // staying visually flush with the avatar tiles.
+            marginLeft: -7,
+            borderRadius: 9,
+            background: "#121212",
+            padding: 3,
             display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            border: "2px solid #121212",
           }}
         >
-          +{overflow}
+          <span
+            style={{
+              width: 24,
+              height: 24,
+              borderRadius: 6,
+              background: "#36363A",
+              color: "white",
+              fontSize: 10,
+              fontWeight: 600,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            +{overflow}
+          </span>
         </span>
       )}
     </button>

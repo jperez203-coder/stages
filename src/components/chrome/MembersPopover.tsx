@@ -225,7 +225,7 @@ function MemberRow({ member }: { member: ChromeMember }) {
         padding: "6px 4px",
       }}
     >
-      <UserAvatar user={member.user} size={36} bordered />
+      <UserAvatar user={member.user} size={36} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div
           style={{

@@ -6,7 +6,19 @@ import { useRouter } from "next/navigation";
 import { LogOut, Settings } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
-const COLORS = ["#3BA5EE", "#8B5CF6", "#EC4899", "#F59E0B", "#10B981", "#06B6D4", "#F43F5E"];
+// Trimmed from a 7-color brand subset to the 4 LETTER colors that
+// mirror UserAvatar.tsx's AVATAR_PALETTE in the same order
+// (green / pink / blue / amber). Modulo-4 in both files so the slot
+// semantics line up. Rendering style here stays as the subtle alpha
+// pill (background = color + "33", text = color) — the dark-fill/
+// vivid-letter chip treatment is UserAvatar's. Keep these two arrays
+// synchronized when adding or reordering palette entries.
+const COLORS = [
+  "#15B981", // green   — pairs with AVATAR_PALETTE[0]
+  "#ED4899", // pink    — pairs with AVATAR_PALETTE[1]
+  "#3A97D8", // blue    — pairs with AVATAR_PALETTE[2]
+  "#F59E0C", // amber   — pairs with AVATAR_PALETTE[3]
+];
 
 type Props = {
   email: string;
@@ -240,7 +252,11 @@ function Avatar({
           boxSizing: "border-box",
           borderRadius: "6px",
           objectFit: "cover",
-          border: `1px solid ${color}66`,
+          // Stroke removed 2026-05-22 — Jordan polish pass. Photo + initial
+          // branches both render borderless now on dashboard + canvas
+          // (HeaderProfileMenu is the avatar in the top-right of both
+          // AppShell and PipelineChromeShell).
+          border: "none",
           display: "block",
         }}
       />
@@ -256,7 +272,8 @@ function Avatar({
         boxSizing: "border-box",
         background: color + "33",
         color,
-        border: `1px solid ${color}66`,
+        // Stroke removed 2026-05-22 — see comment on the photo branch above.
+        border: "none",
         borderRadius: "6px",
         fontSize: `${fontSize}px`,
       }}
