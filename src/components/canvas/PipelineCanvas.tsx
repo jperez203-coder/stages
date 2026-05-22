@@ -46,6 +46,8 @@ import {
 } from "@/lib/current-stage";
 import { supabase } from "@/lib/supabase";
 import { useEditMode } from "@/components/chrome/EditModeContext";
+import { TaskDetailPanel } from "./TaskDetailPanel";
+import type { ChromeMember } from "@/lib/canvas-chrome-data";
 import type {
   StageRaw,
   TaskRaw,
@@ -85,9 +87,16 @@ import type {
 
 type Props = {
   pipelineId: string;
+  /** Step 6: pipeline name for the TaskDetailPanel's breadcrumb
+   *  (pipeline name › stage name). Other pipeline fields stay in
+   *  the chrome data and don't need to be threaded here. */
+  pipelineName: string;
   coachmarkInitiallyDismissed: boolean;
   stages: StageRaw[];
   tasks: TaskRaw[];
+  /** Step 6: pipeline members for the TaskDetailPanel's assignee
+   *  picker. Same `ChromeMember[]` shape the chrome shell uses. */
+  members: ChromeMember[];
   currentUserId: string;
   canEditPipeline: boolean;
 };
@@ -111,9 +120,11 @@ type StageVM = {
 
 export function PipelineCanvas({
   pipelineId,
+  pipelineName,
   coachmarkInitiallyDismissed,
   stages: initialStages,
   tasks: initialTasks,
+  members,
   currentUserId,
   canEditPipeline,
 }: Props) {
@@ -444,7 +455,9 @@ export function PipelineCanvas({
 
       // Append the new task to local state. Re-derivation re-runs via
       // useMemo dependency on tasksState. Stage subtitle (X/Y task)
-      // updates immediately.
+      // updates immediately. Step-6 fields default to the DB defaults
+      // (description null, client_visible false) — RPC return doesn't
+      // include them so we set them locally to keep TaskRaw shape happy.
       setTasksState((prev) => [
         ...prev,
         {
@@ -456,24 +469,38 @@ export function PipelineCanvas({
           assignee_id: result.assignee_id,
           completed_at: null,
           completed_by: null,
+          description: null,
+          deadline: result.deadline,
+          client_visible: false,
+          created_at: result.created_at,
         },
       ]);
     },
     [],
   );
 
-  // ── Task row click — step 6 stub ──────────────────────────────────────
-  const onTaskClick = useCallback(
-    (taskId: string) => {
-      // Step 6 wires this to the task detail side panel. For 5c, log
-      // the intent so we can verify the wiring without a panel.
-      console.log(
-        "[canvas 5c] task row clicked (body, not checkbox). step 6 opens detail panel.",
-        { taskId, pipelineId },
-      );
-    },
-    [pipelineId],
-  );
+  // ── Step 6: task detail side panel state ──────────────────────────────
+  // openTaskId === null  →  no panel
+  // openTaskId === <id>  →  panel showing that task (read from tasksState)
+  //
+  // The panel is for normal mode only. When editMode flips on, force-close
+  // any open panel so the user transitions cleanly into edit-mode UX
+  // (inline rename + drag affordances). Force-close is intentional;
+  // re-opening on edit-mode-off would surprise the user.
+  const [openTaskId, setOpenTaskId] = useState<string | null>(null);
+
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => {
+    if (editMode) setOpenTaskId(null);
+  }, [editMode]);
+
+  // Task row click — normal mode opens the detail panel; edit mode
+  // routes the click to inline rename via TaskRow's own handler (the
+  // editMode branch there ignores this callback). Edit-mode-aware
+  // dispatch lives in TaskRow itself so this stays single-purpose.
+  const onTaskClick = useCallback((taskId: string) => {
+    setOpenTaskId(taskId);
+  }, []);
 
   // ── 5e: stage mutation — add (append or insert-between) ───────────────
   // Calls create_stage RPC. after_stage_id null = append; non-null =
@@ -920,6 +947,177 @@ export function PipelineCanvas({
     [stagesState, tasksState, reorderStages, reorderTasksInStage, moveTask],
   );
 
+  // ── Step 6: task field mutations (panel-only) ─────────────────────────
+  // Five direct UPDATE callbacks for fields the canvas doesn't surface
+  // but the panel does. All optimistic with revert (matches the
+  // toggleTaskDone pattern). Server-side enforcement:
+  //   * RLS gates the row (tightened to assignee-only for members)
+  //   * enforce_member_task_update_scope trigger gates the column
+  //     (members can only change done/title/description/deadline)
+  //   * So the UI gates here are mirrors of the server constraints,
+  //     not the only line of defense.
+
+  const setTaskAssignee = useCallback(
+    async (taskId: string, nextAssigneeId: string | null) => {
+      let prev: string | null | undefined;
+      setTasksState((tasks) =>
+        tasks.map((t) => {
+          if (t.id !== taskId) return t;
+          prev = t.assignee_id;
+          return { ...t, assignee_id: nextAssigneeId };
+        }),
+      );
+      const { error } = await supabase
+        .from("tasks")
+        .update({ assignee_id: nextAssigneeId })
+        .eq("id", taskId);
+      if (error) {
+        console.error(
+          "[panel 6] setTaskAssignee failed; reverting:",
+          error.message,
+        );
+        if (prev !== undefined) {
+          setTasksState((tasks) =>
+            tasks.map((t) =>
+              t.id === taskId ? { ...t, assignee_id: prev! } : t,
+            ),
+          );
+        }
+      }
+    },
+    [],
+  );
+
+  const setTaskDeadline = useCallback(
+    async (taskId: string, nextDeadline: string | null) => {
+      let prev: string | null | undefined;
+      setTasksState((tasks) =>
+        tasks.map((t) => {
+          if (t.id !== taskId) return t;
+          prev = t.deadline;
+          return { ...t, deadline: nextDeadline };
+        }),
+      );
+      const { error } = await supabase
+        .from("tasks")
+        .update({ deadline: nextDeadline })
+        .eq("id", taskId);
+      if (error) {
+        console.error(
+          "[panel 6] setTaskDeadline failed; reverting:",
+          error.message,
+        );
+        if (prev !== undefined) {
+          setTasksState((tasks) =>
+            tasks.map((t) => (t.id === taskId ? { ...t, deadline: prev! } : t)),
+          );
+        }
+      }
+    },
+    [],
+  );
+
+  const setTaskDescription = useCallback(
+    async (taskId: string, nextDescription: string | null) => {
+      // null means "clear" — UI sends null when textarea is empty so the
+      // distinction between empty-string and unset stays clean in the DB.
+      const normalized =
+        nextDescription === null ? null : nextDescription.trim() || null;
+      let prev: string | null | undefined;
+      setTasksState((tasks) =>
+        tasks.map((t) => {
+          if (t.id !== taskId) return t;
+          prev = t.description;
+          return { ...t, description: normalized };
+        }),
+      );
+      const { error } = await supabase
+        .from("tasks")
+        .update({ description: normalized })
+        .eq("id", taskId);
+      if (error) {
+        console.error(
+          "[panel 6] setTaskDescription failed; reverting:",
+          error.message,
+        );
+        if (prev !== undefined) {
+          setTasksState((tasks) =>
+            tasks.map((t) =>
+              t.id === taskId ? { ...t, description: prev! } : t,
+            ),
+          );
+        }
+      }
+    },
+    [],
+  );
+
+  const setTaskClientVisible = useCallback(
+    async (taskId: string, nextVisible: boolean) => {
+      let prev: boolean | undefined;
+      setTasksState((tasks) =>
+        tasks.map((t) => {
+          if (t.id !== taskId) return t;
+          prev = t.client_visible;
+          return { ...t, client_visible: nextVisible };
+        }),
+      );
+      const { error } = await supabase
+        .from("tasks")
+        .update({ client_visible: nextVisible })
+        .eq("id", taskId);
+      if (error) {
+        console.error(
+          "[panel 6] setTaskClientVisible failed; reverting:",
+          error.message,
+        );
+        if (prev !== undefined) {
+          setTasksState((tasks) =>
+            tasks.map((t) =>
+              t.id === taskId ? { ...t, client_visible: prev! } : t,
+            ),
+          );
+        }
+      }
+    },
+    [],
+  );
+
+  // Task delete — owner/admin only (RLS: tasks_delete requires
+  // can_edit_pipeline). Closes the panel on success since the task no
+  // longer exists. The confirm dialog lives in the panel itself (not
+  // surfaced at canvas level like the stage delete dialog, since the
+  // user is already in the panel context).
+  const deleteTask = useCallback(
+    async (taskId: string) => {
+      let removed: TaskRaw | undefined;
+      setTasksState((tasks) => {
+        removed = tasks.find((t) => t.id === taskId);
+        return tasks.filter((t) => t.id !== taskId);
+      });
+
+      const { error } = await supabase
+        .from("tasks")
+        .delete()
+        .eq("id", taskId);
+
+      if (error) {
+        console.error(
+          "[panel 6] deleteTask failed; reverting:",
+          error.message,
+        );
+        if (removed) {
+          setTasksState((tasks) => [...tasks, removed!]);
+        }
+        return;
+      }
+
+      // Close the panel — the task it was showing no longer exists.
+      setOpenTaskId((current) => (current === taskId ? null : current));
+    },
+    [],
+  );
+
   // ── 5e: delete-confirm dialog state ────────────────────────────────────
   // Single dialog at canvas level (avoids per-stage modal mounts). Click
   // on a stage delete button sets pendingDeleteId; the dialog reads
@@ -1272,6 +1470,44 @@ export function PipelineCanvas({
       {!coachmarkInitiallyDismissed && (
         <CanvasCoachmark canvasRef={wrapperRef} />
       )}
+
+      {/* Step 6: task detail side panel. Rendered at the canvas root
+          (outside TransformWrapper) so it sits in fixed viewport coords.
+          Visible only in normal mode (the close-on-editMode effect at
+          the top of this component force-closes it when edit mode
+          toggles on). Resolves the task + its stage from current state
+          on every render so panel reflects optimistic edits + any
+          concurrent canvas-side changes. */}
+      {openTaskId && (() => {
+        const task = tasksState.find((t) => t.id === openTaskId);
+        if (!task) {
+          // Task vanished (e.g. deleted by another session or by the
+          // delete callback). Defensive close — the deleteTask path
+          // also clears openTaskId on success.
+          return null;
+        }
+        const stage = stagesState.find((s) => s.id === task.stage_id);
+        if (!stage) return null;
+        return (
+          <TaskDetailPanel
+            task={task}
+            stage={stage}
+            pipelineName={pipelineName}
+            members={members}
+            canEditPipeline={canEditPipeline}
+            currentUserId={currentUserId}
+            onClose={() => setOpenTaskId(null)}
+            onToggleDone={toggleTaskDone}
+            onRenameTitle={renameTask}
+            onChangeDescription={setTaskDescription}
+            onChangeAssignee={setTaskAssignee}
+            onChangeDeadline={setTaskDeadline}
+            onChangeClientVisible={setTaskClientVisible}
+            onDeleteTask={deleteTask}
+            onAddSiblingTask={addTask}
+          />
+        );
+      })()}
 
       {/* 5e: delete-stage confirm dialog. Rendered at the canvas root
           (outside the TransformWrapper) so it sits in fixed viewport

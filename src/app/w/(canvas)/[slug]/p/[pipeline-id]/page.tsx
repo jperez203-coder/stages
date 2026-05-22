@@ -46,6 +46,15 @@ export type TaskRaw = {
   assignee_id: string | null;
   completed_at: string | null;
   completed_by: string | null;
+  // Step 6 fields — read/edited only by TaskDetailPanel; the canvas
+  // itself doesn't display these but they're loaded upfront so the
+  // panel can render synchronously off `tasksState` (no round-trip
+  // on panel open). Plus all panel mutations are optimistic; canvas
+  // and panel share the same state.
+  description: string | null;
+  deadline: string | null;        // timestamptz from server, ISO string client-side
+  client_visible: boolean;
+  created_at: string;             // not null in DB (default now())
 };
 
 export default async function PipelineCanvasPage({
@@ -124,6 +133,7 @@ export default async function PipelineCanvasPage({
         .select(
           `id, stage_id, position, title, done, assignee_id,
            completed_at, completed_by,
+           description, deadline, client_visible, created_at,
            stage:stages!inner(pipeline_id)`,
         )
         .eq("stage.pipeline_id", pipelineId)
@@ -158,16 +168,23 @@ export default async function PipelineCanvasPage({
     name: s.name,
   }));
 
-  const tasks: TaskRaw[] = (tasksRes.data ?? []).map((t) => ({
-    id: t.id,
-    stage_id: t.stage_id,
-    position: t.position,
-    title: t.title,
-    done: t.done,
-    assignee_id: (t as { assignee_id: string | null }).assignee_id,
-    completed_at: (t as { completed_at: string | null }).completed_at,
-    completed_by: (t as { completed_by: string | null }).completed_by,
-  }));
+  const tasks: TaskRaw[] = (tasksRes.data ?? []).map((t) => {
+    const row = t as TaskRaw & Record<string, unknown>;
+    return {
+      id: row.id,
+      stage_id: row.stage_id,
+      position: row.position,
+      title: row.title,
+      done: row.done,
+      assignee_id: row.assignee_id,
+      completed_at: row.completed_at,
+      completed_by: row.completed_by,
+      description: row.description,
+      deadline: row.deadline,
+      client_visible: row.client_visible,
+      created_at: row.created_at,
+    };
+  });
 
   // Task counts for the header subline. Compute once here vs duplicating
   // a count() server query.
@@ -192,9 +209,11 @@ export default async function PipelineCanvasPage({
     >
       <PipelineCanvas
         pipelineId={chrome.pipeline.id}
+        pipelineName={chrome.pipeline.name}
         coachmarkInitiallyDismissed={coachmarkInitiallyDismissed}
         stages={stages}
         tasks={tasks}
+        members={chrome.members}
         currentUserId={user.id}
         canEditPipeline={chrome.canEditPipeline}
       />
