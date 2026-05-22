@@ -1024,21 +1024,29 @@ export function PipelineCanvas({
         panning={{
           velocityDisabled: false,
           allowLeftClickPan: true,
-          // Exclude inputs + interactive descendants from triggering pan.
-          // Without this, clicking on the +add task input or a task
-          // checkbox could start a pan drag that swallows the click.
+          // 5e POST-COMMIT FIX: dropped "[role=button]" from this list.
+          // react-zoom-pan-pinch's isExcludedNode constructs the matcher
+          //   `.wrapper {x}, .wrapper .{x}, .wrapper {x} *, .wrapper .{x} *`
+          // and calls `node.matches(selectorList)`. For x = "[role=button]"
+          // the second selector resolves to `.wrapper .[role=button]`
+          // which is MALFORMED CSS — browsers throw `SyntaxError`. With
+          // a single throwing entry in the list, the entire `matches()`
+          // call throws, propagating out of isExcludedNode and aborting
+          // the whole pan-start check. The result: click-drag pan on
+          // empty canvas was silently broken on every browser since 5c
+          // (when [role=button] was first added) — wheel-pan still worked
+          // so it slipped past testing.
           //
-          // 5e: added `pan-disabled` class — anything with this class
-          // (or any descendant of such an element) won't start a pan.
-          // StageNode wrappers + TaskRow cards both carry this class
-          // so pointerdown on a stage/task starts dnd-kit's drag
-          // tracking (8px-distance activation), not a pan. Applies in
-          // BOTH normal and edit mode — closes a subtle pre-5e bug
-          // where you could start a pan from a stage's background.
+          // Replacement uses tag-name + class-name entries only (both
+          // round-trip cleanly through the matcher). dnd-kit-managed
+          // stage/task drag exclusion comes from `pan-disabled` class
+          // which is now CONDITIONALLY applied (editMode + canEditPipeline)
+          // in StageNode + TaskRow — so in normal mode, click-drag on a
+          // stage's background ALSO pans (matches the locked spec:
+          // normal mode has no drag-reorder, nothing should capture pan).
           excluded: [
             "input",
             "button",
-            "[role=button]",
             "pan-disabled",
           ],
         }}

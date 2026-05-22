@@ -355,10 +355,18 @@ export function StageNode({
       {...sortable.listeners}
       // `pan-disabled` is read by PipelineCanvas's react-zoom-pan-pinch
       // `panning.excluded` list — anything with this class (or its
-      // descendants) won't start a canvas pan on pointerdown. Lets
-      // dnd-kit own drag-tracking on stages + tasks without competing
-      // with the pan handler. Applies in BOTH normal and edit mode.
-      className="pan-disabled"
+      // descendants) won't start a canvas pan on pointerdown.
+      //
+      // POST-5e FIX: conditional on (editMode && canEditPipeline) — i.e.
+      // ONLY when useSortable is active. In normal mode, the stage is
+      // not draggable (no reorder), so click-drag on a stage's
+      // background should pan the canvas (matches the locked spec
+      // "normal mode: click-drag anywhere pans"). In edit mode, the
+      // class re-engages so dnd-kit owns drag-tracking on stages without
+      // competing with the pan handler. Inner interactive elements
+      // (checkbox, +Add task, etc.) keep their own exclusion via the
+      // tag-name matchers — pan doesn't start on buttons regardless.
+      className={editMode && canEditPipeline ? "pan-disabled" : undefined}
       style={{
         position: "absolute",
         left: x,

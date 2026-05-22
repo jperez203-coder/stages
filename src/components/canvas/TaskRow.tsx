@@ -245,9 +245,16 @@ export function TaskRow({
       {...sortable.listeners}
       // `pan-disabled` keeps pointerdown on the card from starting a
       // canvas pan (see StageNode + PipelineCanvas `panning.excluded`).
-      // Applies in BOTH normal and edit mode — pre-5e this could start
-      // a stray pan if you missed the checkbox by a few pixels.
-      className="pan-disabled"
+      //
+      // POST-5e FIX: conditional on (editMode && canEditPipeline) — i.e.
+      // ONLY when useSortable is active. In normal mode the task isn't
+      // draggable (no reorder), so click-drag on its body should pan
+      // the canvas (matches the locked spec "normal mode: click-drag
+      // anywhere pans"). The checkbox + title remain `<button>`s and
+      // get exclusion via the tag-name matcher in panning.excluded, so
+      // clicking those still doesn't start a pan — only dragging the
+      // card body does.
+      className={editMode && canEditPipeline ? "pan-disabled" : undefined}
       style={{
         // The CARD — rounded rectangle wrapping checkbox + title.
         position: "relative",
