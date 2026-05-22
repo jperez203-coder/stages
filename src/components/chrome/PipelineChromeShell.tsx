@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { PipelineHeader } from "./PipelineHeader";
 import { LeftRail } from "./LeftRail";
+import { EditModeProvider } from "./EditModeContext";
 import type { CanvasChromeData } from "@/lib/canvas-chrome-data";
 
 /**
@@ -57,6 +58,10 @@ type Props = {
     displayName: string | null;
     avatarUrl: string | null;
   };
+  /** Hide the "Edit pipeline" toggle button in the header. Set on the
+   *  /clients route — edit mode belongs on the canvas surface only.
+   *  Defaults to false (button visible when canEditPipeline === true). */
+  hideEditButton?: boolean;
   children: ReactNode;
 };
 
@@ -66,33 +71,37 @@ export function PipelineChromeShell({
   completedTasks,
   totalTasks,
   user,
+  hideEditButton = false,
   children,
 }: Props) {
   return (
-    <div
-      className="min-h-screen flex flex-col"
-      style={{ background: "#212124" }}
-    >
-      <PipelineHeader
-        workspaceSlug={workspaceSlug}
-        chrome={chrome}
-        completedTasks={completedTasks}
-        totalTasks={totalTasks}
-        user={user}
-      />
-
-      {/* Body row: rail on the left, page content on the right. */}
-      <div className="flex-1 flex min-h-0">
-        <LeftRail
+    <EditModeProvider canEditPipeline={chrome.canEditPipeline}>
+      <div
+        className="min-h-screen flex flex-col"
+        style={{ background: "#212124" }}
+      >
+        <PipelineHeader
           workspaceSlug={workspaceSlug}
-          pipelineId={chrome.pipeline.id}
-          members={chrome.members}
-          canEditPipeline={chrome.canEditPipeline}
+          chrome={chrome}
+          completedTasks={completedTasks}
+          totalTasks={totalTasks}
+          user={user}
+          hideEditButton={hideEditButton}
         />
-        <div className="flex-1 flex flex-col min-w-0 relative">
-          {children}
+
+        {/* Body row: rail on the left, page content on the right. */}
+        <div className="flex-1 flex min-h-0">
+          <LeftRail
+            workspaceSlug={workspaceSlug}
+            pipelineId={chrome.pipeline.id}
+            members={chrome.members}
+            canEditPipeline={chrome.canEditPipeline}
+          />
+          <div className="flex-1 flex flex-col min-w-0 relative">
+            {children}
+          </div>
         </div>
       </div>
-    </div>
+    </EditModeProvider>
   );
 }

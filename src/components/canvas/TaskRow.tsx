@@ -1,7 +1,11 @@
 "use client";
 
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Check } from "lucide-react";
+import { useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import type { StageState } from "@/lib/current-stage";
+import { useEditMode } from "@/components/chrome/EditModeContext";
 
 /**
  * A single task CARD beneath a stage box on the pipeline canvas.
@@ -114,6 +118,9 @@ const INCOMPLETE = {
 const DISABLED_OPACITY = 0.45;
 
 type Props = {
+  /** Parent stage id — included in the task's sortable data so the
+   *  canvas-level onDragEnd can detect cross-stage moves. */
+  stageId: string;
   task: {
     id: string;
     title: string;
@@ -124,22 +131,97 @@ type Props = {
   /** True when the calling user can toggle this task's done. UI mirrors
    *  the tightened RLS: canEditPipeline || task.assignee_id === userId. */
   userCanToggle: boolean;
+  /** Workspace owner OR pipeline owner/admin — gates task drag-reorder
+   *  + inline rename. Members can still toggle their own task's done,
+   *  but can't drag or rename. */
+  canEditPipeline: boolean;
   /** Called with the next done value when the checkbox is clicked
    *  (and userCanToggle === true). */
   onToggleDone: (taskId: string, nextDone: boolean) => void;
-  /** Called when the title body is clicked. 5c stubs this to a
-   *  console.log; step 6 wires the task detail side panel. */
+  /** Called when the title body is clicked IN NORMAL MODE. 5c stubs
+   *  this to a console.log; step 6 wires the task detail side panel.
+   *  In edit mode the title click instead opens the inline rename input. */
   onTitleClick: (taskId: string) => void;
+  /** 5e — commit a new task title (after inline edit). Direct UPDATE
+   *  on tasks.title in the parent. Only invoked in edit mode. */
+  onRenameTask: (taskId: string, nextTitle: string) => void;
 };
 
 export function TaskRow({
+  stageId,
   task,
   stageState,
   userCanToggle,
+  canEditPipeline,
   onToggleDone,
   onTitleClick,
+  onRenameTask,
 }: Props) {
+  // editMode flips title click → inline rename (vs the step-6 stub) +
+  // activates the dnd-kit drag handle on the card body.
+  const { editMode } = useEditMode();
   const completed = COMPLETED[stageState];
+
+  // ── dnd-kit: task as a sortable item (5e) ──────────────────────────────
+  // Disabled when not editMode + canEditPipeline. The data.stageId is
+  // read by the canvas-level onDragEnd handler to decide within-stage
+  // reorder vs cross-stage move.
+  const sortable = useSortable({
+    id: task.id,
+    data: { type: "task", stageId },
+    disabled: !editMode || !canEditPipeline,
+  });
+  const dragStyle: React.CSSProperties = {
+    transform: CSS.Transform.toString(sortable.transform),
+    transition: sortable.transition,
+    opacity: sortable.isDragging ? 0.5 : 1,
+    zIndex: sortable.isDragging ? 30 : "auto",
+  };
+
+  // ── Inline title-rename state (5e, edit mode only) ─────────────────────
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [pendingTitle, setPendingTitle] = useState(task.title);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // Sync pending title from prop when task changes from outside (e.g.
+  // optimistic revert after server reject), and force-exit rename when
+  // editMode globally turns off — user hit "Done editing" mid-edit;
+  // drop the in-flight change silently. setState-in-effect is
+  // intentional here (mirrors StageNode's pattern + matches the
+  // pre-existing React 19 purity errors noted in 5d launch-prep).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => {
+    if (!editMode) {
+      setIsRenaming(false);
+      setPendingTitle(task.title);
+    }
+  }, [editMode, task.title]);
+
+  const startRename = useCallback(() => {
+    if (!editMode) return;
+    setPendingTitle(task.title);
+    setIsRenaming(true);
+    setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }, 0);
+  }, [editMode, task.title]);
+
+  const submitRename = useCallback(() => {
+    const cleaned = pendingTitle.trim();
+    if (!cleaned || cleaned === task.title) {
+      setIsRenaming(false);
+      setPendingTitle(task.title);
+      return;
+    }
+    onRenameTask(task.id, cleaned);
+    setIsRenaming(false);
+  }, [pendingTitle, task.title, task.id, onRenameTask]);
+
+  const cancelRename = useCallback(() => {
+    setIsRenaming(false);
+    setPendingTitle(task.title);
+  }, [task.title]);
 
   // Resolve per-element colors based on done state.
   const cardBg = task.done ? completed.cardBg : INCOMPLETE.cardBg;
@@ -153,6 +235,19 @@ export function TaskRow({
 
   return (
     <div
+      // dnd-kit callback ref + handler bags — see StageNode for the
+      // false-positive rationale (React 19 `react-hooks/refs`).
+      /* eslint-disable-next-line react-hooks/refs */
+      ref={sortable.setNodeRef}
+      /* eslint-disable-next-line react-hooks/refs */
+      {...sortable.attributes}
+      /* eslint-disable-next-line react-hooks/refs */
+      {...sortable.listeners}
+      // `pan-disabled` keeps pointerdown on the card from starting a
+      // canvas pan (see StageNode + PipelineCanvas `panning.excluded`).
+      // Applies in BOTH normal and edit mode — pre-5e this could start
+      // a stray pan if you missed the checkbox by a few pixels.
+      className="pan-disabled"
       style={{
         // The CARD — rounded rectangle wrapping checkbox + title.
         position: "relative",
@@ -168,12 +263,30 @@ export function TaskRow({
         // round 5 polish so cards have more vertical presence.
         height: 40,
         padding: "0 10px",
-        opacity: userCanToggle ? 1 : DISABLED_OPACITY,
+        // userCanToggle opacity ties to "can this user check this task";
+        // dnd dragging opacity (0.5 via dragStyle) takes priority while
+        // actively dragging.
+        opacity: sortable.isDragging
+          ? dragStyle.opacity
+          : userCanToggle
+            ? 1
+            : DISABLED_OPACITY,
         boxSizing: "border-box",
         // Prevent the card from interpreting itself as a flex item that
         // can shrink — width: 100% within the parent task-stack
         // container makes the card span the available width consistently.
         width: "100%",
+        transform: dragStyle.transform,
+        transition: dragStyle.transition,
+        zIndex: dragStyle.zIndex,
+        // In edit mode the card is the drag handle.
+        cursor:
+          editMode && canEditPipeline
+            ? sortable.isDragging
+              ? "grabbing"
+              : "grab"
+            : "default",
+        touchAction: editMode && canEditPipeline ? "none" : "auto",
       }}
     >
       {/* Left-edge connector dot (5c annotation polish round 4,
@@ -215,10 +328,12 @@ export function TaskRow({
       />
       {/* Checkbox — interactive if userCanToggle, disabled otherwise.
           Click stops propagation so the title button's onClick (step-6
-          stub) doesn't also fire. */}
+          stub) doesn't also fire. PointerDown stops propagation too so
+          clicking the checkbox in edit mode doesn't start a task drag. */}
       <button
         type="button"
         disabled={!userCanToggle}
+        onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => {
           e.stopPropagation();
           if (!userCanToggle) return;
@@ -249,31 +364,75 @@ export function TaskRow({
         {task.done && <Check size={11} color={checkColor} strokeWidth={3} />}
       </button>
 
-      {/* Title — body click stubbed for step 6. Truncate with ellipsis
-          on overflow; no wrapping (cards are fixed height + fixed width). */}
-      <button
-        type="button"
-        onClick={() => onTitleClick(task.id)}
-        style={{
-          flex: 1,
-          minWidth: 0,
-          background: "transparent",
-          border: "none",
-          padding: 0,
-          textAlign: "left",
-          color: titleColor,
-          fontSize: 13,
-          fontWeight: 500,
-          lineHeight: 1.3,
-          textDecoration: task.done ? "line-through" : "none",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          cursor: "pointer",
-        }}
-      >
-        {task.title}
-      </button>
+      {/* Title — click behavior depends on mode:
+          * Normal mode: onTitleClick stub (step 6 wires the detail panel)
+          * Edit mode: swap in an inline rename input
+          Truncate with ellipsis on overflow; no wrapping (cards are
+          fixed height + fixed width). */}
+      {isRenaming ? (
+        <input
+          ref={inputRef}
+          type="text"
+          value={pendingTitle}
+          onChange={(e) => setPendingTitle(e.target.value)}
+          onPointerDown={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              submitRename();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              cancelRename();
+            }
+          }}
+          onBlur={submitRename}
+          maxLength={200}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            background: "rgba(0,0,0,0.25)",
+            border: "1px solid rgba(255,255,255,0.3)",
+            borderRadius: 4,
+            color: titleColor,
+            fontSize: 13,
+            fontWeight: 500,
+            lineHeight: 1.3,
+            padding: "2px 6px",
+            outline: "none",
+            fontFamily: "inherit",
+          }}
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => {
+            if (editMode) {
+              startRename();
+            } else {
+              onTitleClick(task.id);
+            }
+          }}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            background: "transparent",
+            border: "none",
+            padding: 0,
+            textAlign: "left",
+            color: titleColor,
+            fontSize: 13,
+            fontWeight: 500,
+            lineHeight: 1.3,
+            textDecoration: task.done ? "line-through" : "none",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            cursor: editMode ? "text" : "pointer",
+          }}
+        >
+          {task.title}
+        </button>
+      )}
     </div>
   );
 }

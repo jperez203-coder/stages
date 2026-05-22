@@ -1,8 +1,15 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
-import { Plus } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Plus, Trash2 } from "lucide-react";
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import type { StageState } from "@/lib/current-stage";
+import { useEditMode } from "@/components/chrome/EditModeContext";
 import { TaskRow } from "./TaskRow";
 
 /**
@@ -197,8 +204,18 @@ type Props = {
    *  submitted; the parent invokes the create_task RPC. */
   onAddTask: (stageId: string, title: string) => void;
   /** Click on the task title body (NOT the checkbox). 5c stubs this to
-   *  console.log; step 6 wires the task detail side panel. */
+   *  console.log in normal mode; in edit mode, TaskRow swaps in an
+   *  inline rename input and calls onRenameTask instead — onTaskClick
+   *  is unused while editing. Step 6 wires this to a detail panel. */
   onTaskClick: (taskId: string) => void;
+  /** 5e — commit a new stage name (after inline edit). Direct UPDATE on
+   *  stages.name in the parent; trim + non-empty handled here. */
+  onRenameStage: (stageId: string, nextName: string) => void;
+  /** 5e — open the parent's delete-confirm dialog for this stage. */
+  onRequestDeleteStage: (stageId: string) => void;
+  /** 5e — commit a new task title. Direct UPDATE on tasks.title in
+   *  the parent. */
+  onRenameTask: (taskId: string, nextTitle: string) => void;
 };
 
 export function StageNode({
@@ -211,9 +228,110 @@ export function StageNode({
   onToggleDone,
   onAddTask,
   onTaskClick,
+  onRenameStage,
+  onRequestDeleteStage,
+  onRenameTask,
 }: Props) {
+  // editMode flips the stage name into an editable input + reveals the
+  // delete button + flips TaskRow's click behavior to inline rename +
+  // enables the stage drag handle.
+  const { editMode } = useEditMode();
   const colors = COLORS[stage.state];
   const showAddRow = canEditPipeline;
+
+  // ── dnd-kit: stage as a sortable item (5e) ───────────────────────────
+  // Disabled when not editMode + canEditPipeline so the stage isn't
+  // grabbable in view mode. PointerSensor activation distance (8px,
+  // set on the parent DndContext) means clicks within 8px still fire
+  // through to the inline rename / delete handlers.
+  //
+  // Transition override (5e polish): tighter than the default 250ms
+  // ease so the non-dragged stages "snap" into their new slot rather
+  // than glide. cubic-bezier(0.2, 0, 0, 1) is a fast-in / slow-out
+  // ease — perceived snappier than `ease` while still settling
+  // smoothly. Pair this with DragOverlay (in PipelineCanvas) so the
+  // DRAGGED stage doesn't re-render per frame: only the other stages
+  // sliding to make room use this transition.
+  const sortable = useSortable({
+    id: stage.id,
+    data: { type: "stage" },
+    disabled: !editMode || !canEditPipeline,
+    transition: {
+      duration: 180,
+      easing: "cubic-bezier(0.2, 0, 0, 1)",
+    },
+  });
+  const dragStyle: React.CSSProperties = {
+    transform: CSS.Transform.toString(sortable.transform),
+    transition: sortable.transition,
+    // While dragging, the live stage becomes an invisible placeholder
+    // (opacity 0). The visible drag visual is rendered by DragOverlay
+    // at the canvas level using StageDragGhost — that decouples the
+    // pointer-following visual from this stage's heavy subtree
+    // (SVG connector + N TaskRows + per-stage SortableContext), which
+    // is the root cause of stage-drag jank when N is non-trivial.
+    opacity: sortable.isDragging ? 0 : 1,
+    zIndex: sortable.isDragging ? 20 : "auto",
+  };
+
+  // ── Per-stage SortableContext for task drag (5e) ─────────────────────
+  // Each stage's tasks form their own sortable context (vertical). The
+  // outer DndContext is shared, so tasks can be dragged ACROSS stages
+  // too — onDragEnd at the canvas level handles cross-stage moves.
+  const taskIds = useMemo(() => tasks.map((t) => t.id), [tasks]);
+
+  // ── Inline stage-rename state ────────────────────────────────────────
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [pendingName, setPendingName] = useState(stage.name);
+  const nameInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Reset pending name + close the input if the prop changes (e.g. a
+  // concurrent edit landed via another device / optimistic revert).
+  // Also auto-exit rename mode when editMode globally turns off — user
+  // hit "Done editing" mid-rename; we drop the in-flight edit silently.
+  // Reset on editMode toggle-off is intentionally a setState-in-effect:
+  // we're synchronizing a context-driven external flag into local state.
+  // React 19's `react-hooks/set-state-in-effect` flags this even though
+  // the alternative (e.g. derive `effective = editMode && isRenaming`)
+  // would mean a stale `isRenaming=true` carries across edit-mode
+  // toggle cycles and surprises the user with an auto-resumed edit on
+  // re-enter. Pre-existing similar pattern noted in 5d launch-prep
+  // deferrals; deferred to a future React 19 purity sweep.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => {
+    if (!editMode) {
+      setIsRenaming(false);
+      setPendingName(stage.name);
+    }
+  }, [editMode, stage.name]);
+
+  const startRename = useCallback(() => {
+    if (!editMode || !canEditPipeline) return;
+    setPendingName(stage.name);
+    setIsRenaming(true);
+    // Focus on next tick — input not mounted yet.
+    setTimeout(() => {
+      nameInputRef.current?.focus();
+      nameInputRef.current?.select();
+    }, 0);
+  }, [editMode, canEditPipeline, stage.name]);
+
+  const submitRename = useCallback(() => {
+    const cleaned = pendingName.trim();
+    if (!cleaned || cleaned === stage.name) {
+      // No-op: empty OR unchanged. Close the input, leave name as-is.
+      setIsRenaming(false);
+      setPendingName(stage.name);
+      return;
+    }
+    onRenameStage(stage.id, cleaned);
+    setIsRenaming(false);
+  }, [pendingName, stage.name, stage.id, onRenameStage]);
+
+  const cancelRename = useCallback(() => {
+    setIsRenaming(false);
+    setPendingName(stage.name);
+  }, [stage.name]);
 
   // Total height for the wrapper bounding box. Doesn't affect rendering
   // (children are stacked naturally), but documenting it here makes the
@@ -223,6 +341,24 @@ export function StageNode({
   return (
     <div
       id={stage.id}
+      // dnd-kit's setNodeRef is a callback ref + attributes/listeners
+      // are event-handler bags — React 19's `react-hooks/refs` rule
+      // flags these as "Cannot access refs during render" even though
+      // callback refs are explicitly allowed to be assigned at render.
+      // False positive for any drag-and-drop library following the
+      // dnd-kit pattern.
+      /* eslint-disable-next-line react-hooks/refs */
+      ref={sortable.setNodeRef}
+      /* eslint-disable-next-line react-hooks/refs */
+      {...sortable.attributes}
+      /* eslint-disable-next-line react-hooks/refs */
+      {...sortable.listeners}
+      // `pan-disabled` is read by PipelineCanvas's react-zoom-pan-pinch
+      // `panning.excluded` list — anything with this class (or its
+      // descendants) won't start a canvas pan on pointerdown. Lets
+      // dnd-kit own drag-tracking on stages + tasks without competing
+      // with the pan handler. Applies in BOTH normal and edit mode.
+      className="pan-disabled"
       style={{
         position: "absolute",
         left: x,
@@ -236,7 +372,30 @@ export function StageNode({
         // visual intent: greens mute, purples + greys stay full
         // opacity. Multiple done stages can coexist; multiple
         // in-progress can coexist (parallel workstreams).
-        opacity: stage.state === "done" ? 0.7 : 1,
+        // Note: when sortable.isDragging is true, dragStyle.opacity
+        // (0.5) overrides this — that's correct (drag visual takes
+        // priority over done-state dampening).
+        opacity:
+          sortable.isDragging
+            ? dragStyle.opacity
+            : stage.state === "done"
+              ? 0.7
+              : 1,
+        transform: dragStyle.transform,
+        transition: dragStyle.transition,
+        zIndex: dragStyle.zIndex,
+        // In edit mode the wrapper is the drag handle — show grab/
+        // grabbing cursors. The actual sortable.listeners attached
+        // above own pointer-capture; this is purely visual.
+        cursor:
+          editMode && canEditPipeline
+            ? sortable.isDragging
+              ? "grabbing"
+              : "grab"
+            : "default",
+        // Disable touch-action so dnd-kit's pointer events aren't
+        // swallowed by the browser's pan/zoom on touch devices.
+        touchAction: editMode && canEditPipeline ? "none" : "auto",
       }}
     >
       {/* Badge→task connector SVG. Rendered absolutely under all other
@@ -334,10 +493,269 @@ export function StageNode({
         />
       </div>
 
-      {/* Stage box — name + "Stage N · X/Y task" subtitle. */}
+      {/* Stage box — name + "Stage N · X/Y task" subtitle.
+          5e: in edit mode, the name swaps to an inline input on click,
+          and a small delete button (X / trash) appears in the
+          top-right corner. The stage box itself doesn't change size in
+          edit mode — only the affordances appear. */}
       <div
         style={{
           position: "relative",
+          marginTop: BADGE_TO_BOX_GAP,
+          width: BOX_WIDTH,
+          minHeight: BOX_HEIGHT,
+          padding: "10px 14px",
+          background: colors.boxBg,
+          border: `1px solid ${colors.boxBorder}`,
+          borderRadius: 10,
+          color: colors.boxText,
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "center",
+          gap: 4,
+          boxShadow:
+            stage.state === "in-progress"
+              ? "0 4px 16px rgba(110,91,232,0.25)"
+              : "none",
+          boxSizing: "border-box",
+        }}
+      >
+        {isRenaming ? (
+          <input
+            ref={nameInputRef}
+            type="text"
+            value={pendingName}
+            onChange={(e) => setPendingName(e.target.value)}
+            onPointerDown={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                submitRename();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                cancelRename();
+              }
+            }}
+            onBlur={submitRename}
+            maxLength={80}
+            style={{
+              fontSize: 14,
+              fontWeight: 600,
+              lineHeight: 1.2,
+              background: "rgba(0,0,0,0.2)",
+              border: "1px solid rgba(255,255,255,0.3)",
+              borderRadius: 4,
+              color: colors.boxText,
+              padding: "2px 6px",
+              outline: "none",
+              width: "100%",
+              boxSizing: "border-box",
+              fontFamily: "inherit",
+            }}
+          />
+        ) : (
+          <div
+            onClick={editMode && canEditPipeline ? startRename : undefined}
+            style={{
+              fontSize: 14,
+              fontWeight: 600,
+              lineHeight: 1.2,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              cursor: editMode && canEditPipeline ? "text" : "default",
+              // Reserve room on the right for the delete button so the
+              // ellipsis doesn't clip under it in edit mode.
+              paddingRight: editMode && canEditPipeline ? 22 : 0,
+            }}
+          >
+            {stage.name}
+          </div>
+        )}
+        <div
+          style={{
+            fontSize: 11,
+            color: colors.boxSubtitle,
+            lineHeight: 1.2,
+            fontWeight: 500,
+          }}
+        >
+          Stage {stage.position} · {stage.completed}/{stage.total} task
+          {stage.total === 1 ? "" : "s"}
+        </div>
+
+        {/* Delete button — edit mode only, owner/admin only. Sits in
+            the box's top-right corner; clicking opens the confirm
+            dialog (state lives in PipelineCanvas). Uses a small trash
+            glyph rather than X so it doesn't read as a "close" button. */}
+        {editMode && canEditPipeline && !isRenaming && (
+          <button
+            type="button"
+            aria-label={`Delete stage ${stage.name}`}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onRequestDeleteStage(stage.id);
+            }}
+            style={{
+              position: "absolute",
+              top: 6,
+              right: 6,
+              width: 22,
+              height: 22,
+              borderRadius: 6,
+              background: "rgba(0,0,0,0.25)",
+              border: "1px solid rgba(255,255,255,0.15)",
+              color: "rgba(255,255,255,0.7)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+              padding: 0,
+              transition: "background 120ms ease-out, color 120ms ease-out",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "rgba(244,63,94,0.85)";
+              e.currentTarget.style.color = "white";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "rgba(0,0,0,0.25)";
+              e.currentTarget.style.color = "rgba(255,255,255,0.7)";
+            }}
+          >
+            <Trash2 size={12} />
+          </button>
+        )}
+      </div>
+
+      {/* Task card stack. Indented from the stage box's left edge
+          (TASK_STACK_PAD_LEFT) so cards read as "children" of the stage
+          and the badge→task connector has visual room to land at the
+          card edge. Vertical gap between cards = TASK_CARD_GAP.
+          5e: wrapped in a per-stage SortableContext so tasks reorder
+          via dnd-kit within this stage. Cross-stage moves work via
+          the shared outer DndContext + the parent's onDragEnd. */}
+      <SortableContext
+        items={taskIds}
+        strategy={verticalListSortingStrategy}
+      >
+        <div
+          style={{
+            position: "relative",
+            paddingTop: BOX_TO_TASKS_GAP,
+            paddingLeft: TASK_STACK_PAD_LEFT,
+            paddingRight: TASK_STACK_PAD_RIGHT,
+            display: "flex",
+            flexDirection: "column",
+            gap: TASK_CARD_GAP,
+          }}
+        >
+          {tasks.map((task) => {
+            const userCanToggle =
+              canEditPipeline || task.assignee_id === currentUserId;
+            return (
+              <TaskRow
+                key={task.id}
+                stageId={stage.id}
+                task={{ id: task.id, title: task.title, done: task.done }}
+                stageState={stage.state}
+                userCanToggle={userCanToggle}
+                canEditPipeline={canEditPipeline}
+                onToggleDone={onToggleDone}
+                onTitleClick={onTaskClick}
+                onRenameTask={onRenameTask}
+              />
+            );
+          })}
+
+          {showAddRow && (
+            <AddTaskRow stageId={stage.id} onAddTask={onAddTask} />
+          )}
+        </div>
+      </SortableContext>
+    </div>
+  );
+}
+
+// ─── StageDragGhost (5e polish — DragOverlay child) ──────────────────────
+
+/**
+ * Lightweight visual stand-in for a stage being dragged. Rendered
+ * inside <DragOverlay> at the canvas level — DragOverlay positions
+ * this in viewport coords following the pointer, via direct DOM
+ * transform mutations (no React re-render per frame).
+ *
+ * What we deliberately DO NOT render here (the whole point):
+ *   * The badge → task SVG connector
+ *   * The task card stack + per-stage SortableContext + TaskRows
+ *   * The trash button + inline rename input
+ *   * useSortable / useEffect / any hook subscription
+ *
+ * What we DO render — just enough to feel like "I'm dragging THIS
+ * stage": the badge with position number and the stage box with name
+ * + subtitle + a "+ N tasks" hint line so the ghost still
+ * communicates the stage's task count without paying to render each
+ * task. Plus a translucent lift shadow so it reads as "floating
+ * above the canvas."
+ *
+ * Colors come from the SAME COLORS map StageNode uses — keyed on
+ * stage.state — so the ghost matches its source visually (purple if
+ * in-progress, green if done, grey if not-started).
+ */
+export function StageDragGhost({
+  stage,
+}: {
+  stage: {
+    id: string;
+    position: number;
+    name: string;
+    total: number;
+    completed: number;
+    state: StageState;
+  };
+}) {
+  const colors = COLORS[stage.state];
+
+  return (
+    <div
+      style={{
+        width: STAGE_NODE_WIDTH,
+        // Lift shadow + slight scale so the ghost reads as "above"
+        // the canvas plane. No tilt — Linear / Figma don't tilt drag
+        // ghosts; a tilt feels cartoonish here.
+        filter: "drop-shadow(0 12px 24px rgba(0,0,0,0.5))",
+        // Match the StageNode's done-state opacity dampening so a
+        // dragged done-stage ghost matches what the user sees in the
+        // canvas.
+        opacity: stage.state === "done" ? 0.85 : 1,
+      }}
+    >
+      {/* Numbered badge — matches StageNode's badge geometry. */}
+      <div
+        style={{
+          width: BADGE_DIAMETER,
+          height: BADGE_DIAMETER,
+          borderRadius: "50%",
+          background: colors.badgeBg,
+          border: `1.5px solid ${colors.badgeBorder}`,
+          color: colors.badgeText,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 13,
+          fontWeight: 600,
+          boxShadow:
+            stage.state === "in-progress"
+              ? "0 2px 8px rgba(110,91,232,0.35)"
+              : "none",
+        }}
+      >
+        {stage.position}
+      </div>
+
+      {/* Stage box — matches StageNode's box geometry. */}
+      <div
+        style={{
           marginTop: BADGE_TO_BOX_GAP,
           width: BOX_WIDTH,
           minHeight: BOX_HEIGHT,
@@ -380,41 +798,6 @@ export function StageNode({
           Stage {stage.position} · {stage.completed}/{stage.total} task
           {stage.total === 1 ? "" : "s"}
         </div>
-      </div>
-
-      {/* Task card stack. Indented from the stage box's left edge
-          (TASK_STACK_PAD_LEFT) so cards read as "children" of the stage
-          and the badge→task connector has visual room to land at the
-          card edge. Vertical gap between cards = TASK_CARD_GAP. */}
-      <div
-        style={{
-          position: "relative",
-          paddingTop: BOX_TO_TASKS_GAP,
-          paddingLeft: TASK_STACK_PAD_LEFT,
-          paddingRight: TASK_STACK_PAD_RIGHT,
-          display: "flex",
-          flexDirection: "column",
-          gap: TASK_CARD_GAP,
-        }}
-      >
-        {tasks.map((task) => {
-          const userCanToggle =
-            canEditPipeline || task.assignee_id === currentUserId;
-          return (
-            <TaskRow
-              key={task.id}
-              task={{ id: task.id, title: task.title, done: task.done }}
-              stageState={stage.state}
-              userCanToggle={userCanToggle}
-              onToggleDone={onToggleDone}
-              onTitleClick={onTaskClick}
-            />
-          );
-        })}
-
-        {showAddRow && (
-          <AddTaskRow stageId={stage.id} onAddTask={onAddTask} />
-        )}
       </div>
     </div>
   );
@@ -469,9 +852,12 @@ function AddTaskRow({
 
   if (!expanded) {
     // Collapsed — card with dashed border, "+ Add task" inside.
+    // Stop pointer-down propagation so clicking the affordance in
+    // edit mode never starts the parent stage's drag.
     return (
       <button
         type="button"
+        onPointerDown={(e) => e.stopPropagation()}
         onClick={expand}
         style={{
           height: ADD_TASK_ROW_HEIGHT,
@@ -501,6 +887,7 @@ function AddTaskRow({
   // solid hairline + the inside is a text input.
   return (
     <div
+      onPointerDown={(e) => e.stopPropagation()}
       style={{
         height: ADD_TASK_ROW_HEIGHT,
         width: "100%",

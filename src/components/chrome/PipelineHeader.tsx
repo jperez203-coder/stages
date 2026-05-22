@@ -2,10 +2,11 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Pencil } from "lucide-react";
+import { ArrowLeft, Check, Pencil } from "lucide-react";
 import { UserAvatar } from "@/components/UserAvatar";
 import { HeaderProfileMenu } from "@/components/app/HeaderProfileMenu";
 import { MembersPopover } from "./MembersPopover";
+import { useEditMode } from "./EditModeContext";
 import type {
   CanvasChromeData,
   ChromeMember,
@@ -54,6 +55,9 @@ type Props = {
     displayName: string | null;
     avatarUrl: string | null;
   };
+  /** Hide the Edit pipeline toggle button entirely (e.g. on /clients,
+   *  where edit mode doesn't apply). Defaults to false. */
+  hideEditButton?: boolean;
 };
 
 export function PipelineHeader({
@@ -62,8 +66,10 @@ export function PipelineHeader({
   completedTasks,
   totalTasks,
   user,
+  hideEditButton = false,
 }: Props) {
   const [membersOpen, setMembersOpen] = useState(false);
+  const { editMode, toggleEditMode } = useEditMode();
 
   const lastEdited = relativeTime(chrome.pipeline.last_edited_at);
   const subline = buildSubline({
@@ -173,41 +179,11 @@ export function PipelineHeader({
           onClick={() => setMembersOpen((v) => !v)}
         />
 
-        {chrome.canEditPipeline && (
-          <button
-            type="button"
-            onClick={() => {
-              // Step 5e ships the edit mode. For 5d this is a stub.
-              console.log("[5d] Edit pipeline clicked — 5e wires this", {
-                pipelineId: chrome.pipeline.id,
-              });
-            }}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              height: 32,
-              padding: "0 12px",
-              borderRadius: 8,
-              background: "rgba(255,255,255,0.06)",
-              border: "1px solid #36363A",
-              color: "rgba(255,255,255,0.85)",
-              fontSize: 12,
-              fontWeight: 500,
-              cursor: "pointer",
-              flexShrink: 0,
-              transition: "background 120ms ease-out",
-            }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.background = "rgba(255,255,255,0.1)")
-            }
-            onMouseLeave={(e) =>
-              (e.currentTarget.style.background = "rgba(255,255,255,0.06)")
-            }
-          >
-            <Pencil size={13} />
-            Edit pipeline
-          </button>
+        {chrome.canEditPipeline && !hideEditButton && (
+          <EditPipelineToggleButton
+            editMode={editMode}
+            onToggle={toggleEditMode}
+          />
         )}
 
         {/* Visual separator between "pipeline people" (left) and
@@ -247,6 +223,64 @@ export function PipelineHeader({
         />
       )}
     </>
+  );
+}
+
+// ─── Edit pipeline toggle (5e — was a console.log stub in 5d) ────────────
+
+/**
+ * "Edit pipeline" ↔ "Done editing" toggle. Inactive styling matches the
+ * 5d-era stub (subtle white-on-dark chip). Active styling uses the
+ * #108CE9 (stages-blue) accent — distinct enough from purple
+ * (in-progress) and green (done) that the chrome's "we're editing"
+ * signal can't be confused with a stage state signal. Mirrors the same
+ * accent we use on the canvas's thin top-border edit-mode signal.
+ */
+function EditPipelineToggleButton({
+  editMode,
+  onToggle,
+}: {
+  editMode: boolean;
+  onToggle: () => void;
+}) {
+  const active = editMode;
+
+  // Inline colour tokens — kept here vs hoisted because they're the
+  // only place in the file that needs a "blue active" variant; if a
+  // second consumer ever needs this treatment, extract into globals.css.
+  const bg = active ? "rgba(16,140,233,0.18)" : "rgba(255,255,255,0.06)";
+  const bgHover = active ? "rgba(16,140,233,0.28)" : "rgba(255,255,255,0.1)";
+  const border = active ? "#108CE9" : "#36363A";
+  const fg = active ? "#108CE9" : "rgba(255,255,255,0.85)";
+
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={active}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        height: 32,
+        padding: "0 12px",
+        borderRadius: 8,
+        background: bg,
+        border: `1px solid ${border}`,
+        color: fg,
+        fontSize: 12,
+        fontWeight: 500,
+        cursor: "pointer",
+        flexShrink: 0,
+        transition:
+          "background 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out",
+      }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = bgHover)}
+      onMouseLeave={(e) => (e.currentTarget.style.background = bg)}
+    >
+      {active ? <Check size={13} /> : <Pencil size={13} />}
+      {active ? "Done editing" : "Edit pipeline"}
+    </button>
   );
 }
 

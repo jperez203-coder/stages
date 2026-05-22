@@ -4,6 +4,204 @@ A running log of what shipped in each session. Newest first.
 
 ---
 
+## Phase 4a — step 5e (UI): edit-pipeline mode (2026-05-22)
+
+**Goal:** the canvas's "Edit pipeline" button — stubbed `console.log` in 5d — becomes a real edit mode. Toggle into edit mode, add / rename / reorder / delete stages, drag tasks between stages, drag-reorder tasks within a stage, inline-rename task titles. Per the locked spec, everything reuses `stageStateFromCounts` from `src/lib/current-stage.ts` so the canvas re-derives live as the user mutates structure (colors recompute, connectors reflow, anchor stage updates).
+
+**Pairs with [5e backend](#phase-4a--step-5e-backend-edit-pipeline-rpcs-2026-05-22):** the 4 RPCs (`create_stage`, `reorder_stages`, `reorder_tasks_in_stage`, `move_task`) cover stage add / reorder / task move / task reorder. Stage rename + delete are direct `UPDATE` / `DELETE` under existing RLS (tasks cascade via `tasks_stage_id_fkey ON DELETE CASCADE`). Task rename is a direct `UPDATE`. So the UI surface is 4 RPC calls + 3 direct mutations = 7 mutation paths total.
+
+### EditModeContext — the shared toggle
+
+New `src/components/chrome/EditModeContext.tsx`. The toggle button lives in `PipelineHeader`; the visual treatment + drag affordances live in `PipelineCanvas`; both need to read the same `editMode` boolean. `PipelineChromeShell` is the natural shared parent — it wraps both — but `children` are passed pre-rendered from the server page, so prop-drilling isn't an option. A context provider mounted at the shell threads `editMode` through both sides.
+
+```tsx
+PipelineChromeShell
+  └── EditModeProvider (editMode + canEditPipeline)
+       ├── PipelineHeader → reads editMode + canEditPipeline → renders toggle
+       └── {children} → PipelineCanvas → reads editMode → applies treatment
+```
+
+`editMode` is per-page-mount: navigating to `/clients` (sibling in the canvas route group) creates a fresh shell + provider so edit mode resets to false on navigation. Intentional — edit mode belongs to the canvas surface, not the user session. The `hideEditButton` prop on `PipelineChromeShell` (added in 5e) hides the toggle entirely on `/clients`.
+
+### Header toggle treatment
+
+| State | Label | Icon | BG | Border | FG |
+| --- | --- | --- | --- | --- | --- |
+| Idle (canEditPipeline only) | "Edit pipeline" | `Pencil` | `rgba(255,255,255,0.06)` | `#36363A` | `rgba(255,255,255,0.85)` |
+| Active (editMode on) | "Done editing" | `Check` | `rgba(16,140,233,0.18)` | `#108CE9` | `#108CE9` |
+
+`#108CE9` is `stages-blue` from the locked design tokens — same accent used on the canvas top-border, so the chrome + canvas signals agree.
+
+### Canvas edit-mode signals
+
+| Signal | Implementation |
+| --- | --- |
+| Thin blue top-border on canvas | `borderTop` toggles between `2px solid #108CE9` and `2px solid transparent` (transparent in normal mode keeps layout stable across toggle). |
+| Zoom snap to 1.0 on entry | `useEffect` on `[editMode]` calls `transformRef.current.zoomToElement(anchorStageId, 1, 280, "easeOut")` (or `centerView(1, 280)` when there are no stages). Snap is on rising edge only; on exit we don't restore prior zoom (intentional — user just re-zooms if they want). |
+| Zoom controls hidden | `{!editMode && <ZoomControls />}` — locked spec says hide, not disable; user can still Cmd/Ctrl-wheel if they really want, just no buttons. |
+
+### Mutation callbacks (7 paths, all optimistic-with-revert)
+
+| Callback | RPC / Direct | Optimism |
+| --- | --- | --- |
+| `addStage(name, afterStageId)` | `create_stage` RPC | Append result to local state; for insert-between, also shift sibling positions locally to mirror the RPC's server-side shift |
+| `renameStage(stageId, name)` | direct UPDATE `stages.name` | Patch the row in local state; capture pre-rename name; revert on RPC error |
+| `deleteStage(stageId)` | direct DELETE `stages` (tasks cascade) | Remove stage + all its tasks from local state in one update; capture both for revert if RPC fails |
+| `reorderStages(orderedIds)` | `reorder_stages` RPC | Snapshot stagesState; rewrite all positions by array index; restore snapshot on error |
+| `renameTask(taskId, title)` | direct UPDATE `tasks.title` | Patch task title in local state; revert on RPC error |
+| `moveTask(taskId, targetStageId, targetPosition)` | `move_task` RPC | Snapshot tasksState; compute clamped position + apply shift identical to the RPC's logic (within-stage `[1,count]`, cross-stage `[1,count+1]`) so the optimistic view matches the server view; restore snapshot on error |
+| `reorderTasksInStage(stageId, orderedIds)` | `reorder_tasks_in_stage` RPC | Snapshot tasksState; rewrite positions in target stage by array index; restore on error |
+
+All revert handlers `console.error` the RPC error message — same pattern as the 5c `toggleTaskDone` callback. No toast surface yet; future enhancement when we add a global notification system (see 4b chat notifications).
+
+### Live re-derivation (reuses 5c — does NOT re-implement)
+
+Every mutation lands in `stagesState` or `tasksState` (or both, for `deleteStage`). The existing `useMemo` at `PipelineCanvas.tsx` re-runs on those state changes — `stageStateFromCounts` re-classifies each stage from its updated task counts; `pickAnchorStage` picks a new anchor; `layout.positions` + `bbox` recompute; connectors redraw from the new positions; per-stage colors update. No new derivation code — the 5c rule (per-stage independent state, multiple in-progress OK) carries straight through.
+
+The one new piece is `stagesState` itself — pre-5e the `stages` prop was used directly (server-fetched, no mutations during the session). 5e introduces structural stage mutations, so `stagesState` mirrors the existing `tasksState` pattern: prop seeds initial state, all mutations land in `setStagesState`, no `useEffect` to re-sync from props (route remount handles cross-pipeline navigation).
+
+### dnd-kit drag (three sortable layers, one DndContext)
+
+Fresh dependencies: `@dnd-kit/{core, sortable, utilities}`. Architecture:
+
+```
+<DndContext sensors={[PointerSensor({distance: 8})]} collisionDetection={closestCenter} autoScroll={false}>
+  <SortableContext items={stageIds} strategy={horizontalListSortingStrategy}>
+    {stages.map(s =>
+      <StageNode>
+        useSortable({id: s.id, data: {type: 'stage'}, disabled: !editMode || !canEditPipeline})
+        <SortableContext items={taskIdsInThisStage} strategy={verticalListSortingStrategy}>
+          {tasks.map(t =>
+            <TaskRow>
+              useSortable({id: t.id, data: {type: 'task', stageId: s.id}, disabled: !editMode || !canEditPipeline})
+            </TaskRow>
+          )}
+        </SortableContext>
+      </StageNode>
+    )}
+  </SortableContext>
+  <DragOverlay dropAnimation={null}>
+    {activeStageDragId ? <StageDragGhost stage={...} /> : null}
+  </DragOverlay>
+</DndContext>
+```
+
+Three things to call out:
+
+1. **8px activation distance** is THE critical config — without it, click vs drag is ambiguous. With it: a click on a stage name (or a task title in edit mode) within 8px opens inline rename; a drag past 8px starts dnd-kit's tracking. Same threshold means click-affordances work alongside whole-element drag handles on the same DOM nodes.
+2. **`onDragEnd` discriminates by `active.data.type`.** `'stage'` → `reorder_stages` with `arrayMove` over the full ordered id list. `'task'` → either `reorder_tasks_in_stage` (same source/target stage) or `move_task` (cross-stage). Target position derives from the over item: a task's `position` if `over.data.type === 'task'`, else append-to-end (`count+1` cross-stage, `count` same-stage clamp).
+3. **`autoScroll: false`** is required — the react-zoom-pan-pinch surface isn't a scroll container, so dnd-kit's edge-scroll detection would jitter at the canvas edges trying to scroll a non-scrollable parent.
+
+### DragOverlay perf fix (the post-Jordan-test polish)
+
+Jordan's hands-on first pass surfaced one stutter: dragging a stage horizontally to reorder felt laggy. Task drag was fine; stage drag wasn't. Diagnosis ruled out the obvious-looking suspects (the `useMemo` re-derive doesn't run mid-drag — the deps are stable until `dragEnd`; the SVG connectors render from `layout.positions` which doesn't update either). Real cause:
+
+> The dragged `StageNode` subtree (badge + box + SVG with one path per task + per-stage `SortableContext` + N × `TaskRow`, each carrying its own `useSortable` subscription) re-rendered on every pointer-move frame as the wrapper's `transform` from `useSortable` updated. For a stage with 5–10 tasks that's 60–120 component renders/sec just to slide one stage.
+
+Standard dnd-kit pattern for heavy items: `DragOverlay`. The source becomes an `opacity: 0` placeholder (layout slot preserved); a lightweight `StageDragGhost` (badge + box only — no SVG, no task list, no hooks beyond what `DragOverlay` injects) renders inside the overlay portal and follows the pointer via direct DOM transform mutations. React re-render cost during drag drops from "everything in the subtree, every frame" to "nothing — the overlay is one element repositioned by dnd-kit."
+
+Two smaller tweaks went in alongside:
+- `useSortable` `transition` overridden to `{ duration: 180, easing: "cubic-bezier(0.2, 0, 0, 1)" }` — the non-dragged stages snap into the new slot more decisively than dnd-kit's default 250ms ease.
+- `dropAnimation={null}` on `DragOverlay` — we already snap the source to its new position via the post-`onDragEnd` optimistic state update, so the overlay's default "fly back to source rect" animation would just flash.
+
+Task drag did NOT get an overlay — `TaskRow` is light enough that the per-frame re-render is imperceptible. Avoiding overlay-for-everything cuts the polish diff in half and skips an extra failure surface.
+
+### Inline rename pattern (stages + tasks, identical contract)
+
+Single component-local state machine:
+- `isRenaming: boolean` + `pendingText: string` + `inputRef`
+- `startRename()`: only fires if `editMode && canEditPipeline` (stages) or `editMode` (tasks); sets `pendingText` from current, sets `isRenaming = true`, focuses + selects the input on next tick.
+- `submit()`: trims; bails if empty OR unchanged; otherwise calls parent mutation callback + sets `isRenaming = false`.
+- `cancel()`: drops the pending text, sets `isRenaming = false`.
+- Input handlers: `Enter` → submit, `Escape` → cancel, `onBlur` → submit (which itself bails on unchanged).
+- `useEffect` on `[editMode]` — when edit mode globally toggles off mid-rename, force-exit `isRenaming` and reset `pendingText` (avoids carrying an in-flight edit across mode cycles).
+
+`pendingText` is `string`, not `string | null` — keeps the input controlled even when collapsed. Re-seeding on `startRename` is cheap.
+
+### Delete confirm dialog (single instance at canvas level)
+
+`pendingDeleteId` state lives in `PipelineCanvas`. Stage's trash button calls `requestDeleteStage(stageId)` which just sets the id. The dialog component reads the live name + task count from current state on every render (so if a task moves IN during the confirmation pause, the count updates). Confirm button calls `confirmDeleteStage` which calls `deleteStage` (optimistic). Cancel + backdrop click + Escape (via dialog's native focus trap) all dismiss.
+
+N-aware copy per the locked spec:
+- N ≥ 1: `"This will delete '<name>' and its N tasks. This can't be undone."` (proper "task" / "tasks" pluralization)
+- N = 0: `"Delete '<name>'? This can't be undone."`
+
+Visual: matches the existing modal pattern from `NewWorkspaceModal` / `CreateChannelModal` — `panel-card` utility, `backdrop-filter: blur(4px)`, red `#F43F5E` confirm button.
+
+### pan-disabled class + stopPropagation (the drag/pan coexistence story)
+
+Two layers of competing pointer handling: react-zoom-pan-pinch's `panning.allowLeftClickPan: true` on the canvas, and dnd-kit's `PointerSensor` on stages + tasks. Both want pointerdown.
+
+Fix: `pan-disabled` class on every `StageNode` wrapper + `TaskRow` card + edit-mode affordance (`AddStageEndButton`, `InsertStageHandle`). The react-zoom-pan-pinch `panning.excluded` list checks classnames via `node.matches(".X, .X *")` — so any descendant of a `.pan-disabled` element won't start a pan. Click + drag on empty canvas still pans; click + drag on a stage or task is dnd-kit's only.
+
+Closes a subtle pre-5e bug too: in normal mode you could start a pan from a stage's background area (the dotted-grid would pan around as if you clicked the canvas backdrop). Now stages + tasks consistently NEVER pan.
+
+Plus `onPointerDown={(e) => e.stopPropagation()}` on the interactive surfaces inside a draggable parent — checkbox button, rename input, delete button, AddTaskRow expand button + input. Without it, clicking the checkbox in edit mode would start tracking a task drag; if pointer moved > 8px before release, drag activated and click was suppressed. With it, the parent's drag listener never receives the pointerdown — checkbox click is reliable.
+
+### Files (this commit)
+
+```
+new file:  src/components/chrome/EditModeContext.tsx                (provider + useEditMode hook)
+new file:  src/components/canvas/EditPipelineAffordances.tsx        (AddStageEndButton + InsertStageHandle + DeleteStageConfirmDialog)
+
+modified:  src/components/chrome/PipelineChromeShell.tsx            (wraps in EditModeProvider; + hideEditButton prop)
+modified:  src/components/chrome/PipelineHeader.tsx                 (EditPipelineToggleButton — "Edit pipeline" ↔ "Done editing", pencil ↔ check, #108CE9 accent)
+modified:  src/app/w/(canvas)/[slug]/p/[pipeline-id]/clients/page.tsx  (passes hideEditButton)
+modified:  src/components/canvas/PipelineCanvas.tsx                 (stagesState mirror; 7 mutation callbacks; DndContext + DragOverlay + sensors + onDragEnd; blue top-border; zoom snap; widened panning.excluded)
+modified:  src/components/canvas/StageNode.tsx                      (inline rename input; trash button; useSortable; per-stage SortableContext for tasks; StageDragGhost export)
+modified:  src/components/canvas/TaskRow.tsx                        (inline rename input; useSortable; canEditPipeline + stageId props)
+
+modified:  package.json + package-lock.json                         (@dnd-kit/core ^6.3.1, @dnd-kit/sortable ^10.0.0, @dnd-kit/utilities ^3.2.2)
+modified:  PROGRESS.md
+```
+
+### Verification
+
+| Check | Result |
+| --- | --- |
+| `npx tsc --noEmit` | ✓ clean |
+| `npx next build` | ✓ green, 23 routes (same as 5d, no new dynamic routes) |
+| Dev server smoke (anon) | ✓ canvas + /clients both 307 → /auth/signin (unchanged from 5d) |
+| Jordan hands-on (vs figma) | ✓ all of: toggle on/off, blue accent + top-border, zoom snap, add stage at end + insert-between, inline rename stage, delete + confirm + cascade, drag-reorder stages (smooth after the DragOverlay polish round), cross-stage task move, within-stage task reorder, inline rename task, normal-mode click stays the step-6 stub, /clients button hidden, permission gate (member sees nothing) |
+
+### Pre-existing launch-prep lint deferrals — updated count
+
+5d's PROGRESS.md noted 5 React 19 `react-hooks/purity` errors (`Date.now()` in render in `recently-done`, `settings/team`, etc.). 5e adds 2 new families to the same deferred sweep:
+
+| File | Rule | Reason |
+| --- | --- | --- |
+| `StageNode.tsx` + `TaskRow.tsx` (5 lint reports total) | `react-hooks/refs` | `useSortable().setNodeRef` + `.attributes` + `.listeners` are dnd-kit's callback ref + handler bags. React 19's `react-hooks/refs` rule flags any object-property access from a hook return that LOOKS ref-shaped — false positive for any drag-and-drop library following the dnd-kit pattern. Suppressed inline with `eslint-disable-next-line` comments where the JSX position accepted them; the remaining reports (`sortable.isDragging` access in the wrapper's `style` object) deferred since suppressing them would require restructuring the style computation. |
+| `StageNode.tsx` + `TaskRow.tsx` (2 lint reports) | `react-hooks/set-state-in-effect` | The "force-exit rename when editMode toggles off" `useEffect` calls `setIsRenaming(false)`. The lint rule wants us to derive instead — but `effectiveIsRenaming = isRenaming && editMode` would carry stale `isRenaming = true` across edit-mode cycles and surprise-resume the rename on re-entry. Intentional setState-in-effect. Same family as the 5d-era `Date.now()` purity errors. |
+
+All deferred to the future React 19 purity sweep. `next build` continues to ignore lint errors as before; runtime works fine.
+
+### Canvas is now feature-complete (5a → 5e all shipped)
+
+| Step | Surface |
+| --- | --- |
+| 5a | Pan/zoom shell + dotted grid |
+| 5b | Stage rendering + state colors + connectors |
+| 5c | Task cards + completion + per-stage state model |
+| 5d | Chrome (PipelineHeader + LeftRail + MembersPopover; route-groups split into `(workspace)` and `(canvas)`) |
+| 5e | Edit pipeline mode (this commit) |
+
+What the canvas does NOT yet have:
+- **Task detail side panel (step 6)** — normal-mode click still console.logs.
+- **Per-pipeline chat / activity / files (4b)** — rail icons coming-soon.
+- **Client portal "view as client" (4c)** — rail icon coming-soon.
+- Workspace ADMIN inheriting `canEditPipeline` — pre-existing gap flagged in 5d; not blocking.
+
+Step 6 comes next.
+
+### Lessons learned (apply forever)
+
+1. **For drag-and-drop on heavy items, reach for `DragOverlay` from the start — not after the user reports stutter.** The cost of NOT using overlay scales with the subtree size of the dragged item. The dragged item's `useSortable` returns a fresh `transform` per pointer-move frame, the wrapper re-renders, React reconciles the entire subtree. For N children each running their own hook subscription (per-stage `useSortable` on tasks, here), the per-frame work is multiplicative. `DragOverlay` makes the per-frame work O(1) — one DOM transform, no React work. Default to overlay for any draggable that wraps more than ~5 children.
+2. **When diagnosing drag jank, rule out the wrong suspects fast.** Jordan listed 4 candidates; only #2 (heavy subtree re-render) was real. Suspects #3 (re-derive every frame) and #4 (connectors redrawing) are obvious-sounding but get ruled out by reading the `useMemo` deps — if they don't change during a drag, neither runs mid-drag. The pattern: trace the dep graph from the visible jank to the actual hot code path; don't assume the most architecturally suspicious-looking thing is to blame.
+3. **`onPointerDown stopPropagation` is mandatory on every interactive descendant of a dnd-kit draggable parent.** Without it, clicking the inner widget could start tracking a drag on the outer parent — visible as either "checkbox click ignored" or "drag started by accident." The `activationConstraint: { distance: 8 }` masks this most of the time (small accidental moves don't activate), but a deliberate click + small drift (~10px) still races. Stop propagation at the inner pointerdown to remove the race entirely.
+4. **Drag-and-drop in a transformed parent (canvas + zoom-pan plane) works out-of-the-box at scale 1.0.** dnd-kit measures source rects via `getBoundingClientRect`, which already accounts for parent transforms. At any zoom other than 1.0 the drag offsets would drift (dnd-kit translates in screen pixels, the plane translates in plane pixels), which is why 5e snaps zoom to 1.0 on edit-mode entry. If a future feature needs editing at non-1.0 zoom, dnd-kit's `modifiers` API can scale the delta — but for 5e the snap is sufficient.
+
+---
+
 ## Phase 4a — step 5e (backend): edit-pipeline RPCs (2026-05-22)
 
 **Goal:** ship the entire write surface for the edit-pipeline UI shipping in 5e UI (next commit). Four security-definer RPCs cover stage add / reorder, task move (cross-stage + within-stage), and task reorder within a stage. Stage rename + delete are NOT new RPCs — direct UPDATE / DELETE on `stages` under existing RLS (cascading via the existing `tasks_stage_id_fkey ON DELETE CASCADE`).

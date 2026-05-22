@@ -124,6 +124,10 @@ export default async function PipelineClientsPage({
         displayName: callerProfileRes.data?.display_name ?? null,
         avatarUrl: callerProfileRes.data?.avatar_url ?? null,
       }}
+      // 5e: edit mode belongs to the canvas surface only. Hide the
+      // "Edit pipeline" toggle here — there's nothing on /clients that
+      // edit mode would change.
+      hideEditButton
     >
       <ClientsBody />
     </PipelineChromeShell>
