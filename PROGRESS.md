@@ -4,6 +4,118 @@ A running log of what shipped in each session. Newest first.
 
 ---
 
+## Phase 4a — step 6: task detail side panel (2026-05-22)
+
+**Status:** COMPLETE. Shipped in [`09b66db`](https://github.com/) — "step 6: task detail side panel + profiles RLS fix for pipeline-only member names". Live on prod, verified hands-on. Canvas surface is now feature-complete for the validation-MVP (5a → 5e → 6, all shipped).
+
+**Goal:** the canvas's normal-mode task click — stubbed `console.log` since 5c — opens a real Notion-style side panel for the task. Read + edit deadline, assignee, description, checklist, client_visible; surface a +Add sibling task affordance and a delete-task confirm. EDIT mode's inline-rename behavior is preserved (edit-mode click still flips title to inline rename, unchanged).
+
+### Files (this commit)
+
+```
+new file:  src/components/canvas/TaskDetailPanel.tsx                (~1940 lines — the entire panel)
+modified:  src/components/canvas/PipelineCanvas.tsx                 (+262 lines — openTaskId state, mutation callbacks, panel mount)
+modified:  src/app/w/(canvas)/[slug]/p/[pipeline-id]/page.tsx       (+39 lines — TaskRaw extended with description/deadline/client_visible/created_at; SELECT extended; pipelineName threaded)
+new file:  supabase/migrations/20260524120000_profiles_select_workspace_owner_pipeline_members.sql  (the RLS fix — see below)
+modified:  PROGRESS.md
+```
+
+### Open / close behavior
+
+| Trigger | Result |
+| --- | --- |
+| Click task title in NORMAL mode | Opens panel (slide-in from right, ~220ms cubic-bezier, dim overlay on canvas behind) |
+| Click task title in EDIT mode | UNCHANGED — flips to inline rename (the 5e behavior) |
+| Click X / Esc / overlay | Closes panel; canvas already reflects pending edits (no flash) |
+| Task gets deleted by callback | Panel closes defensively (`openTaskId` cleared) |
+
+No round-trip on open. The panel reads task + stage straight from `PipelineCanvas`'s already-loaded `tasksState` / `stagesState`. The page fetch now selects the panel-only fields upfront (`description`, `deadline`, `client_visible`, `created_at`) — the canvas itself doesn't render them, but loading once means the panel renders synchronously from the same `TaskRaw` shape both surfaces share. Mutations from the panel are optimistic-with-revert callbacks that PipelineCanvas owns; closing the panel reveals a canvas already showing the edits.
+
+### Fields shipped
+
+| Field | Edit gate (mirrors RLS) | Notes |
+| --- | --- | --- |
+| Breadcrumb | — (read-only) | `<pipeline name> › <stage name>` at panel top; pipeline name threaded down from chrome |
+| Title | `canEditPipeline || assignee === currentUserId` | Inline edit (click flips to input). Enter submits, Esc cancels. Same contract as the 5e inline-rename pattern. |
+| Done checkbox | `canEditPipeline || assignee === currentUserId` | Reuses the 5c `toggleTaskDone` callback. |
+| Description | `canEditPipeline || assignee === currentUserId` | Inline editor — click flips to textarea. Enter commits; Shift+Enter inserts newline; Esc cancels; blur commits. Trim-empty → `null` so an empty string never lands in DB. |
+| Assignee picker | `canEditPipeline` only | Custom popover (built inline, not a shared component). Lists ASSIGNABLE members — `members.filter(m => m.role !== "client")` — clients can't be assigned. Renders via `resolveDisplayName(m)` (display_name → email-prefix → "Pending member"). Single-select. Unassign row at top. |
+| Deadline | `canEditPipeline || assignee === currentUserId` | Reuses the existing `DatePickerPopover` from My Tasks. |
+| Client-visible toggle | `canEditPipeline` only (members see read-only "Visible to client" line if `client_visible=true`) | Direct UPDATE; gated by RLS. |
+| Checklist (add / toggle / delete) | `canEditPipeline` only | Backed by `checklist_items` table. Members don't get edit access on checklist — matches `checklist_items` RLS scope (the assignee-tighten policy covers `tasks`, not `checklist_items`). |
+| Stage notes | — (read-only pointer) | A "Stage" section shows stage name + position with the italic line *"Stage notes are edited in pipeline edit mode."* It's a context pointer, NOT a stage-notes editor. |
+| Attachments | — | STUBBED. Reserved layout + placeholder copy; the files step (4b) ships real upload UX. |
+| +Add sibling task | `canEditPipeline` only | Reuses the existing canvas `addTask` callback (→ `create_task` RPC). |
+| Delete task | `canEditPipeline` only | Confirm dialog matches the 5e delete-stage pattern — `panel-card` modal, red `#F43F5E` confirm. |
+
+### Checklist delete-affordance bug — fixed mid-session
+
+Pre-fix: the X button on a checklist row only appeared on **button-hover**, not row-hover. Mouse-arriving anywhere over the row but not directly over (the not-yet-visible) X would never reveal it — the user had to know its exact position. Fix: moved the show/hide to a CSS group-hover pattern at the row level (`.checklist-row:hover .checklist-delete { opacity: 1 }`). Now hovering anywhere on the row reveals the delete affordance. One-line CSS-state change, no behavior change to confirm flow.
+
+### Backend underpinnings (already shipped — step 6 consumes them)
+
+| Piece | Where it shipped | Role in step 6 |
+| --- | --- | --- |
+| 4 edit-pipeline RPCs (`create_stage`, `reorder_stages`, `reorder_tasks_in_stage`, `move_task`) | [`6fb4cb2`](https://github.com/) — "step 5e backend" | Reused by the panel's +Add sibling task (via the existing `create_task` path; stage-level RPCs don't fire from the panel itself, only from the canvas in edit mode) |
+| `create_task` RPC + `tasks_update` policy + `set_task_completion_metadata` trigger | shipped pre-5c | Underlie the panel's title/description/deadline/assignee/done writes |
+| `enforce_member_task_update_scope` trigger | [`7f056b1`](https://github.com/) — "step 6 backend: enforce_member_task_update_scope + sync 5c tighten policy" | Defense-in-depth: REJECTS member updates to forbidden columns (client_visible, assignee_id, stage_id, etc.) — the panel's UI gates mirror this, and the trigger is the server-side backstop. **NOT verified by an executed test yet — see open items.** |
+| Profiles RLS fix (this commit) | `20260524120000_profiles_select_workspace_owner_pipeline_members.sql` | Lets workspace owners/admins read profiles of pipeline-only members in their workspace's pipelines (see below) |
+
+All backend pieces confirmed live in prod.
+
+### Profiles RLS fix — sub-fix in the same commit
+
+The assignee picker (and silently, the header member popover) was rendering pipeline-only members as **"Pending member"** instead of their actual `display_name` for Jordan-as-workspace-owner views. The data path itself was correct (single `chrome.members` array, same fetch, same prop down to both surfaces) — the bug was server-side: the existing `profiles_select` policy had three branches (self / shared workspace_memberships / shared pipeline_memberships) and a workspace owner who does NOT have a pipeline_memberships row in a given pipeline could not satisfy any of them for a user who was invited **at the pipeline level only** (no workspace_memberships row of their own). The `.in("id", userIds)` query in `fetchCanvasChromeData` silently returned 0 rows for those ids — both `display_name` and `email` came through null on the `ChromeMember.user` object, and the panel + popover both fell to the final "Pending member" fallback.
+
+Fix: new migration `20260524120000_profiles_select_workspace_owner_pipeline_members.sql` adds a 4th branch to `profiles_select`:
+
+```sql
+or exists (
+  select 1
+  from public.workspace_memberships my
+  join public.pipelines p on p.workspace_id = my.workspace_id
+  join public.pipeline_memberships pm on pm.pipeline_id = p.id
+  where my.user_id = (select auth.uid())
+    and my.role in ('owner', 'admin')
+    and pm.user_id = public.profiles.id
+)
+```
+
+Verified live + in repo, in sync. The same fix repairs both the picker AND the header member popover (same data path). Doesn't widen client visibility — clients have no `workspace_memberships` row so the new branch never fires for them.
+
+**Forever-lesson for future RLS work:** when adding a new "X can see Y across A→B→C" capability, list every existing surface that fetches Y filtered by RLS — not just the surface you're building. The popover-vs-picker split here is a case where the bug was already silently in production via the header popover; the picker just made it visible because it lists members with explicit name + role rows side-by-side. The bug-find pattern (popover symptom invisible because pipeline-only members fall below the 3-avatar cluster fold) is a model for "don't trust 'looks fine over there' as evidence — verify the same data path on the surface you're not currently looking at."
+
+### Verification
+
+| Check | Result |
+| --- | --- |
+| `npx tsc --noEmit` | ✓ clean |
+| `npx next build` | ✓ green |
+| Hands-on (Jordan, prod) | ✓ panel opens on normal-mode click, all field edits round-trip, +Add sibling lands in canvas, delete confirm fires, EDIT-mode click still does inline rename (unchanged), assignee picker now renders "Taylor Teammate" + "Alex Agency" with proper avatars (was "Pending member" pre-RLS-fix) |
+| Profiles RLS verification SELECT (impersonating Jordan via `set local request.jwt.claims`) | ✓ returns Taylor + Alex + Jordan rows (3 rows). Pre-migration returned 1 row (Jordan only). |
+
+### Open items logged during step 6 (DO NOT lose these)
+
+These items surfaced during step-6 testing but are intentionally OUT of step-6 scope. Each is a real follow-up that must be addressed; recording here so a future session can find them.
+
+1. **LAUNCH-BLOCKER — no executed test proves `enforce_member_task_update_scope` actually fires.** Code reviewed and looks correct by inspection, but SQL-editor impersonation (`set local request.jwt.claims`) was a no-op: RLS filtered the row BEFORE the trigger ran, so `Success, 0 rows` proves nothing. Need a real automated test where `auth.uid()` resolves correctly (pgTAP OR a transaction with proper authenticated context — `tests.authenticate_as(uuid)` if Supabase's pgTAP helpers are installed) asserting all three: (a) member updating a forbidden column on their own task is REJECTED with `SQLSTATE 42501` from the trigger; (b) member updating title/description/deadline/done on their own task SUCCEEDS; (c) owner updating any column SUCCEEDS. Must be in repo + runnable in CI. **Do not ship to real users without this passing.** Logged as a spawned background task.
+2. **BUG (not step-6) — canvas page guard is stricter than RLS.** `src/app/w/(canvas)/[slug]/p/[pipeline-id]/page.tsx` (around lines 81–97) requires the caller to have a `workspace_memberships` row to access the canvas. A user who is a pipeline-only agency member (no workspace_memberships row, only `pipeline_memberships.role in ('admin','member')`) gets redirected away from their own pipeline despite RLS being willing to let them read it. Fix: extend the guard to also accept users with a `pipeline_memberships` row in the target pipeline.
+3. **BUG (auth, three sub-points) — blocks logging into password-less test accounts locally.** (a) "Forgot password?" link on /auth/signin leads to a 404 — reset page missing or link href wrong. (b) Supabase magic link redirects to prod `app.trystages.com` instead of localhost during local dev — Site URL / redirect allowlist needs `http://localhost:3000` and `http://localhost:3000/**` added in Supabase Dashboard → Authentication → URL Configuration → Redirect URLs. (c) When the access_token hash IS placed on `localhost:3000/#access_token=...`, the local signin page does not consume it / establish a session — the hash-token handler may be missing on the signin route (likely `detectSessionInUrl` not reaching a browser client, or the email template pointing at `/auth/signin` instead of `/auth/callback`). Logged as a spawned background task.
+4. **WISHLIST — per-task notes (`tasks.note` column) not surfaced in the panel.** Intentionally deferred per `WISHLIST.md` ("task notes are a single text field; build threaded UI only on real customer signal"). Column exists in DB + is in the `enforce_member_task_update_scope` rejected-columns list for members, but the panel does not fetch, render, or edit it. Check `WISHLIST.md` before adding it.
+5. **Workspace ADMINs treated as second-class by `can_edit_pipeline` + the trigger.** Pre-existing gap also flagged in the 5d entry: workspace admins do NOT currently inherit `canEditPipeline` (the helper only checks workspace_owner OR pipeline owner/admin). Same gap means admins likely fall to the member branch in the new trigger. Confirm intended vs bug before launch.
+
+### Validation-MVP build-order status
+
+| Stage | Status |
+| --- | --- |
+| Canvas (5a → 5e) | ✓ DONE |
+| Step 6 — task detail side panel | ✓ DONE (this commit) |
+| **NEXT** — per-pipeline chat (4b channels + messages surface) | pending |
+| Client portal "view as client" (4c) | pending |
+| File sharing (pipeline files + stage attachments) | pending |
+
+---
+
 ## Phase 4a — step 5e (UI): edit-pipeline mode (2026-05-22)
 
 **Goal:** the canvas's "Edit pipeline" button — stubbed `console.log` in 5d — becomes a real edit mode. Toggle into edit mode, add / rename / reorder / delete stages, drag tasks between stages, drag-reorder tasks within a stage, inline-rename task titles. Per the locked spec, everything reuses `stageStateFromCounts` from `src/lib/current-stage.ts` so the canvas re-derives live as the user mutates structure (colors recompute, connectors reflow, anchor stage updates).
