@@ -4,6 +4,73 @@ A running log of what shipped in each session. Newest first.
 
 ---
 
+## Phase 4a — step 5e (backend): edit-pipeline RPCs (2026-05-22)
+
+**Goal:** ship the entire write surface for the edit-pipeline UI shipping in 5e UI (next commit). Four security-definer RPCs cover stage add / reorder, task move (cross-stage + within-stage), and task reorder within a stage. Stage rename + delete are NOT new RPCs — direct UPDATE / DELETE on `stages` under existing RLS (cascading via the existing `tasks_stage_id_fkey ON DELETE CASCADE`).
+
+**Important context for future maintainers:** the 4 RPCs were applied to the live DB in a prior session that ended before the migration file + this PROGRESS note made it into the repo. This commit syncs the repo back to the DB — the SQL in the migration file is verbatim from `pg_get_functiondef` against the live functions, not a fresh authoring. If you ever wonder "did this migration ever run against the live DB" — the answer is yes, weeks before its commit timestamp.
+
+### The 4 RPCs
+
+| RPC | Returns | Behavior |
+| --- | --- | --- |
+| `create_stage(pipeline_id, name, after_stage_id default null)` | `json {id, pipeline_id, name, position}` | Appends when `after_stage_id` is null; inserts between when set (subsequent positions shift +1). Validates name (trim, non-empty, ≤80 chars) and that `after_stage_id` belongs to the same pipeline. |
+| `reorder_stages(pipeline_id, ordered_stage_ids uuid[])` | `void` | Atomic rewrite of all stage positions in one query (`unnest … with ordinality`). REJECTS partial arrays — the array must contain ALL stages in the pipeline. |
+| `reorder_tasks_in_stage(stage_id, ordered_task_ids uuid[])` | `void` | Same pattern, scoped to one stage. Must contain ALL tasks in the stage. |
+| `move_task(task_id, target_stage_id, target_position)` | `json {id, stage_id, position}` | Handles BOTH cross-stage and within-stage moves. Clamps `target_position` inclusive-end: within-stage `[1, count]`, cross-stage `[1, count+1]`. Rejects moves across pipelines (defense-in-depth — RLS would block but the explicit check gives a clearer error). |
+
+Each RPC:
+- `security definer`, `search_path = ''` — caller-schema isolation (the canonical pattern from prior RPCs)
+- gates on `auth.uid()` not null + `can_edit_pipeline(pipeline_id)` — mirrors the RLS rule used by direct UPDATE/DELETE for stage rename + delete, so the entire 5e write surface (RPC and direct) goes through ONE permission check
+- bumps `pipelines.last_edited_at = now()` on success — keeps the header subline ("Last edited 5m ago") fresh
+- raises `SQLSTATE 42501` (insufficient_privilege) for auth/perms failures; `22023` (invalid_parameter_value) for input failures
+- `revoke execute … from public`; `grant execute … to authenticated` — same grant pattern as `create_task` and `create_pipeline_with_channels`
+
+### No unique constraint on (pipeline_id, position) — verified live
+
+Ran `select conname from pg_constraint where conrelid='public.stages'::regclass and contype='u'` → 0 rows. Same for `tasks`. **The position-shift logic in `create_stage` (`update stages set position=position+1 where position > after_position`) and the two-step shift-and-move in `move_task` are safe as-is** — no mid-shift uniqueness violation risk, no two-pass shift needed.
+
+**Forever-rule for future maintainers:** if you ever add a `UNIQUE(pipeline_id, position)` constraint (sensible to make data integrity stronger), you MUST either:
+1. Make it `DEFERRABLE INITIALLY IMMEDIATE` AND add `set constraints all deferred` inside each of these RPCs, OR
+2. Rewrite each RPC body to two-pass: shift conflicting rows to NEGATIVE temp values first, then assign final positions in a second update.
+
+Both are mechanical changes; either works. The DOWN-plan in the migration file is `drop function` × 4 — re-running the migration would re-create the current (non-DEFERRABLE-aware) bodies, so re-do the constraint change AFTER any future migration that touches these RPCs.
+
+### Locked 5e UI decisions (UI implementation lands in a separate commit)
+
+These decisions are FINAL — the UI commit must mirror them exactly. Recorded here so the decisions outlive the chat that produced them.
+
+| Decision | Choice |
+| --- | --- |
+| Edit mode model | Distinct mode toggled by header button (NOT inline always-editable affordances). `editMode: boolean` lives in a new `EditModeContext` mounted at `PipelineChromeShell` and consumed by `PipelineHeader` (toggle button) + `PipelineCanvas` (visual treatment + drag affordances). |
+| Header toggle | "Edit pipeline" ↔ "Done editing" label, pencil ↔ check icon, `#108CE9` (`stages-blue`) accent when active. Hidden on `/clients` (edit belongs on canvas only). Gated on `canEditPipeline` (already wired). |
+| Canvas edit-mode signal | Thin blue (`#108CE9`) top-border on the canvas wrapper. |
+| Drag library | `@dnd-kit/{core, sortable, utilities}` (fresh install — not currently a dependency). `PointerSensor` with `activationConstraint: {distance: 8}` + pointer capture. |
+| Pan/drag coexistence | dnd-kit owns drag on stages + tasks; `react-zoom-pan-pinch` owns pan on empty canvas. `panning.excluded` widened so pointerdown on any stage node or task card never starts a pan — applies in BOTH normal and edit mode (closes a subtle pre-5e bug where you could start a pan from a stage's background). |
+| Zoom in edit mode | Snap to 1.0 on entry, hide zoom controls. Do NOT restore prior zoom on exit (user can re-zoom if needed). |
+| Stage add | Persistent "+ add stage" button at right end (append; `create_stage` with `after_stage_id=null`) AND gap-hover "+" pill between adjacent stages (insert-between; `after_stage_id` = LEFT stage of the gap). |
+| Insert-before-first-stage | NOT building. `create_stage` signature only supports `after_stage_id`. If a user wants a new first stage, they add at the end then drag it left. |
+| Stage rename | Click stage name in edit mode → inline input → direct `UPDATE stages SET name = …` (gated by RLS). |
+| Stage delete | Button on stage in edit mode → confirm dialog → direct `DELETE FROM stages WHERE id = …` (tasks cascade via FK). |
+| Delete confirm copy | N ≥ 1: `"This will delete '{name}' and its {N} tasks. This can't be undone."` — N = 0: `"Delete '{name}'? This can't be undone."` |
+| Task drag | Between stages → `move_task`; within stage → `reorder_tasks_in_stage` (or `move_task` with same source/target). |
+| Task click in edit mode | Inline rename of `tasks.title` via direct UPDATE. |
+| Task click in normal mode | UNCHANGED from 5c — `console.log` stub, awaiting step-6 task detail panel. |
+| Rename submit semantics | Enter commits, Esc cancels, blur-with-changes commits, blur-no-change cancels. Matches the existing `AddTaskRow` UX. |
+| Optimistic UX | Apply local state mutation immediately, revert on RPC error. Matches the existing `toggleTaskDone` pattern at `PipelineCanvas.tsx`. |
+| Live re-derivation | REUSE `stageStateFromCounts` from `src/lib/current-stage.ts` — every structural mutation feeds the existing `useMemo` derivation; per-stage colors, connectors, and layout all recompute automatically. Do NOT write a second derivation. |
+
+### Files (this commit)
+
+```
+new file:  supabase/migrations/20260522120000_edit_pipeline_rpcs.sql
+modified:  PROGRESS.md
+```
+
+(UI implementation + file changes + verification land in the next commit, which Jordan reviews against figma before it commits.)
+
+---
+
 ## Phase 4a — step 5d: pipeline canvas chrome (header + left rail) (2026-05-22)
 
 **Goal:** replace the workspace AppShell (dashboard nav with workspace switcher + search + Pipeline button) with a pipeline-specific chrome — a shorter header (back arrow + emoji + name + subline + member cluster + Edit pipeline + profile menu) and a vertical left rail of section icons — for the canvas surface only. Other workspace routes (dashboard, my-tasks, settings, p/new) keep AppShell unchanged. Plus the deferred 5a coachmark scope fix.
