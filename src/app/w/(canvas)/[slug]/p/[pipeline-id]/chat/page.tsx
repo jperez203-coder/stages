@@ -127,6 +127,14 @@ export default async function PipelineChatPage({
           display_name: callerProfileRes.data?.display_name ?? null,
           avatar_url: callerProfileRes.data?.avatar_url ?? null,
         }}
+        // Slice 3: pass the pipeline's member roster (already in
+        // chrome) to ChatBody for author-cache seeding. Realtime
+        // INSERT events carry just author_id (no joined profile);
+        // ChatBody resolves it via this cache for instant render
+        // without a per-event profile fetch. Async fallback fetch
+        // covers the rare case of an author who joined the pipeline
+        // mid-session and isn't in this snapshot.
+        members={chrome.members}
         // Slice 1: route auth already gates on workspace_memberships,
         // so anyone reaching this page is agency-side. The portal-side
         // chat (Phase 4c) will pass `false` and the Layer 3 filter in

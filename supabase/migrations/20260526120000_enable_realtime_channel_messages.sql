@@ -1,0 +1,79 @@
+-- ============================================================================
+-- Phase 4b slice 3 — enable Supabase Realtime broadcast on channel_messages
+-- ============================================================================
+-- Adds `public.channel_messages` to the `supabase_realtime` publication so
+-- the Realtime server can broadcast INSERT events to subscribed clients.
+-- Slice 3 of per-pipeline chat consumes these events via
+-- supabase.channel(...).on('postgres_changes', ...) wired in ChatBody.tsx.
+--
+-- ┌─ RLS interaction (the critical security guarantee for this slice)
+-- │
+-- │  Supabase Realtime evaluates the table's RLS SELECT policy against
+-- │  each subscriber's JWT before broadcasting. The existing
+-- │  channel_messages_select policy is:
+-- │
+-- │    is_channel_member(channel_id)
+-- │    AND (is_internal = false
+-- │         OR is_pipeline_agency_member(<pipeline of channel>))
+-- │
+-- │  Consequences:
+-- │   * Client subscribers (role='client', no agency membership) will
+-- │     NEVER receive internal messages via realtime — the realtime
+-- │     server filters them out before the broadcast hits the wire.
+-- │     Layer 1 of the 3-layer is_internal defense (CLAUDE.md §4) carries
+-- │     fully across to realtime.
+-- │   * Agency subscribers receive every message in channels they're
+-- │     members of.
+-- │   * Non-channel-members receive nothing — they're not subscribers
+-- │     to begin with (RLS would deny SELECT) but even if they were,
+-- │     the per-row RLS check would suppress every event.
+-- │
+-- │  Layer 3 (the client-side render filter in ChatBody.visibleMessages)
+-- │  STILL APPLIES to realtime-arrived rows. Realtime RLS is Layer 1
+-- │  for the broadcast path; the client-side filter remains as the
+-- │  belt-and-suspenders pass against any future Supabase regression
+-- │  or misconfig that might let an is_internal=true row leak.
+-- │  Do not remove Layer 3 thinking realtime RLS makes it redundant.
+-- │
+-- └──────────────────────────────────────────────────────────────────────
+--
+-- replica identity: default (primary-key only) is sufficient because
+-- slice 3 listens to INSERT events only, whose payload always contains
+-- the full new row regardless of replica identity. If a future slice
+-- needs UPDATE/DELETE realtime (e.g. delete-message, edit-message),
+-- run `alter table public.channel_messages replica identity full;`
+-- then so the WAL captures the pre-image too. NOT needed now.
+--
+-- ┌─ DOWN PLAN
+-- │
+-- │   alter publication supabase_realtime drop table public.channel_messages;
+-- │
+-- └──────────────────────────────────────────────────────────────────────
+-- ============================================================================
+
+alter publication supabase_realtime add table public.channel_messages;
+
+
+-- ============================================================================
+-- Verification (run manually after applying)
+-- ============================================================================
+-- 1. Table is in the realtime publication:
+--   select schemaname, tablename
+--   from pg_publication_tables
+--   where pubname = 'supabase_realtime'
+--     and schemaname = 'public'
+--     and tablename = 'channel_messages';
+--   Expected: 1 row, ('public', 'channel_messages').
+--
+-- 2. Functional smoke (two browser sessions): open /chat for the same
+--    pipeline in two windows signed in as two different accounts that
+--    both have channel_memberships for #general. Send a message from
+--    browser A; browser B should see it appear in the thread within
+--    ~1 second without refreshing.
+--
+-- 3. Internal-message confidentiality (when a slice ships client view):
+--    a future agency-side INSERT with is_internal=true must NOT appear
+--    in a client-side subscriber's open thread. Out of scope for slice 3
+--    verification but the SQL + RLS already guarantee it; client-portal
+--    slice will exercise this end-to-end.
+-- ============================================================================
