@@ -1,15 +1,21 @@
 "use client";
 
-import { useMemo } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { UserAvatar } from "@/components/UserAvatar";
 import type { ChatChannel, ChatMessage } from "@/lib/chat-data";
 
 /**
  * Right pane of the chat surface — channel header + message list +
- * disabled composer. Phase 4b slice 1.
+ * composer. Phase 4b slices 1 + 2b.
  *
- * Slice-1 scope:
- *   * Renders one channel's messages (always #general in this slice;
+ * Slice-1 scope (read path):
+ *   * Renders one channel's messages (always #general in slices 1-3;
  *     slice 4 wires per-channel rendering).
  *   * Per-day date dividers ("Today" / "Yesterday" / weekday / date) —
  *     group-by computed via useMemo over the message list.
@@ -19,13 +25,25 @@ import type { ChatChannel, ChatMessage } from "@/lib/chat-data";
  *     NO threaded replies, NO "N new messages" divider.
  *   * Empty state when zero messages: centered muted "No messages yet."
  *     No CTA, no build-phase reference in the copy.
- *   * Composer renders for layout but is DISABLED — sending is slice 2.
- *     Layout shows the disabled textarea + the "Posting as <email> ·
- *     Press Enter to send" footer per the figma.
+ *
+ * Slice-2b additions (send path):
+ *   * Composer is now functional. Enter sends (Shift+Enter inserts a
+ *     newline). Empty/whitespace gates submission before reaching
+ *     onSend. Send button mirrors the Enter behavior.
+ *   * Scroll-to-bottom on `messages.length` change — fires on mount,
+ *     on send (optimistic row appended), and on revert (optimistic
+ *     row removed). Pinned to the latest message in all cases.
+ *   * Inline ephemeral error on failed send: text restored to the
+ *     composer, "Couldn't send. Try again." shown below the textarea,
+ *     auto-dismissed on next keystroke or successful send.
  *
  * Layer 3 client-render filter for `is_internal` runs in the parent
  * (ChatBody) before messages reach this component. This component
  * trusts that filtering already happened.
+ *
+ * Slice-4 deferred: internal-note toggle UI (would replace the hardcoded
+ * `false` at the composer's onSend call site with a state-driven boolean
+ * from a toggle). Don't add toggle markup here yet.
  */
 
 type Props = {
@@ -34,13 +52,37 @@ type Props = {
   /** Email of the currently-logged-in user — for the composer footer
    *  ("Posting as <email>"). */
   viewerEmail: string;
+  /** Slice 2b: send handler from ChatBody. Returns true on successful
+   *  reconcile, false on failure (composer keeps text + shows inline
+   *  error). is_internal is a real parameter — the composer passes
+   *  false for slice 2b; slice 4 will replace that literal with a
+   *  toggle-driven boolean at the composer call site. */
+  onSend: (text: string, isInternal: boolean) => Promise<boolean>;
 };
 
-export function MessageThread({ channel, messages, viewerEmail }: Props) {
+export function MessageThread({
+  channel,
+  messages,
+  viewerEmail,
+  onSend,
+}: Props) {
   // Group messages by calendar day for the date dividers. useMemo so the
   // group-by re-runs only when the messages array identity changes
-  // (i.e. on a fresh fetch — not on every chrome re-render).
+  // (i.e. on a fresh fetch, an optimistic send, or a successful reconcile
+  // — not on every chrome re-render).
   const grouped = useMemo(() => groupByDay(messages), [messages]);
+
+  // Scroll-to-bottom on messages.length change. Fires on mount (length 0
+  // → N or initial mount with N already), on send (length N → N+1), on
+  // successful reconcile (length unchanged but identity changes — won't
+  // re-fire here since deps are length only, which is correct: we don't
+  // want to scroll on every server-row replacement), and on revert
+  // (length N+1 → N — harmless re-scroll-to-bottom).
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages.length]);
 
   return (
     <section
@@ -71,6 +113,7 @@ export function MessageThread({ channel, messages, viewerEmail }: Props) {
 
       {/* Scrollable message area. */}
       <div
+        ref={scrollContainerRef}
         style={{
           flex: 1,
           overflowY: "auto",
@@ -93,7 +136,11 @@ export function MessageThread({ channel, messages, viewerEmail }: Props) {
         )}
       </div>
 
-      <DisabledComposer channelName={channel.name} viewerEmail={viewerEmail} />
+      <Composer
+        channelName={channel.name}
+        viewerEmail={viewerEmail}
+        onSend={onSend}
+      />
     </section>
   );
 }
@@ -296,15 +343,54 @@ function EmptyState() {
   );
 }
 
-// ─── Composer (slice 1: rendered, disabled) ─────────────────────────────
+// ─── Composer (slice 2b: functional) ────────────────────────────────────
 
-function DisabledComposer({
+function Composer({
   channelName,
   viewerEmail,
+  onSend,
 }: {
   channelName: string;
   viewerEmail: string;
+  onSend: (text: string, isInternal: boolean) => Promise<boolean>;
 }) {
+  const [text, setText] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const submit = useCallback(async () => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    // is_internal HARDCODED `false` HERE — slice 2b sends only normal
+    // posts in #general. The canonical "who decides isInternal" point
+    // in the chain is this exact call site. Slice 4's internal-note
+    // toggle UI will replace this single literal with a state-driven
+    // boolean from the toggle; nothing else in the chain (ChatBody's
+    // sendMessage, the supabase insert, RLS) needs to change.
+    const ok = await onSend(trimmed, /* isInternal */ false);
+
+    if (ok) {
+      setText("");
+      setError(null);
+      textareaRef.current?.focus();
+    } else {
+      // Send failed — keep text in composer so the user can retry
+      // without retyping. Inline error auto-dismisses on next keystroke
+      // (see onChange) or next successful send.
+      setError("Couldn't send. Try again.");
+    }
+  }, [text, onSend]);
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Enter (without Shift) → submit.
+    // Shift+Enter → default textarea behavior (insert a newline).
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      void submit();
+    }
+  };
+
   return (
     <div
       style={{
@@ -315,58 +401,91 @@ function DisabledComposer({
         zIndex: 2,
         display: "flex",
         flexDirection: "column",
-        gap: 8,
+        gap: 6,
       }}
     >
       <div
         style={{
           display: "flex",
-          alignItems: "center",
+          alignItems: "flex-end",
           gap: 8,
-          padding: "10px 14px",
+          padding: "8px 12px",
           background: "#2C2C2F",
           border: "1px solid #36363A",
           borderRadius: 10,
-          opacity: 0.7,
         }}
       >
-        <input
-          type="text"
-          disabled
+        <textarea
+          ref={textareaRef}
+          rows={1}
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            if (error) setError(null);
+          }}
+          onKeyDown={onKeyDown}
           placeholder={`Message #${channelName}…`}
           style={{
             flex: 1,
             background: "transparent",
             border: "none",
             outline: "none",
-            color: "rgba(255,255,255,0.45)",
+            resize: "none",
+            color: "white",
             fontSize: 14,
-            cursor: "not-allowed",
+            fontFamily: "inherit",
+            lineHeight: 1.4,
+            // Internal scroll once the textarea grows past ~6 lines —
+            // prevents the composer from eating half the viewport on
+            // a very long draft.
+            maxHeight: 140,
+            overflowY: "auto",
+            // Strip the default user-agent textarea padding so vertical
+            // alignment matches the disabled input baseline we shipped
+            // in slice 1.
+            padding: "4px 0",
           }}
         />
-        {/* Disabled send button — visual only; sending is slice 2. */}
         <button
           type="button"
-          disabled
-          aria-label="Send message (coming soon)"
+          onClick={() => void submit()}
+          // Disabled visually + interactively when there's nothing to
+          // send. Bypassing the empty/whitespace check would still
+          // no-op via submit's own guard, but disabling the button
+          // makes the affordance obvious.
+          disabled={text.trim().length === 0}
+          aria-label="Send message"
           style={{
             width: 32,
             height: 32,
             borderRadius: 8,
             background: "#108CE9",
-            opacity: 0.4,
+            opacity: text.trim().length === 0 ? 0.4 : 1,
             border: "none",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             color: "white",
-            cursor: "not-allowed",
+            cursor: text.trim().length === 0 ? "not-allowed" : "pointer",
             flexShrink: 0,
+            transition: "opacity 120ms ease-out",
           }}
         >
           <SendGlyph size={14} />
         </button>
       </div>
+      {error && (
+        <div
+          role="alert"
+          style={{
+            fontSize: 11,
+            color: "#F43F5E",
+            paddingLeft: 4,
+          }}
+        >
+          {error}
+        </div>
+      )}
       <div
         style={{
           fontSize: 11,

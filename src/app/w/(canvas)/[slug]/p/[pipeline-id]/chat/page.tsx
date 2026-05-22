@@ -116,7 +116,17 @@ export default async function PipelineChatPage({
     >
       <ChatBody
         data={chatData}
-        viewerEmail={user.email ?? ""}
+        // Slice 2b: viewer object replaces the prior viewerEmail prop.
+        // ChatBody needs id + display_name + avatar_url + email to
+        // construct optimistic message rows (the author field on a
+        // freshly-sent message is the viewer themselves), in addition
+        // to email for the composer's "Posting as…" footer line.
+        viewer={{
+          id: user.id,
+          email: user.email ?? null,
+          display_name: callerProfileRes.data?.display_name ?? null,
+          avatar_url: callerProfileRes.data?.avatar_url ?? null,
+        }}
         // Slice 1: route auth already gates on workspace_memberships,
         // so anyone reaching this page is agency-side. The portal-side
         // chat (Phase 4c) will pass `false` and the Layer 3 filter in
