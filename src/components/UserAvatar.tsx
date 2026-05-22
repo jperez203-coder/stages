@@ -46,9 +46,17 @@ type Props = {
   user: AvatarUser;
   /** Pixel diameter. Font size is 0.4× this. */
   size: number;
+  /** When true, photo-variant avatars get a 2px colored stroke (the
+   *  deterministic per-user color, full saturation). Initial-variant
+   *  avatars already render the color as their background — no border
+   *  added since it'd be the same color as the fill. Used by the
+   *  pipeline header's MembersPopover per figma (each member row
+   *  has a colored ring around their photo). Default false to keep
+   *  existing dashboard avatars untouched. */
+  bordered?: boolean;
 };
 
-export function UserAvatar({ user, size }: Props) {
+export function UserAvatar({ user, size, bordered = false }: Props) {
   // Deterministic color from user.id so the same person gets the same
   // color across renders, sessions, devices. id is a uuid string;
   // charCodeAt over the whole string gives enough entropy to spread
@@ -92,10 +100,16 @@ export function UserAvatar({ user, size }: Props) {
         style={{
           width: `${size}px`,
           height: `${size}px`,
+          boxSizing: "border-box",
           borderRadius: cornerRadius,
           objectFit: "cover",
           flexShrink: 0,
           display: "block",
+          // Bordered variant: 2px colored stroke around the photo.
+          // box-sizing: border-box (above) keeps the visible footprint
+          // exactly `size`px regardless of whether the border is on,
+          // so the avatar doesn't grow when `bordered` is true.
+          border: bordered ? `2px solid ${color}` : "none",
         }}
       />
     );

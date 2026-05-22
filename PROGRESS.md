@@ -4,6 +4,214 @@ A running log of what shipped in each session. Newest first.
 
 ---
 
+## Phase 4a — step 5d: pipeline canvas chrome (header + left rail) (2026-05-22)
+
+**Goal:** replace the workspace AppShell (dashboard nav with workspace switcher + search + Pipeline button) with a pipeline-specific chrome — a shorter header (back arrow + emoji + name + subline + member cluster + Edit pipeline + profile menu) and a vertical left rail of section icons — for the canvas surface only. Other workspace routes (dashboard, my-tasks, settings, p/new) keep AppShell unchanged. Plus the deferred 5a coachmark scope fix.
+
+### Built as two atomic steps
+
+**Step 1 — route-groups refactor (move-only, no feature work):**
+
+Split `/w/[slug]/*` into two Next.js route groups so each gets its own layout:
+
+```
+src/app/w/
+├── (workspace)/[slug]/         ← <AppShell>
+│   ├── layout.tsx
+│   ├── page.tsx                (dashboard)
+│   ├── my-tasks/...
+│   ├── settings/...
+│   └── p/new/page.tsx
+└── (canvas)/[slug]/             ← <PipelineChromeShell>
+    ├── layout.tsx               (pass-through — chrome data fetched per-page since layouts can't see deeper params)
+    └── p/[pipeline-id]/
+        ├── page.tsx             (canvas)
+        └── clients/page.tsx     (server wrapper) + ClientsBody.tsx (client body)
+```
+
+URLs unchanged (route groups in `(parens)` are excluded from the URL path). All 7 routes serve at identical URLs to pre-split — verified via curl smoke. The atomic move shipped clean with zero behavior changes before any chrome work landed; verified `next build` green + dev smoke all routes → 307 → /auth/signin (matching the pre-split surface).
+
+**Step 2 — chrome work (the actual feature):**
+
+New component tree under `src/components/chrome/`:
+
+- **`PipelineChromeShell`** — outer layout. Top: header (sticky 52px). Body row: rail (56px) on the left, page content (flex-1) on the right.
+- **`PipelineHeader`** — back arrow + pipeline emoji + name + subline + member cluster + Edit pipeline + visual divider + profile menu.
+- **`LeftRail`** — 7 stacked icons: cursor (active = canvas), chat (coming-soon, custom round-bubble-with-lines SVG), activity (coming-soon), files (coming-soon, folder icon), members (live, opens popover), + invite (live, owner/admin only, links to `/clients`), external (coming-soon, future "view as client").
+- **`MembersPopover`** — title + count + divider + bordered avatar / name / role rows. Shared trigger from header avatar cluster click AND rail Members icon click.
+
+### Server-side data fetch — `src/lib/canvas-chrome-data.ts`
+
+Shared helper called by both `(canvas)` pages (canvas + /clients). Returns:
+
+```ts
+type CanvasChromeData = {
+  pipeline: { id, name, emoji, company, last_edited_at };
+  members: ChromeMember[];           // all roles, sorted owner→admin→member→client + joined_at asc
+  visibleMembers: ChromeMember[];    // first 3 for the cluster preview
+  overflowMembers: number;           // for the "+N" badge
+  canEditPipeline: boolean;          // mirrors can_edit_pipeline SQL helper
+};
+```
+
+**Bug caught + fixed:** first pass used PostgREST's nested-select form `profile:profiles!inner(...)` to join pipeline_memberships → profiles in one query. Returned 0 rows because there's **no direct FK between pipeline_memberships and profiles** — both reference `auth.users(id)` separately, and PostgREST can't infer that relationship. The `!inner` join filtered everything out, member cluster rendered empty across the entire chrome surface. Fixed by switching to the dashboard's two-query pattern: fetch pipeline_memberships, batched fetch profiles via `.in("id", userIds)`, in-memory join via Map keyed by user_id. Same pattern documented in `/w/[slug]/page.tsx`.
+
+### `resolveMemberDisplay` — graceful name fallback
+
+Real invited-but-not-yet-onboarded users have `profiles.display_name = null` even though `profiles.email IS NOT NULL` (schema-enforced). First-pass popover rendered "Unknown" for these — looked broken in a real product.
+
+New helper in `MembersPopover.tsx`:
+
+```ts
+display_name (trimmed, non-empty)
+  → email PREFIX (before '@', e.g. "jane.doe" from "jane.doe@example.com")
+  → "Pending member" (defensive — schema-illegal case)
+```
+
+Matches `UserAvatar`'s existing initial chain (`display_name[0] → email[0] → "?"`) so the avatar and text resolve consistently: a member with email `jane.doe@…` renders avatar "J" + text "jane.doe", never "J" + "Unknown".
+
+### Coachmark scope fix — closes 5a deferred item
+
+Pre-5d, `CanvasCoachmark` attached its auto-dismiss listeners to `window`. Any pointerdown/wheel anywhere on the page (header click, rail click, popover, profile menu) dismissed the coachmark before the user got to read it.
+
+Fix: `CanvasCoachmark` now takes a `canvasRef` prop; listeners attach to `canvasRef.current` (the canvas wrapper element). Header / rail / popover interactions no longer dismiss the hint — only actual canvas pan/zoom (or the X button) does. Closes the deferred 5a launch-prep item.
+
+### `/clients` refactor (bonus: closes an auth-hardening gap)
+
+Pre-5d the `/clients` route was a full `"use client"` page with no server-side auth gate (returned 200 to anon). 5d added a thin server `page.tsx` wrapper that fetches chrome data + auth-gates server-side + renders `<PipelineChromeShell><ClientsBody /></PipelineChromeShell>`. The body component (formerly the default export) was renamed to a named `ClientsBody` export; its internal hooks-heavy logic is unchanged.
+
+Side effect: `/clients` now redirects anon traffic to `/auth/signin` server-side — closes one of the three launch-prep "client routes return 200 to anon" items.
+
+### Permission gates (verified — match the SQL helper exactly)
+
+The chrome's permission-gated UI matches `can_edit_pipeline(p_id)` from `20260509120000_rls_policies.sql`:
+
+```
+workspace_memberships.role = 'owner'
+  OR  pipeline_memberships.role IN ('owner', 'admin')
+```
+
+Effective in 5d:
+
+| User type | Edit pipeline button | + Invite rail icon |
+| --- | --- | --- |
+| Workspace owner | ✓ visible | ✓ visible |
+| Pipeline owner/admin | ✓ visible | ✓ visible |
+| Pipeline member | hidden | hidden |
+| Pipeline client | hidden | hidden |
+
+Note: workspace ADMIN role (`workspace_memberships.role = 'admin'`) doesn't currently inherit `canEditPipeline` — matches the SQL helper. If we ever want workspace admins to inherit pipeline-edit access, that's a SQL helper change + app-code mirror, not just a UI tweak. Flagged for future review; not blocking 5d.
+
+The Edit pipeline button click itself is **stubbed in 5d** (`console.log` only). Edit mode ships in 5e.
+
+### Locked chrome tokens + measurements (for future maintainers + 5e)
+
+| Element | Value |
+| --- | --- |
+| Header height | 52px |
+| Header bg | `#121212` |
+| Left rail width | 56px |
+| Left rail bg | `#121212` |
+| Pipeline emoji box / back-arrow box | 32×32, 8px radius, `#212124` fill, `#36363A` border |
+| HeaderProfileMenu avatar (canvas) | 32px (vs AppShell's 40px — narrower header) |
+| HeaderProfileMenu avatar (dashboard, AppShell) | 40px (unchanged from pre-5d) |
+| All avatars | 6px corners across all sizes (was conditional 10px / 50%) |
+| MemberCluster avatar wrapper | 6px corners (was 50% — read circular) |
+| MembersPopover width | 300px |
+| MembersPopover avatars | 36px, `bordered` (2px colored stroke on photos) |
+| Edge fade (left) | **removed** — done work behind doesn't need "more here" cue |
+| Coachmark scope | `canvasRef.current` (was `window`) |
+
+### Visual polish iterations during 5d
+
+| Iteration | Change |
+| --- | --- |
+| 1 | Files rail icon: `Link` → `Folder` (Link icon was generic) |
+| 2 | Active rail icon: purple (`#A78BFA` / `rgba(110,91,232,0.18)`) → grey (`white` / `rgba(255,255,255,0.08)`) — purple competed with the canvas's in-progress purple |
+| 3 | Left edge fade dropped — done work behind doesn't need a "more content over there" cue |
+| 4 | HeaderProfileMenu avatar: square (6px corners across all sizes, was conditional), thin 1px stroke, size prop added (32 on canvas, default 40 elsewhere) |
+| 5 | HeaderProfileMenu dropdown positioning: explicit `top: 100%` — was clipped at top of viewport because `mt-2` in a `flex items-center` parent put the dropdown's auto-computed static position at the parent's vertical center (centered on a 40px wrapper, but the dropdown is 200px tall → ~72px off-screen) |
+| 6 | Chat rail icon: `MessageSquare` → custom `ChatBubbleLinesIcon` (round bubble + 2 lines, distinct from the rectangular Folder icon below it) |
+| 7 | MemberCluster wrapper: 50% → 6px corners (was making the inner rounded-square avatars read circular due to the dark `#121212` halo) |
+| 8 | MembersPopover shrunk ~25% — was too imposing |
+| 9 | MembersPopover row gap: 4 → 8 — rows felt stacked |
+| 10 | Back arrow boxed: matches emoji-box treatment (32×32, 8px corners, `#212124` fill, `#36363A` border) |
+
+### Files (this commit)
+
+```
+new file:  src/lib/canvas-chrome-data.ts                              (shared two-query helper)
+new file:  src/components/chrome/PipelineChromeShell.tsx              (outer layout)
+new file:  src/components/chrome/PipelineHeader.tsx                   (header content)
+new file:  src/components/chrome/LeftRail.tsx                         (icon rail + custom ChatBubbleLinesIcon)
+new file:  src/components/chrome/MembersPopover.tsx                   (popover + resolveMemberDisplay)
+
+modified:  src/components/UserAvatar.tsx                              (+ bordered prop)
+modified:  src/components/app/HeaderProfileMenu.tsx                   (+ size prop, square 6px corners, dropdown positioning fix)
+modified:  src/components/canvas/CanvasCoachmark.tsx                  (+ canvasRef prop, listeners on ref.current not window)
+modified:  src/components/canvas/EdgeFades.tsx                        (left fade removed)
+modified:  src/components/canvas/PipelineCanvas.tsx                   (old minimal header removed; coachmark ref passed; dropped unused workspaceSlug/pipelineName props)
+
+renamed:   src/app/w/[slug]/* → src/app/w/(workspace)/[slug]/*        (5 routes moved into workspace group)
+renamed:   src/app/w/[slug]/p/[pipeline-id]/* → src/app/w/(canvas)/[slug]/p/[pipeline-id]/*  (2 routes moved into canvas group)
+new file:  src/app/w/(canvas)/[slug]/layout.tsx                       (chrome layout placeholder; actual chrome lives in pages since layouts can't see [pipeline-id])
+modified:  src/app/w/(canvas)/[slug]/p/[pipeline-id]/page.tsx          (fetches chrome + wraps in PipelineChromeShell)
+new file:  src/app/w/(canvas)/[slug]/p/[pipeline-id]/clients/page.tsx (new server wrapper)
+renamed:   src/app/w/(canvas)/[slug]/p/[pipeline-id]/clients/ClientsBody.tsx  (formerly page.tsx, default export → named ClientsBody)
+```
+
+### Verification
+
+| Check | Result |
+| --- | --- |
+| `npx tsc --noEmit` | ✓ clean |
+| `npx eslint` on Phase 2 files | ✓ clean (5 pre-existing `react-hooks/purity` errors deferred — see launch-prep below) |
+| `npx next build` | ✓ green, all 23 routes registered |
+| Dev server smoke (anon) | ✓ all 7 `/w/...` routes 307 → /auth/signin at unchanged URLs |
+| Member cluster + popover | ✓ verified live by Jordan — cluster on nav, popover matches figma proportions |
+| Edit pipeline gate | ✓ visible to owner, hidden to member/client (gate matches SQL helper exactly) |
+| Coachmark scope | ✓ only canvas interaction dismisses; header/rail/popover clicks don't |
+
+### Launch-prep deferrals (NOT addressed in 5d, flagged for later)
+
+1. **5 React 19 `react-hooks/purity` errors** — `Date.now()` called during render in:
+   - `src/app/w/(workspace)/[slug]/my-tasks/recently-done/page.tsx:70`
+   - `src/app/w/(workspace)/[slug]/settings/team/page.tsx:577, 733` (+ 2 more)
+
+   Pre-existing in pages 5d only relocated (didn't author). React 19's purity rule flags `Date.now()` because it changes between renders → unstable React output. Fix is straightforward: move calls into `useState(() => Date.now())` initializers OR compute server-side. Lint errors only — `next build` ignores them and builds clean. Defer to a dedicated React 19 purity sweep before launch.
+
+2. **`/p/new` + `/settings/team` return 200 to anon** — client-component pages with no server-side auth gate. They render their shell then redirect client-side via `useSession`. Pre-existing; minor auth-hardening item for the launch-prep checklist. `/clients` closed this gap in 5d (now server-gated via the chrome wrapper).
+
+3. **Workspace ADMIN role doesn't currently inherit `canEditPipeline`** — matches the SQL helper which only grants workspace owner OR pipeline owner/admin. If workspace admins should inherit pipeline-edit access, that's a SQL helper change + app code update. Not blocking; flagged for future review.
+
+### Bugs caught + fixed during 5d verification (in order)
+
+1. **PostgREST nested join `profile:profiles!inner` returned 0 members.** No FK between `pipeline_memberships` and `profiles` (both reference `auth.users(id)` separately). Fix: switched to the dashboard's two-query pattern (pipeline_memberships, then profiles via `.in("id", userIds)`, in-memory join). Member cluster + popover now populated.
+2. **HeaderProfileMenu dropdown clipped at viewport top.** No explicit `top` on the absolutely-positioned dropdown → static-position fallback in a `flex items-center` parent computed to the parent's vertical center. With dropdown taller than wrapper, ~72px extended above the viewport. Fix: `top: "100%"` + 8px gap. Also affected the dashboard's AppShell, not just the canvas.
+3. **MemberCluster avatars read circular.** Wrapper `borderRadius: 50%` made the dark `#121212` background show as a circular halo around the rounded-square inner avatars. Fix: wrapper `borderRadius: 6` so the wrapper matches the inner's square shape.
+4. **MembersPopover too imposing.** First-pass styling at 360×20px padding + 22px title felt like a dialog. Shrunk all metrics ~25% to a compact-menu feel.
+5. **Member rows stacked too tightly.** Container `gap: 4` + 6px row padding → avatars 16px apart. Bumped gap → 8 for 20px breath.
+6. **"Unknown" name fallback looked broken.** Real invited-but-not-yet-onboarded users have `display_name = null`. Replaced `display_name || email || "Unknown"` with `resolveMemberDisplay()` chain (display_name → email-PREFIX → "Pending member") — matches UserAvatar's initial chain.
+7. **Back arrow felt unframed next to the framed emoji box.** Added matching box treatment (`#212124` fill + `#36363A` border + 8px corners). Pair now reads as two consistent chip controls.
+
+### Deferred for later sub-steps
+
+- **Edit pipeline mode (5e)** — the button click currently logs and returns. 5e wires the actual editing: add/rename/reorder/delete stages, drag tasks between stages, drag-to-reorder tasks.
+- **Per-pipeline chat (4b)** — rail's chat icon is coming-soon-stubbed.
+- **Per-pipeline activity feed** — rail's activity icon is coming-soon-stubbed.
+- **Per-pipeline files** — rail's folder icon is coming-soon-stubbed.
+- **Client portal "view as client" (4c)** — rail's external-link icon is coming-soon-stubbed.
+- **Pipeline-id-aware layout** — current `(canvas)/[slug]/layout.tsx` is a pass-through because Next.js layouts can't see deeper segment params (the layout sees `{slug}` but pipeline-id is below). Chrome data fetched in each page; could be revisited if a parallel routes / context pattern proves cleaner later.
+
+### Lessons learned (apply forever)
+
+1. **PostgREST `!inner` nested joins require an explicit FK between the joined tables.** When the schema joins via a shared reference (e.g. profiles + pipeline_memberships both → auth.users), there's no direct FK for PostgREST to walk and the inner join returns zero rows silently. Use a two-query in-memory join pattern instead — the dashboard's pre-existing `pipeline_memberships` + batched `profiles.in("id", userIds)` is the canonical example. Don't trust empty data from PostgREST nested selects; trace the FK chain explicitly when something returns zero rows you expected to populate.
+2. **Layouts in Next.js App Router can't see deeper segment params.** A layout at `(canvas)/[slug]/layout.tsx` receives `{ slug }` only; the pipeline-id segment below it isn't in the layout's params. If chrome data needs to be SERVER-fetched with knowledge of a deeper segment, the fetch belongs in the PAGE (or in a server-component wrapper around a client body) — not in the layout. Route groups are still the right primitive for swapping chrome per-route; the chrome COMPONENT just needs to live one layer deeper than naive intuition suggests.
+3. **Absolute-positioned dropdowns need explicit `top` in flex-items-center parents.** Without `top` set, the browser computes the "static position" — in a flex column it'd be the flow position, but in `flex items-center` it's the parent's vertical center. For dropdowns taller than the parent (common for a 200px menu off a 40px avatar), that puts the dropdown off-screen above the viewport. Always set `top: "100%"` explicitly on dropdown overlays.
+4. **Avatar fallback chains should match across surfaces.** Initial char in the avatar + display name in adjacent text should derive from the same chain (display_name → email → final fallback). When they diverge — e.g. avatar uses email's first char but text reads "Unknown" — the UI reads inconsistent. Extract the chain into a shared helper or document it identically in both surfaces.
+
+---
+
 ## Phase 4a — step 5c: canvas task cards + completion + per-stage state model (2026-05-22)
 
 **Goal:** render each stage's tasks as checkable cards beneath the stage box, wire completion to a server UPDATE (with the existing `set_task_completion_metadata` trigger writing `completed_at`/`completed_by`), live-recolor the canvas as task completion shifts which stages are in progress, surface a `+ Add task` affordance per stage via the existing `create_task` RPC, and gate everything by the locked permission rule (workspace owner/admin → toggle any task; member → only their own assigned tasks). Got everything in 5c except the task detail side panel (step 6 — clicking a task body is stubbed) and the chrome (left rail + header = 5d).

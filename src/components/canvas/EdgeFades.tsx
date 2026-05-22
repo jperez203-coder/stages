@@ -40,23 +40,17 @@ export function EdgeFades({ edges }: Props) {
           covers. transition on opacity so fades soft-enter/leave instead
           of popping. zIndex 10 keeps them above canvas content but below
           coachmark / pill / zoom controls (zIndex 20+). pointer-events
-          none so they don't intercept pan drags. */}
-      <div
-        aria-hidden
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          bottom: 0,
-          width: 60,
-          background:
-            "linear-gradient(to right, rgba(0,0,0,0.55), rgba(0,0,0,0))",
-          opacity: edges.left ? 1 : 0,
-          transition: "opacity 180ms ease-out",
-          pointerEvents: "none",
-          zIndex: 10,
-        }}
-      />
+          none so they don't intercept pan drags.
+
+          LEFT FADE REMOVED in 5d polish (2026-05-22): the left side of
+          a left-to-right pipeline is where DONE stages live — work the
+          user has finished. There's no value in cueing "more behind
+          you" because they're not meant to look back. The right fade
+          (where in-progress + future stages extend) stays — that's the
+          direction the user IS looking. EdgeFades's interface stays
+          4-sided so the parent's bbox math doesn't need updating; we
+          just skip rendering the left div. Easy to re-enable later if
+          the left-direction cue ever matters. */}
       <div
         aria-hidden
         style={{

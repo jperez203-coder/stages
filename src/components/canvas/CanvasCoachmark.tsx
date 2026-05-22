@@ -1,15 +1,24 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type RefObject } from "react";
 import { X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
 /**
  * First-time canvas coachmark. Bottom-center pill that reads
  * "drag to pan · scroll to zoom", dismissible by the X button or by
- * any user gesture on the canvas (auto-dismiss). Fires ONCE per user —
+ * any user gesture ON THE CANVAS (auto-dismiss). Fires ONCE per user —
  * the dismissed flag persists in profiles.canvas_hint_dismissed so it
  * stays dismissed across sessions and devices.
+ *
+ * Auto-dismiss scope (Phase 4a step 5d):
+ *   * Listeners attach to the `canvasRef` element passed by the parent
+ *     (PipelineCanvas), NOT to `window`. This means clicks on the
+ *     pipeline header chrome, the left rail, or anywhere outside the
+ *     canvas don't dismiss the hint — only actual canvas interaction
+ *     does. Pre-5d the listeners were on `window`, which dismissed
+ *     the coachmark immediately on any page click (header buttons,
+ *     etc.) before the user got to read it.
  *
  * The parent (PipelineCanvas) only renders us if
  * `coachmark_initially_dismissed === false`. We don't fetch the flag
@@ -27,7 +36,14 @@ import { supabase } from "@/lib/supabase";
  * hint on any canvas in any workspace.
  */
 
-export function CanvasCoachmark() {
+type Props = {
+  /** Ref to the canvas wrapper element. Auto-dismiss listeners attach
+   *  to this element instead of `window` so chrome interactions
+   *  (header, rail, popovers) don't dismiss the hint. */
+  canvasRef: RefObject<HTMLDivElement | null>;
+};
+
+export function CanvasCoachmark({ canvasRef }: Props) {
   const [visible, setVisible] = useState(true);
 
   const dismiss = () => {
@@ -52,25 +68,27 @@ export function CanvasCoachmark() {
     });
   };
 
-  // Auto-dismiss on any canvas interaction (pan / zoom). The user has
-  // demonstrated they know what to do — no need to keep the hint up.
-  // We listen for pointerdown + wheel on the document since they
-  // bubble; this is harmless because the only failure mode is
-  // dismissing slightly early on an off-canvas click, which is fine.
+  // Auto-dismiss on the FIRST canvas interaction (pan / zoom). Per
+  // 5d scope fix: listeners attach to canvasRef.current — the canvas
+  // wrapper element — NOT to `window`. Header chrome / left rail /
+  // popover interactions don't dismiss the coachmark; only actual
+  // canvas use does. wheel is non-passive on the canvas wrapper for
+  // the lib's gesture path; passive: true here is fine since we only
+  // observe (don't preventDefault).
   useEffect(() => {
     if (!visible) return;
+    const el = canvasRef.current;
+    if (!el) return;
     const onInteract = () => dismiss();
-    // wheel is non-passive on the canvas wrapper but we just need to
-    // observe — passive: true here is correct (we're not preventing).
-    window.addEventListener("pointerdown", onInteract, { once: true });
-    window.addEventListener("wheel", onInteract, { once: true, passive: true });
+    el.addEventListener("pointerdown", onInteract, { once: true });
+    el.addEventListener("wheel", onInteract, { once: true, passive: true });
     return () => {
-      window.removeEventListener("pointerdown", onInteract);
-      window.removeEventListener("wheel", onInteract);
+      el.removeEventListener("pointerdown", onInteract);
+      el.removeEventListener("wheel", onInteract);
     };
     // dismiss intentionally not in deps — it's stable for our purposes
     // and re-binding the listener on every render would be wasteful.
-  }, [visible]);
+  }, [visible, canvasRef]);
 
   if (!visible) return null;
 

@@ -12,6 +12,13 @@ type Props = {
   email: string;
   displayName: string | null;
   avatarUrl: string | null;
+  /** Trigger avatar size in px. Defaults to 40 (AppShell's dashboard
+   *  nav). The pipeline canvas header passes a smaller value (32)
+   *  because its header is 52px tall vs AppShell's 64px — 40px there
+   *  was nearly touching the header edges top + bottom. The DROPDOWN
+   *  content's internal avatar stays fixed at 44 — that's separate
+   *  overlay UI, doesn't need to scale with the trigger. */
+  size?: number;
 };
 
 /**
@@ -28,7 +35,16 @@ type Props = {
  *     Doesn't touch the in-memory app state — that's the documented
  *     transitional gap (see CLAUDE.md → Known transitional state).
  */
-export function HeaderProfileMenu({ email, displayName, avatarUrl }: Props) {
+export function HeaderProfileMenu({
+  email,
+  displayName,
+  avatarUrl,
+  size = 40,
+}: Props) {
+  // Trigger font size scales with trigger size — keep the initials
+  // proportional at all sizes. 40% ratio matches the 40→16 + 44→~18
+  // pattern from the prior hardcoded version.
+  const triggerFontSize = Math.round(size * 0.4);
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
@@ -61,9 +77,9 @@ export function HeaderProfileMenu({ email, displayName, avatarUrl }: Props) {
         onClick={() => setOpen(!open)}
         className="transition-transform"
         style={{
-          width: "40px",
-          height: "40px",
-          borderRadius: "10px",
+          width: `${size}px`,
+          height: `${size}px`,
+          borderRadius: "6px",
           cursor: "pointer",
           padding: 0,
           background: "transparent",
@@ -74,13 +90,31 @@ export function HeaderProfileMenu({ email, displayName, avatarUrl }: Props) {
         title={displayName ? `${displayName} (${email})` : email}
         aria-label="Open profile menu"
       >
-        <Avatar email={email} avatarUrl={avatarUrl} size={40} fontSize={16} />
+        <Avatar
+          email={email}
+          avatarUrl={avatarUrl}
+          size={size}
+          fontSize={triggerFontSize}
+        />
       </button>
 
       {open && (
         <div
-          className="absolute right-0 mt-2 fade-in z-50"
+          className="absolute right-0 fade-in z-50"
           style={{
+            // Explicit `top: 100%` anchors the dropdown to the wrapper's
+            // BOTTOM edge (just below the avatar trigger). Without this,
+            // `top: auto` on an absolutely-positioned child of a
+            // `flex items-center` parent computes its static position as
+            // the parent's vertical center — and since the dropdown
+            // (~200px) is much taller than the wrapper (~40px), it ends
+            // up half above the wrapper, which puts its top edge ~72px
+            // above the viewport top → cut off. `top: 100%` + 8px
+            // marginTop gives the right "drop down 8px below the
+            // avatar" feel. Caught + fixed 2026-05-22 polish round
+            // alongside the avatar shape/stroke updates.
+            top: "100%",
+            marginTop: "8px",
             width: "260px",
             background: "#1A1A1A",
             border: "1px solid #36363A",
@@ -176,16 +210,21 @@ function Avatar({
   const initial = email.charAt(0).toUpperCase();
 
   // Rendering shape rules (apply to both image and initials branches):
-  //   * borderRadius: rounded-square (10px) for sizes ≤ 40 (header trigger);
-  //     full circle (50%) for larger (44+ dropdown avatar). Threshold bumped
-  //     from 36 → 40 in the 2026-05-20 polish round so the new 40px trigger
-  //     keeps the rounded-square aesthetic matching the dashboard emoji
-  //     boxes (#212124 + #36363A, borderRadius 10).
+  //   * borderRadius: 6px ACROSS ALL SIZES (2026-05-22 polish round —
+  //     was conditional 10px / 50%, now uniform square-ish 6px). Jordan
+  //     wanted "square instead of circle" — 6px is clearly square but
+  //     with a tiny bit of softness so the corners don't look razor-
+  //     sharp. Applies to both the 40px header trigger AND the 44px
+  //     dropdown header avatar; consistency reads better than the old
+  //     size-conditional flip.
+  //   * border: 1px on both branches (was 1px image + 2px initials —
+  //     the 2px on initials read as a thick obvious ring; 1px matches
+  //     the image branch + reads quieter).
   //   * boxSizing: "border-box" is EXPLICIT here because next/image's <img>
   //     element doesn't reliably inherit Tailwind preflight's global box-
-  //     sizing rule. Without this the 2px border was being added to the
-  //     40px footprint, making the trigger avatar render visually ~44px and
-  //     sit above the 40px Pipeline button next to it.
+  //     sizing rule. Without this the border was being added to the
+  //     footprint, making the trigger avatar render visually larger than
+  //     declared size and sit above the neighboring 40px button.
   if (avatarUrl && !imgFailed) {
     return (
       <Image
@@ -199,7 +238,7 @@ function Avatar({
           width: `${size}px`,
           height: `${size}px`,
           boxSizing: "border-box",
-          borderRadius: size <= 40 ? "10px" : "50%",
+          borderRadius: "6px",
           objectFit: "cover",
           border: `1px solid ${color}66`,
           display: "block",
@@ -217,8 +256,8 @@ function Avatar({
         boxSizing: "border-box",
         background: color + "33",
         color,
-        border: `2px solid ${color}66`,
-        borderRadius: size <= 40 ? "10px" : "50%",
+        border: `1px solid ${color}66`,
+        borderRadius: "6px",
         fontSize: `${fontSize}px`,
       }}
     >

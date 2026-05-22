@@ -1,8 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
 import {
   TransformWrapper,
   TransformComponent,
@@ -29,7 +27,7 @@ import { supabase } from "@/lib/supabase";
 import type {
   StageRaw,
   TaskRaw,
-} from "@/app/w/[slug]/p/[pipeline-id]/page";
+} from "@/app/w/(canvas)/[slug]/p/[pipeline-id]/page";
 
 /**
  * Pipeline canvas — Phase 4a step 5c (tasks + completion + add).
@@ -65,8 +63,6 @@ import type {
 
 type Props = {
   pipelineId: string;
-  pipelineName: string;
-  workspaceSlug: string;
   coachmarkInitiallyDismissed: boolean;
   stages: StageRaw[];
   tasks: TaskRaw[];
@@ -93,8 +89,6 @@ type StageVM = {
 
 export function PipelineCanvas({
   pipelineId,
-  pipelineName,
-  workspaceSlug,
   coachmarkInitiallyDismissed,
   stages,
   tasks: initialTasks,
@@ -455,50 +449,11 @@ export function PipelineCanvas({
         cursor: "grab",
       }}
     >
-      {/* Minimal header band — still placeholder, real chrome in 5d. */}
-      <div
-        style={{
-          position: "absolute",
-          top: 16,
-          left: 16,
-          zIndex: 30,
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-        }}
-      >
-        <Link
-          href={`/w/${workspaceSlug}`}
-          aria-label="Back to workspace"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: 40,
-            height: 40,
-            borderRadius: 10,
-            background: "#212124",
-            border: "1px solid #36363A",
-            color: "rgba(255,255,255,0.7)",
-          }}
-        >
-          <ArrowLeft size={16} />
-        </Link>
-        <div
-          style={{
-            background: "rgba(33,33,36,0.85)",
-            backdropFilter: "blur(8px)",
-            padding: "6px 12px",
-            borderRadius: 8,
-            border: "1px solid #36363A",
-            color: "white",
-            fontSize: 14,
-            fontWeight: 500,
-          }}
-        >
-          {pipelineName}
-        </div>
-      </div>
+      {/* 5a/5b/5c rendered a minimal "back arrow + pipeline name"
+          placeholder header band INSIDE the canvas wrapper. Removed
+          in 5d — the real chrome (PipelineHeader + LeftRail) lives
+          OUTSIDE this component, wrapping it via PipelineChromeShell.
+          The canvas is now purely the pan/zoom surface. */}
 
       <TransformWrapper
         ref={transformRef}
@@ -651,7 +606,9 @@ export function PipelineCanvas({
         onRecenter={onRecenter}
       />
       <ZoomControls onZoomIn={onZoomIn} onZoomOut={onZoomOut} onFit={onFit} />
-      {!coachmarkInitiallyDismissed && <CanvasCoachmark />}
+      {!coachmarkInitiallyDismissed && (
+        <CanvasCoachmark canvasRef={wrapperRef} />
+      )}
     </div>
   );
 }

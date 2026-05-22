@@ -41,7 +41,14 @@ import { supabase } from "@/lib/supabase";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export default function PipelineClientsPage() {
+/**
+ * Renamed from `PipelineClientsPage` (default export) in Phase 4a step
+ * 5d. Now a named export so the route's new server `page.tsx` can wrap
+ * this body in `<PipelineChromeShell>` for the pipeline header + rail.
+ * The body itself is unchanged — same useSession/useUserContexts/
+ * usePipelineClientsData hooks, same invite form, same client roster.
+ */
+export function ClientsBody() {
   const params = useParams();
   const router = useRouter();
   const slug = typeof params?.slug === "string" ? params.slug : null;
