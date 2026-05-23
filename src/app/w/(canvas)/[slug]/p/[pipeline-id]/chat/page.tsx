@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { PipelineChromeShell } from "@/components/chrome/PipelineChromeShell";
 import { fetchCanvasChromeData } from "@/lib/canvas-chrome-data";
-import { fetchPipelineChatSlice1Data } from "@/lib/chat-data";
+import { fetchPipelineChatData } from "@/lib/chat-data";
 import { ChatBody } from "./ChatBody";
 
 /**
@@ -90,7 +90,7 @@ export default async function PipelineChatPage({
       .select("display_name, avatar_url")
       .eq("id", user.id)
       .maybeSingle(),
-    fetchPipelineChatSlice1Data(supabase, pipelineId),
+    fetchPipelineChatData(supabase, pipelineId),
   ]);
 
   if (!chrome) {

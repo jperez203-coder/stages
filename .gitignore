@@ -43,3 +43,8 @@ next-env.d.ts
 
 # claude code tooling (preview server config etc.)
 .claude/
+
+# dev-only scripts that touch the Supabase service-role key. NEVER commit.
+# (env files are already gitignored above; this protects the script bodies
+# in case any of them inline a key by mistake.)
+scripts/set-test-password.mjs

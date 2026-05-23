@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { EyeOff } from "lucide-react";
 import { UserAvatar } from "@/components/UserAvatar";
 import type { ChatChannel, ChatMessage } from "@/lib/chat-data";
 
@@ -52,12 +53,24 @@ type Props = {
   /** Email of the currently-logged-in user — for the composer footer
    *  ("Posting as <email>"). */
   viewerEmail: string;
-  /** Slice 2b: send handler from ChatBody. Returns true on successful
-   *  reconcile, false on failure (composer keeps text + shows inline
-   *  error). is_internal is a real parameter — the composer passes
-   *  false for slice 2b; slice 4 will replace that literal with a
-   *  toggle-driven boolean at the composer call site. */
+  /** Send handler from ChatBody. Returns true on successful reconcile,
+   *  false on failure (composer keeps text + shows inline error).
+   *  is_internal is a real parameter — driven by the composer's
+   *  internal-note toggle (when allowInternalToggle is true) or
+   *  hardcoded false otherwise. */
   onSend: (text: string, isInternal: boolean) => Promise<boolean>;
+  /** Slice 4a: when true, render the "Internal note" toggle chip
+   *  above the textarea. Computed in ChatBody as
+   *  `activeChannel?.is_client && viewerIsAgencySide`. When false
+   *  (the #general channel or any non-agency viewer), the toggle is
+   *  hidden and isInternal is always false at the call site. */
+  allowInternalToggle: boolean;
+  /** Slice 4a follow-up: gates the per-message "Internal" badge on
+   *  internal rows. Threaded from ChatBody. We AND this with
+   *  `channel.is_client` locally to decide whether the badge ever
+   *  renders on the active channel; per-message gating then also
+   *  requires `message.is_internal === true`. */
+  viewerIsAgencySide: boolean;
 };
 
 export function MessageThread({
@@ -65,7 +78,18 @@ export function MessageThread({
   messages,
   viewerEmail,
   onSend,
+  allowInternalToggle,
+  viewerIsAgencySide,
 }: Props) {
+  // Channel-level gate for the per-message internal badge:
+  //   * client channel ONLY — in #general the badge would be meaningless
+  //     (every message there is internal-by-context; clients don't have
+  //     a subscription to #general regardless of the flag)
+  //   * agency viewers ONLY — clients should never see a badge confirming
+  //     "the agency posted this as private to themselves"; gated correctly
+  //     here for when 4b ships clients to a separate route
+  // Per-row check below adds `message.is_internal === true`.
+  const showInternalBadge = channel.is_client && viewerIsAgencySide;
   // Group messages by calendar day for the date dividers. useMemo so the
   // group-by re-runs only when the messages array identity changes
   // (i.e. on a fresh fetch, an optimistic send, or a successful reconcile
@@ -129,7 +153,11 @@ export function MessageThread({
             <div key={group.dayKey}>
               <DateDivider label={group.label} />
               {group.messages.map((m) => (
-                <MessageRow key={m.id} message={m} />
+                <MessageRow
+                  key={m.id}
+                  message={m}
+                  showInternalBadge={showInternalBadge}
+                />
               ))}
             </div>
           ))
@@ -140,6 +168,7 @@ export function MessageThread({
         channelName={channel.name}
         viewerEmail={viewerEmail}
         onSend={onSend}
+        allowInternalToggle={allowInternalToggle}
       />
     </section>
   );
@@ -254,7 +283,16 @@ function DateDivider({ label }: { label: string }) {
 
 // ─── Message row ────────────────────────────────────────────────────────
 
-function MessageRow({ message }: { message: ChatMessage }) {
+function MessageRow({
+  message,
+  showInternalBadge,
+}: {
+  message: ChatMessage;
+  /** Channel + viewer gate from the parent. The badge only ever renders
+   *  on a row when this is true AND the row's own `is_internal` flag is
+   *  true — both required. */
+  showInternalBadge: boolean;
+}) {
   const displayName = resolveAuthorName(message.author);
   const avatarUser = message.author ?? {
     // Author was deleted (FK set null) — render a neutral placeholder.
@@ -264,6 +302,11 @@ function MessageRow({ message }: { message: ChatMessage }) {
     avatar_url: null,
     email: null,
   };
+
+  // Per-row gate: parent already confirmed we're in the client channel
+  // and the viewer is agency-side. This adds the final per-message
+  // condition — only internal rows get the badge.
+  const renderInternalBadge = showInternalBadge && message.is_internal;
 
   return (
     <article
@@ -285,6 +328,7 @@ function MessageRow({ message }: { message: ChatMessage }) {
             alignItems: "baseline",
             gap: 8,
             marginBottom: 4,
+            flexWrap: "wrap",
           }}
         >
           <span
@@ -306,6 +350,33 @@ function MessageRow({ message }: { message: ChatMessage }) {
           >
             {formatTimestamp(message.created_at)}
           </span>
+          {renderInternalBadge && (
+            <span
+              role="status"
+              aria-label="Internal note — visible to the agency team only, hidden from the client"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "2px 7px",
+                fontSize: 10,
+                fontWeight: 600,
+                color: "#F59E0B",
+                background: "rgba(245,158,11,0.12)",
+                border: "1px solid rgba(245,158,11,0.4)",
+                borderRadius: 999,
+                lineHeight: 1,
+                // marginLeft handles the gap visually; the parent's
+                // gap:8 already accounts for the timestamp→badge
+                // spacing but a tiny extra nudge reads cleaner with
+                // baseline alignment.
+                marginLeft: 0,
+              }}
+            >
+              <EyeOff size={11} aria-hidden="true" />
+              Internal
+            </span>
+          )}
         </div>
         <div
           style={{
@@ -343,44 +414,60 @@ function EmptyState() {
   );
 }
 
-// ─── Composer (slice 2b: functional) ────────────────────────────────────
+// ─── Composer (slice 2b functional + slice 4a internal toggle) ──────────
 
 function Composer({
   channelName,
   viewerEmail,
   onSend,
+  allowInternalToggle,
 }: {
   channelName: string;
   viewerEmail: string;
   onSend: (text: string, isInternal: boolean) => Promise<boolean>;
+  allowInternalToggle: boolean;
 }) {
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Slice 4a: internal-note toggle state. Defaults OFF. The submit
+  // function reads this when allowInternalToggle is true; otherwise
+  // the value is moot (gated to false at the call site).
+  const [isInternal, setIsInternal] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // True when the amber visual signal should render (toggle is on AND
+  // gating allows it). Defensive belt-and-suspenders against any future
+  // bug where isInternal could be true while allowInternalToggle is
+  // false — the visual signal stays accurate to what's actually sent.
+  const isInternalActive = allowInternalToggle && isInternal;
 
   const submit = useCallback(async () => {
     const trimmed = text.trim();
     if (!trimmed) return;
 
-    // is_internal HARDCODED `false` HERE — slice 2b sends only normal
-    // posts in #general. The canonical "who decides isInternal" point
-    // in the chain is this exact call site. Slice 4's internal-note
-    // toggle UI will replace this single literal with a state-driven
-    // boolean from the toggle; nothing else in the chain (ChatBody's
-    // sendMessage, the supabase insert, RLS) needs to change.
-    const ok = await onSend(trimmed, /* isInternal */ false);
+    // is_internal flows through this single call site. When the toggle
+    // is allowed AND on, send true; otherwise always false. The canonical
+    // "who decides isInternal" point in the chain remains this one
+    // expression — ChatBody's sendMessage, the supabase insert payload,
+    // and RLS all consume `isInternal` as a plain boolean param.
+    const effectiveIsInternal = allowInternalToggle ? isInternal : false;
+    const ok = await onSend(trimmed, effectiveIsInternal);
 
     if (ok) {
       setText("");
       setError(null);
+      // Slice 4a: reset toggle on every successful send — each message
+      // is a fresh decision. We don't want a previous internal flag
+      // silently affecting the next normal message.
+      setIsInternal(false);
       textareaRef.current?.focus();
     } else {
-      // Send failed — keep text in composer so the user can retry
-      // without retyping. Inline error auto-dismisses on next keystroke
-      // (see onChange) or next successful send.
+      // Send failed — keep text + toggle state so the user can retry
+      // without losing their composition. Inline error auto-dismisses
+      // on next keystroke (see onChange) or next successful send.
       setError("Couldn't send. Try again.");
     }
-  }, [text, onSend]);
+  }, [text, onSend, allowInternalToggle, isInternal]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Enter (without Shift) → submit.
@@ -404,6 +491,47 @@ function Composer({
         gap: 6,
       }}
     >
+      {/* Slice 4a: Internal-note toggle chip. Renders only when
+          allowInternalToggle is true (the active channel is the client
+          channel AND the viewer is agency-side). OFF = subtle outline;
+          ON = amber (#F59E0B), matching CLAUDE.md's stages-amber design
+          token for internal notes. Click toggles. */}
+      {allowInternalToggle && (
+        <div style={{ display: "flex", paddingLeft: 2 }}>
+          <button
+            type="button"
+            onClick={() => setIsInternal((v) => !v)}
+            aria-pressed={isInternal}
+            aria-label={
+              isInternal
+                ? "Internal note (on) — client will NOT see this message"
+                : "Send as internal note — toggle to hide from client"
+            }
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "4px 10px",
+              fontSize: 11,
+              fontWeight: 600,
+              lineHeight: 1.2,
+              borderRadius: 999,
+              cursor: "pointer",
+              transition:
+                "background 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out",
+              background: isInternal
+                ? "rgba(245,158,11,0.12)"
+                : "transparent",
+              border: `1px solid ${isInternal ? "#F59E0B" : "#36363A"}`,
+              color: isInternal ? "#F59E0B" : "rgba(255,255,255,0.55)",
+            }}
+          >
+            <EyeOff size={12} />
+            Internal note
+          </button>
+        </div>
+      )}
+
       <div
         style={{
           display: "flex",
@@ -413,6 +541,16 @@ function Composer({
           background: "#2C2C2F",
           border: "1px solid #36363A",
           borderRadius: 10,
+          // Slice 4a: amber LEFT-edge stripe when the internal toggle
+          // is on. Uses inset boxShadow so the stripe lives inside the
+          // existing 1px border without shifting any layout (a thicker
+          // borderLeft would have nudged the textarea 2px right). The
+          // stripe is a clear visual reminder while typing that "this
+          // message is hidden from the client."
+          boxShadow: isInternalActive
+            ? "inset 3px 0 0 #F59E0B"
+            : "none",
+          transition: "box-shadow 120ms ease-out",
         }}
       >
         <textarea
