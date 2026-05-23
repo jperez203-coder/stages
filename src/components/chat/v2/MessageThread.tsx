@@ -71,6 +71,13 @@ type Props = {
    *  renders on the active channel; per-message gating then also
    *  requires `message.is_internal === true`. */
   viewerIsAgencySide: boolean;
+  /** Slice 4b-1: override the channel header label. When set,
+   *  ChannelHeader renders this string instead of "# <channel.name>"
+   *  and hides the channel-type subtitle. Portal uses this to show
+   *  the agency workspace name (e.g., "ACME Agency") as the header
+   *  instead of "# client" for client-mode viewing. When null or
+   *  undefined, default rendering applies. */
+  channelHeaderLabel?: string | null;
 };
 
 export function MessageThread({
@@ -80,6 +87,7 @@ export function MessageThread({
   onSend,
   allowInternalToggle,
   viewerIsAgencySide,
+  channelHeaderLabel,
 }: Props) {
   // Channel-level gate for the per-message internal badge:
   //   * client channel ONLY — in #general the badge would be meaningless
@@ -133,7 +141,10 @@ export function MessageThread({
         }}
       />
 
-      <ChannelHeader channel={channel} />
+      <ChannelHeader
+        channel={channel}
+        labelOverride={channelHeaderLabel ?? null}
+      />
 
       {/* Scrollable message area. */}
       <div
@@ -176,7 +187,19 @@ export function MessageThread({
 
 // ─── Channel header ─────────────────────────────────────────────────────
 
-function ChannelHeader({ channel }: { channel: ChatChannel }) {
+function ChannelHeader({
+  channel,
+  labelOverride,
+}: {
+  channel: ChatChannel;
+  /** Slice 4b-1: when set, replaces the default "# <name>" treatment
+   *  with this label and hides the channel-type subtitle. The "#"
+   *  glyph chip is also hidden — the override label is meant to be a
+   *  proper-noun name (e.g., the agency workspace name), not a
+   *  channel handle. */
+  labelOverride: string | null;
+}) {
+  const showOverride = !!labelOverride;
   return (
     <header
       style={{
@@ -190,26 +213,27 @@ function ChannelHeader({ channel }: { channel: ChatChannel }) {
         zIndex: 2,
       }}
     >
-      {/* Glyph chip — matches the figma "#" tile next to the channel
-          name in the thread header. */}
-      <div
-        style={{
-          width: 32,
-          height: 32,
-          borderRadius: 8,
-          background: "#2C2C2F",
-          border: "1px solid #36363A",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          color: "rgba(255,255,255,0.7)",
-          fontSize: 14,
-          fontWeight: 600,
-          flexShrink: 0,
-        }}
-      >
-        #
-      </div>
+      {/* Glyph chip — hidden when an override label is in use. */}
+      {!showOverride && (
+        <div
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 8,
+            background: "#2C2C2F",
+            border: "1px solid #36363A",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "rgba(255,255,255,0.7)",
+            fontSize: 14,
+            fontWeight: 600,
+            flexShrink: 0,
+          }}
+        >
+          #
+        </div>
+      )}
 
       <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
         <div
@@ -223,18 +247,20 @@ function ChannelHeader({ channel }: { channel: ChatChannel }) {
             whiteSpace: "nowrap",
           }}
         >
-          # {channel.name}
+          {showOverride ? labelOverride : `# ${channel.name}`}
         </div>
-        <div
-          style={{
-            marginTop: 2,
-            fontSize: 12,
-            color: "rgba(255,255,255,0.5)",
-            lineHeight: 1.2,
-          }}
-        >
-          {channel.is_client ? "Client channel" : "Internal team channel"}
-        </div>
+        {!showOverride && (
+          <div
+            style={{
+              marginTop: 2,
+              fontSize: 12,
+              color: "rgba(255,255,255,0.5)",
+              lineHeight: 1.2,
+            }}
+          >
+            {channel.is_client ? "Client channel" : "Internal team channel"}
+          </div>
+        )}
       </div>
     </header>
   );

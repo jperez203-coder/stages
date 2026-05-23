@@ -81,11 +81,24 @@ type Props = {
   /** Pipeline member roster from chrome — used to seed the author
    *  cache at mount. */
   members: ChromeMember[];
-  /** Slice 4a: still hardcoded `true` at the call site because the
-   *  agency-side /chat route auth-gates on workspace_memberships. Slice
-   *  4b will introduce a separate portal route where this becomes a
-   *  runtime-computed boolean (true for agency, false for clients). */
+  /** Agency-side viewer flag. On the agency /chat route this is
+   *  hardcoded true (route is workspace_memberships-gated). On the
+   *  client portal route (4b-1) this is hardcoded false at the
+   *  PortalChatBody call site — agency members previewing the portal
+   *  see the client view. Drives Layer 3 internal-message filtering,
+   *  internal-note toggle gating, and "Internal" badge gating. */
   viewerIsAgencySide: boolean;
+  /** Slice 4b-1: render the channel sidebar? Defaults true (agency
+   *  view). The portal sets this to false — clients have a single
+   *  channel and the sidebar would be a one-row pane with no purpose. */
+  renderSidebar?: boolean;
+  /** Slice 4b-1: override the channel header label rendered in
+   *  MessageThread. When set, replaces the default "# <channel.name>"
+   *  with this string (and hides the channel-type subtitle).  Used by
+   *  the portal to show the agency name ("ACME Agency") as the channel
+   *  header instead of the abstract "# client". When null/undefined,
+   *  MessageThread falls back to its default rendering. */
+  channelHeaderLabel?: string | null;
 };
 
 export function ChatBody({
@@ -93,11 +106,39 @@ export function ChatBody({
   viewer,
   members,
   viewerIsAgencySide,
+  renderSidebar = true,
+  channelHeaderLabel,
 }: Props) {
-  // Active channel — defaults to #general. Slice 4a removes the no-op
-  // fence in onSelectChannel so either channel row can become active.
+  // Active channel — viewer-mode-aware initial pick. Locked behavior:
+  //   * Agency viewers (viewerIsAgencySide=true) land on #general
+  //     (slice 2b's default; unchanged).
+  //   * Client viewers (viewerIsAgencySide=false) land on the client
+  //     channel — the only channel that's meaningful to them, and the
+  //     only one a pure client (no channel_membership for #general)
+  //     can even see via RLS.
+  //   * Agency members previewing the portal (PortalChatBody hardcodes
+  //     viewerIsAgencySide=false): default to the client channel —
+  //     that's the whole point of the preview.
+  // Falls back through the opposite-mode channel, then to whatever
+  // first channel the RLS-filtered list contains, then null. Naturally
+  // handles every RLS-visible combination including pipelines with no
+  // client yet (clientChannel null) and pure-client views (generalChannel
+  // null).
+  //
+  // Slice 4a removes the no-op fence in onSelectChannel so either
+  // channel row can become active after mount.
   const [activeChannelId, setActiveChannelId] = useState<string | null>(
-    data.generalChannel?.id ?? null,
+    () => {
+      const preferred = viewerIsAgencySide
+        ? data.generalChannel
+        : data.clientChannel;
+      const fallback = viewerIsAgencySide
+        ? data.clientChannel
+        : data.generalChannel;
+      return (
+        preferred?.id ?? fallback?.id ?? data.channels[0]?.id ?? null
+      );
+    },
   );
 
   // Per-channel message storage. Lazy initializer seeds both channels'
@@ -425,16 +466,21 @@ export function ChatBody({
   return (
     <ChatLayout
       sidebar={
-        <ChatSidebar
-          channels={data.channels}
-          generalChannel={data.generalChannel}
-          clientChannel={data.clientChannel}
-          showClientChannel={
-            data.pipelineHasClient && data.clientChannel !== null
-          }
-          activeChannelId={activeChannelId}
-          onSelectChannel={onSelectChannel}
-        />
+        // Slice 4b-1: portal callers pass renderSidebar={false} because
+        // clients have a single channel. ChatLayout accepts null and
+        // collapses to a single-pane layout where the thread fills.
+        renderSidebar ? (
+          <ChatSidebar
+            channels={data.channels}
+            generalChannel={data.generalChannel}
+            clientChannel={data.clientChannel}
+            showClientChannel={
+              data.pipelineHasClient && data.clientChannel !== null
+            }
+            activeChannelId={activeChannelId}
+            onSelectChannel={onSelectChannel}
+          />
+        ) : null
       }
       thread={
         activeChannel ? (
@@ -451,6 +497,10 @@ export function ChatBody({
             // with allowInternalToggle's gating (currently the same
             // formula; kept as separate prop for semantic clarity).
             viewerIsAgencySide={viewerIsAgencySide}
+            // Slice 4b-1: portal passes the agency workspace name here
+            // so the channel header reads "ACME Agency" instead of
+            // "# client" for the client viewer.
+            channelHeaderLabel={channelHeaderLabel}
           />
         ) : (
           <div
