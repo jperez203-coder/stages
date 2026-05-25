@@ -26,14 +26,34 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Dotted grid backdrop — used on auth screens, canvas, dashboard, and the
-   landing page. Dot color refreshed 2026-05-19 (Phase 4a step 2 polish)
-   from rgba(255,255,255,0.06) to a flat #424242 so dots are visible
-   against the #212124 background without disappearing on darker variant
-   surfaces. */
+/* Dotted grid backdrop — used on auth screens, agency canvas, dashboard,
+   client portal canvas, chat thread, my-tasks, /p/new, and the landing
+   page. Single source of truth for the entire app's dotted background.
+   Don't redefine inline elsewhere — drift is what we just fixed.
+
+   History:
+     2026-05-19  Phase 4a step 2 polish — moved from rgba(255,255,255,0.06)
+                 to flat #424242 so dots stayed visible on the dashboard.
+     2026-05-25  Cross-surface consistency pass — locked to rgba(66,66,66,
+                 0.4), which is the SAME source color (#424242) but at
+                 40% alpha. Matches the portal canvas's previous look
+                 (which had #424242 dots + an inline opacity:0.4 overlay
+                 on the div). All other surfaces (dashboard, auth, etc.)
+                 used full #424242 before this — they now match the
+                 portal's subtler treatment for a unified feel across
+                 the app.
+
+   Bg color: stages-bg (#212124). Dots: source color #424242 at 40% alpha,
+   blending to an effective ~#2E2E30 over the bg. Spacing: 24px grid.
+
+   NOTE on the locked design token: CLAUDE.md still lists dot color as
+   #424242. The source color in the rgba() above is the SAME #424242 —
+   the 0.4 alpha is the cross-surface visibility tuning, not a different
+   color choice. If we ever want sharper dots back across the app,
+   bump the alpha up (e.g., 0.7) rather than changing the color hex. */
 .dotted-grid {
   background-color: var(--color-stages-bg);
-  background-image: radial-gradient(circle, #424242 1px, transparent 1px);
+  background-image: radial-gradient(circle, rgba(66, 66, 66, 0.4) 1px, transparent 1px);
   background-size: 24px 24px;
 }
 

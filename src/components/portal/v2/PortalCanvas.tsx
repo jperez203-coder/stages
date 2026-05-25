@@ -409,14 +409,18 @@ export function PortalCanvas({ data }: Props) {
             position: "relative",
           }}
         >
-          {/* Dotted-grid background — matches agency canvas. */}
+          {/* Dotted-grid background — single shared source of truth.
+              The dim treatment (was an inline opacity:0.4 here) is
+              now baked into the .dotted-grid CSS rule itself, so this
+              surface and every other dotted surface in the app share
+              the same look without per-call-site overrides. Visual
+              unchanged from before. */}
           <div
             aria-hidden="true"
             className="dotted-grid"
             style={{
               position: "absolute",
               inset: 0,
-              opacity: 0.4,
               pointerEvents: "none",
             }}
           />

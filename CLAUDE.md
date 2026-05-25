@@ -47,6 +47,8 @@ Brand palette (exposed as Tailwind theme tokens — `bg-stages-bg`, `text-stages
 
 Stage rotation palette (12 colors): `#3BA5EE, #8B5CF6, #EC4899, #F59E0B, #10B981, #06B6D4, #F43F5E, #3B82F6, #A855F7, #14B8A6, #EAB308, #EF4444`. Stage index → color via `pickColor(idx % 12)`.
 
+Dotted-grid backdrop (locked 2026-05-25): single shared utility class `.dotted-grid` in `src/app/globals.css`. Background `stages-bg` (`#212124`); dot **source color** `#424242` rendered at 40% alpha → **effective `~#2E2E30`** composited against the `#212124` bg; 1px dots on a 24px grid. Every dotted surface in the app (agency canvas, portal canvas, dashboard, auth screens, chat thread, my-tasks, create-pipeline, etc.) MUST use this class — don't inline a different radial-gradient anywhere or the surfaces will drift again. To dial dot visibility globally, change the alpha in the CSS rule (`0.4`); don't change the source `#424242`.
+
 Typography: Plus Jakarta Sans throughout. Body 13–15px, headers 15–32px, mono used only inside `.field` value previews. Antialiasing on.
 
 ## Data model (mirrors prototype)

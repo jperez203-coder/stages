@@ -1289,15 +1289,19 @@ export function PipelineCanvas({
             position: "relative",
           }}
         >
-          {/* Dotted-grid background. */}
+          {/* Dotted-grid background — single shared source of truth.
+              Was inlined with #4A4A4A dots here (the cross-surface
+              drift that the 2026-05-25 consistency pass fixed); now
+              uses the shared .dotted-grid CSS class so the agency
+              canvas matches the portal canvas, the dashboard, the
+              auth screens, and every other dotted surface in one
+              place. */}
           <div
             aria-hidden
+            className="dotted-grid"
             style={{
               position: "absolute",
               inset: 0,
-              backgroundImage:
-                "radial-gradient(circle, #4A4A4A 1px, transparent 1px)",
-              backgroundSize: "24px 24px",
               pointerEvents: "none",
             }}
           />

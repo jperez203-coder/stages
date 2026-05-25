@@ -127,16 +127,16 @@ export function MessageThread({
         position: "relative",
       }}
     >
-      {/* Dotted-grid backdrop — matches the canvas treatment. Sits
-          behind the message list (z-index 0) so message rows + composer
-          (z-index >= 1) render over it. */}
+      {/* Dotted-grid backdrop — single shared source of truth in
+          globals.css's .dotted-grid rule (dim treatment baked in).
+          Sits behind the message list (z-index 0) so message rows +
+          composer (z-index >= 1) render over it. Visual unchanged. */}
       <div
         aria-hidden="true"
         className="dotted-grid"
         style={{
           position: "absolute",
           inset: 0,
-          opacity: 0.4,
           pointerEvents: "none",
         }}
       />
