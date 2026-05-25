@@ -48,6 +48,9 @@ export type VisibleTask = {
   position: number;
   title: string;
   done: boolean;
+  /** 4b-2-b: surfaced read-only in PortalTaskDetailPanel's description
+   *  section. Empty/null → section hidden entirely. */
+  description: string | null;
   deadline: string | null;
   /** Always true for rows returned by this fetch (explicit filter applied),
    *  but kept on the shape for parity with TaskRaw and so the portal task
@@ -81,7 +84,11 @@ export async function fetchPortalCanvasData(
     supabase
       .from("tasks")
       .select(
-        `id, stage_id, position, title, done, deadline, client_visible, created_at,
+        // `description` added 2026-05-25 (4b-2-b) so the portal task
+        // detail panel can render it read-only. No security impact —
+        // RLS already gates client visibility chain-wise; description
+        // travels with the task it belongs to.
+        `id, stage_id, position, title, done, description, deadline, client_visible, created_at,
          stage:stages!inner(client_visible, pipeline_id)`,
       )
       .eq("client_visible", true)
@@ -104,6 +111,7 @@ export async function fetchPortalCanvasData(
       position: row.position,
       title: row.title,
       done: row.done,
+      description: row.description,
       deadline: row.deadline,
       client_visible: row.client_visible,
       created_at: row.created_at,

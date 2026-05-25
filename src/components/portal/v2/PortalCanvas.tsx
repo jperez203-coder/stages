@@ -25,6 +25,7 @@ import type {
 } from "@/lib/portal-canvas-data";
 import { PortalStageNode } from "./PortalStageNode";
 import { PortalCanvasEmptyState } from "./PortalCanvasEmptyState";
+import { PortalTaskDetailPanel } from "./PortalTaskDetailPanel";
 
 /**
  * Client portal canvas. Phase 4b-2-a.
@@ -103,9 +104,15 @@ type StageVM = {
 
 type Props = {
   data: PortalCanvasData;
+  /** Pipeline display name — threaded from canvas/page.tsx into the
+   *  task detail panel's breadcrumb ("Pipeline › Stage"). Falls back
+   *  to empty string if the pipeline name fetch returned nothing
+   *  (shouldn't happen since layout-level auth gating already
+   *  confirmed the pipeline exists for this caller). */
+  pipelineName: string;
 };
 
-export function PortalCanvas({ data }: Props) {
+export function PortalCanvas({ data, pipelineName }: Props) {
   const transformRef = useRef<ReactZoomPanPinchRef | null>(null);
   // Outer wrapper ref — used by the custom wheel→pan handler below to
   // attach the listener at the canvas-area level (so the wheel event
@@ -165,6 +172,11 @@ export function PortalCanvas({ data }: Props) {
   // Local tasks state — seeded from the server prop. Mutated by the
   // optimistic done-toggle handler; reverts on UPDATE failure.
   const [tasksState, setTasksState] = useState<VisibleTask[]>(data.tasks);
+
+  // 4b-2-b: open task id for the slide-in PortalTaskDetailPanel.
+  // Null = panel closed. Clicking a task title sets this; the panel's
+  // onClose clears it.
+  const [openTaskId, setOpenTaskId] = useState<string | null>(null);
 
   // ── Group tasks by stage (after any local optimistic mutations) ───
   const tasksByStage = useMemo(() => {
@@ -286,11 +298,14 @@ export function PortalCanvas({ data }: Props) {
     [tasksState],
   );
 
-  // ── Task open detail — stub for 4b-2-a; wires PortalTaskDetailPanel
-  //    in 4b-2-b.
+  // 4b-2-b: open the task detail panel for the clicked task. The
+  // single source of truth for which task is open lives in this
+  // canvas component; the panel itself reads the task data via a
+  // lookup on tasksState each render (so any toggle from the panel
+  // OR the card propagates to the other view in one render pass —
+  // see PortalTaskDetailPanel header for the sync rationale).
   const onOpenDetail = useCallback((taskId: string) => {
-    // eslint-disable-next-line no-console
-    console.log("[portal canvas] open detail stub:", taskId);
+    setOpenTaskId(taskId);
   }, []);
 
   // ── Zoom controls — same signatures as agency PipelineCanvas:1153-1161
@@ -482,6 +497,36 @@ export function PortalCanvas({ data }: Props) {
           })}
         </TransformComponent>
       </TransformWrapper>
+
+      {/* 4b-2-b: PortalTaskDetailPanel. Rendered at the canvas root
+          (outside TransformWrapper) so it sits in fixed viewport coords
+          — pan/zoom can't move it off-screen. Mounts only when openTaskId
+          is set AND that task is still present in tasksState (defensive:
+          a task that vanished mid-session implies the panel auto-closes
+          by virtue of not rendering). The panel's lookup-from-tasksState
+          pattern means any onToggleDone from either the panel OR the
+          card propagates to both views in one render. */}
+      {openTaskId &&
+        (() => {
+          const task = tasksState.find((t) => t.id === openTaskId);
+          if (!task) {
+            // Task gone — defensive self-close. Shouldn't happen on the
+            // portal surface (no delete UI) but covers any future path
+            // where the data could disappear underneath an open panel.
+            return null;
+          }
+          const stage = stageVMs.find((s) => s.id === task.stage_id);
+          const stageName = stage?.name ?? "";
+          return (
+            <PortalTaskDetailPanel
+              task={task}
+              pipelineName={pipelineName}
+              stageName={stageName}
+              onClose={() => setOpenTaskId(null)}
+              onToggleDone={onToggleDone}
+            />
+          );
+        })()}
     </div>
   );
 
