@@ -70,7 +70,11 @@ type CompletedTreatment = {
   checkColor: string;
 };
 
-const COMPLETED: Record<StageState, CompletedTreatment> = {
+// Exported (4b-2-a follow-up 2026-05-25) so the portal canvas's
+// PortalTaskRow can render the exact same completed-card treatment
+// without duplicating the per-state color rules. Agency rendering is
+// unchanged.
+export const COMPLETED: Record<StageState, CompletedTreatment> = {
   "in-progress": {
     cardBg: "#6E5BE8",
     cardBorder: "#6E5BE8",
@@ -108,7 +112,8 @@ const COMPLETED: Record<StageState, CompletedTreatment> = {
 };
 
 // Incomplete-task card treatment — uniform across all stage states.
-const INCOMPLETE = {
+// Exported alongside COMPLETED for portal reuse.
+export const INCOMPLETE = {
   cardBg: "rgba(255,255,255,0.03)",
   cardBorder: "rgba(255,255,255,0.08)",
   titleColor: "rgba(255,255,255,0.7)",

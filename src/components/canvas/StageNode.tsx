@@ -56,7 +56,10 @@ import { TaskRow } from "./TaskRow";
 // (post-5c annotation polish — the positional keys current/passed/
 // future were renamed to in-progress/done/not-started). Hex values
 // unchanged; only the keys moved.
-const COLORS = {
+// Exported (4b-2-a follow-up 2026-05-25) so the portal canvas's
+// PortalStageNode can reuse the exact same palette without
+// duplicating values. Agency rendering is unchanged.
+export const COLORS = {
   "in-progress": {
     badgeBg: "#6E5BE8",
     badgeText: "#FFFFFF",
@@ -87,21 +90,25 @@ const COLORS = {
 } as const;
 
 // Geometry (px in canvas-plane coordinates — scale with zoom).
+// Exported (4b-2-a follow-up 2026-05-25) so the portal canvas's
+// PortalStageNode + PortalCanvas can reuse the exact same geometry
+// without duplicating numbers. Agency rendering is unchanged — same
+// `const` values, just made importable.
 const BADGE_DIAMETER = 32;
-const BADGE_TO_BOX_GAP = 14;
+export const BADGE_TO_BOX_GAP = 14;
 // BOX_WIDTH bumped from 180 → 220 (5c annotation polish 2026-05-22) so
 // full task titles ("Send DocuSign contract", "Conduct discovery
 // interview") render without aggressive truncation. Stage cluster width
 // grows ~200px overall; still fits a 1280px viewport at zoom 1.0.
 const BOX_WIDTH = 220;
-const BOX_HEIGHT = 64;
+export const BOX_HEIGHT = 64;
 // Gap between the stage box's bottom edge and the FIRST task card's
 // top. Tuned across two rounds: 12 (initial) → 22 (still tight) → 32
 // (5c annotation polish 2026-05-22 round 4). The stage box now sits
 // clearly above its task stack with breathing room; the SVG
 // connector's arc has visible curve length to land on each task
 // card's left-edge dot.
-const BOX_TO_TASKS_GAP = 32;
+export const BOX_TO_TASKS_GAP = 32;
 
 // Task CARDS (post-figma annotation polish — Phase 4a step 5c). Each
 // task renders as a self-contained card (TaskRow). Fixed height for
@@ -114,19 +121,19 @@ const BOX_TO_TASKS_GAP = 32;
 // `height: 40`. If you change this constant, update there too.**
 // Layout math (computeStageNodeHeight) + SVG connector geometry
 // cascade automatically from this constant.
-const TASK_CARD_HEIGHT = 40;
+export const TASK_CARD_HEIGHT = 40;
 // TASK_CARD_GAP tuned across rounds: 6 (initial, too tight) → 10
 // (annotation polish round 2) → 14 (round 4 — Jordan: "slightly more").
 // 14px between cards keeps the inter-card spacing clearly LESS than
 // the 32px stage→first-task gap, preserving the parent/child visual
 // hierarchy while giving each task card distinct presence.
-const TASK_CARD_GAP = 14;
+export const TASK_CARD_GAP = 14;
 
 // Indent on the task stack — cards sit visually inset from the stage
 // box's left edge to read as "children" of the stage. The badge→task
 // SVG connector terminates at this x-offset on each card.
-const TASK_STACK_PAD_LEFT = 16;
-const TASK_STACK_PAD_RIGHT = 4;
+export const TASK_STACK_PAD_LEFT = 16;
+export const TASK_STACK_PAD_RIGHT = 4;
 
 // "+ Add task" affordance dimensions — match TASK_CARD_HEIGHT so the
 // affordance reads as the natural "next slot" in the card stack.
@@ -134,7 +141,7 @@ const ADD_TASK_ROW_HEIGHT = 40;
 const TASK_LIST_TO_ADD_GAP = 6;
 
 /** y-position (inside StageNode local coords) of the first task card's top. */
-const TASKS_START_Y =
+export const TASKS_START_Y =
   BADGE_DIAMETER + BADGE_TO_BOX_GAP + BOX_HEIGHT + BOX_TO_TASKS_GAP;
 
 /** Total visual height of a StageNode — depends on task count + whether
