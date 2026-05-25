@@ -5,7 +5,8 @@ import { Link as LinkIcon, Upload, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { buildStoragePath } from "@/lib/build-storage-path";
 import { triggerFileDownload } from "@/lib/file-signed-url";
-import { FileRow } from "@/components/files/FileRow";
+import { normalizeUrl } from "@/lib/normalize-url";
+import { FileCard } from "@/components/files/FileCard";
 import { FilePreview } from "@/components/files/FilePreview";
 import { AddLinkModal } from "@/components/files/AddLinkModal";
 import type { FileItem } from "@/lib/pipeline-files-data";
@@ -60,21 +61,25 @@ export function FilesBody({
   const [inlineError, setInlineError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Drag-and-drop state. dragCounterRef tracks enter/leave depth —
+  // dragenter/dragleave fire on every child boundary crossing, so a
+  // naive boolean would flicker as the cursor moves over cards inside
+  // the drop zone. Counting depth + only setting false when count
+  // reaches 0 = no flicker.
+  const [dragActive, setDragActive] = useState(false);
+  const dragCounterRef = useRef(0);
+
   // SELECT clause shared across the two INSERT call sites — keeps the
   // returned row shape in sync with FileItem so reconciliation works
   // without surprise nulls.
   const SELECT_COLS =
     "id, kind, label, url, storage_path, file_name, file_size, mime_type, client_visible, added_by, added_at";
 
-  // ── Upload ──────────────────────────────────────────────────────────
-  const handleFilePick = useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      // Reset the input so re-picking the same file works without
-      // requiring a different filename.
-      e.target.value = "";
-
+  // ── Upload (single file) ────────────────────────────────────────────
+  // Extracted so the file picker (single file) AND the drop handler
+  // (potentially multiple files) share one implementation.
+  const uploadFile = useCallback(
+    async (file: File) => {
       setInlineError(null);
       const storagePath = buildStoragePath(pipelineId, file.name);
       const tempId = crypto.randomUUID();
@@ -92,6 +97,7 @@ export function FilesBody({
         mime_type: mimeType,
         client_visible: false,
         added_by: viewerId,
+        added_by_profile: null,
         added_at: new Date().toISOString(),
         status: "uploading",
       };
@@ -151,12 +157,98 @@ export function FilesBody({
         return;
       }
 
-      // 4. Reconcile — swap optimistic row for the server row.
-      setFiles((prev) =>
-        prev.map((f) => (f.id === tempId ? (row as FileItem) : f)),
-      );
+      // 4. Reconcile — swap optimistic row for the server row. The
+      // server row doesn't include the joined added_by_profile (we
+      // didn't run the second-query batch on this single insert), but
+      // the FileCard's UserAvatar falls back gracefully and the next
+      // page refresh hydrates the profile via fetchPipelineFiles.
+      const enriched: FileItem = {
+        ...(row as Omit<FileItem, "added_by_profile">),
+        added_by_profile: null,
+      };
+      setFiles((prev) => prev.map((f) => (f.id === tempId ? enriched : f)));
     },
     [pipelineId, viewerId],
+  );
+
+  // Hidden file-input → file picker change event. Single-file (the
+  // input has no `multiple` attribute; could be added later).
+  const handleFilePick = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      // Reset input so re-picking the same file works without requiring
+      // a different filename.
+      e.target.value = "";
+      void uploadFile(file);
+    },
+    [uploadFile],
+  );
+
+  // ── Drag-and-drop handlers ──────────────────────────────────────────
+  // Attached to the cards-container div. Gated by canEditPipeline —
+  // members who can't upload see no drop indicator and dropping is a
+  // no-op (the file-picker is also hidden behind the Upload button
+  // which is itself gated). dragCounterRef pattern prevents the
+  // dragenter/dragleave flicker that fires on every child boundary.
+  const handleDragEnter = useCallback(
+    (e: React.DragEvent) => {
+      if (!canEditPipeline) return;
+      // Only count it as a drag-enter if the dragged thing is actually
+      // a file (vs. e.g. text being dragged within the page).
+      if (!e.dataTransfer.types.includes("Files")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounterRef.current += 1;
+      setDragActive(true);
+    },
+    [canEditPipeline],
+  );
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setDragActive(false);
+    }
+  }, []);
+
+  const handleDragOver = useCallback(
+    (e: React.DragEvent) => {
+      if (!canEditPipeline) return;
+      // preventDefault is REQUIRED on dragover for the drop event to
+      // fire at all. Common gotcha — without this, the browser treats
+      // the area as a non-drop zone.
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = "copy";
+    },
+    [canEditPipeline],
+  );
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      if (!canEditPipeline) return;
+      e.preventDefault();
+      e.stopPropagation();
+      // Reset the counter — the browser only fires dragleave for the
+      // last child the cursor was over before the drop, not for the
+      // container itself.
+      dragCounterRef.current = 0;
+      setDragActive(false);
+
+      const dropped = Array.from(e.dataTransfer.files);
+      if (dropped.length === 0) return;
+      // Fire all uploads in parallel — each one runs its own
+      // optimistic-then-reconcile cycle independently. If file 1
+      // fails, files 2..N still proceed.
+      for (const file of dropped) {
+        void uploadFile(file);
+      }
+    },
+    [canEditPipeline, uploadFile],
   );
 
   // ── Add link ────────────────────────────────────────────────────────
@@ -181,7 +273,16 @@ export function FilesBody({
         throw new Error(error?.message ?? "Insert failed");
       }
 
-      setFiles((prev) => [row as FileItem, ...prev]);
+      // Server INSERT doesn't carry the joined uploader profile (the
+      // batch profile fetch is only run by fetchPipelineFiles on full
+      // list loads). The added_by_profile is null for newly-inserted
+      // rows until the page refreshes; the FileCard's UserAvatar
+      // falls back gracefully.
+      const enriched: FileItem = {
+        ...(row as Omit<FileItem, "added_by_profile">),
+        added_by_profile: null,
+      };
+      setFiles((prev) => [enriched, ...prev]);
       setShowAddLink(false);
     },
     [pipelineId, viewerId],
@@ -266,8 +367,13 @@ export function FilesBody({
   // For links, opens in a new tab.
   const handleRowClick = useCallback(async (row: FileItem) => {
     if (row.kind === "url") {
-      if (row.url) {
-        window.open(row.url, "_blank", "noopener,noreferrer");
+      // Defensive normalize: rows saved before the protocol-prefix fix
+      // (or any future code path that bypasses the modal) may have a
+      // bare-domain URL stored. normalizeUrl prepends `https://` so
+      // window.open treats it as absolute instead of relative-to-origin.
+      const target = row.url ? normalizeUrl(row.url) : null;
+      if (target) {
+        window.open(target, "_blank", "noopener,noreferrer");
       }
       return;
     }
@@ -416,47 +522,89 @@ export function FilesBody({
         </div>
       )}
 
-      {/* List or empty state */}
+      {/* Grid / empty state — drag-and-drop attached to this container.
+          When dragActive, a dashed-blue border + tinted overlay reads
+          as a clear drop zone. Drop event reuses uploadFile via the
+          handler in handleDrop above. */}
       <div
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
         style={{
           flex: 1,
           overflowY: "auto",
           padding: "16px 28px 24px",
+          position: "relative",
+          // Visual drop indicator — dashed-blue border activates when
+          // a file is being dragged over the area. Transparent border
+          // otherwise so layout stays stable (no jump when state flips).
+          border: `2px dashed ${dragActive ? "#108CE9" : "transparent"}`,
+          borderRadius: 12,
+          transition: "border-color 120ms ease-out, background 120ms ease-out",
+          background: dragActive ? "rgba(16,140,233,0.04)" : "transparent",
         }}
       >
         {files.length === 0 ? (
           <EmptyState canEdit={canEditPipeline} />
         ) : (
-          <ul
+          <div
             style={{
-              listStyle: "none",
-              padding: 0,
-              margin: 0,
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))",
+              gap: 16,
             }}
           >
             {files.map((row) => (
-              <li key={row.id}>
-                <FileRow
-                  row={row}
-                  canEdit={
-                    canEditPipeline || row.added_by === viewerId
-                  }
-                  onToggleVisibility={handleToggleVisibility}
-                  onRequestDelete={(id) => {
-                    const r = files.find((f) => f.id === id);
-                    const label =
-                      r?.label ?? r?.file_name ?? "this item";
-                    setShowDelete({ id, label });
-                  }}
-                  onClick={handleRowClick}
-                  onDownload={handleDownload}
-                />
-              </li>
+              <FileCard
+                key={row.id}
+                row={row}
+                canEdit={canEditPipeline || row.added_by === viewerId}
+                viewerId={viewerId}
+                onToggleVisibility={handleToggleVisibility}
+                onRequestDelete={(id) => {
+                  const r = files.find((f) => f.id === id);
+                  const label = r?.label ?? r?.file_name ?? "this item";
+                  setShowDelete({ id, label });
+                }}
+                onClick={handleRowClick}
+                onDownload={handleDownload}
+              />
             ))}
-          </ul>
+          </div>
+        )}
+
+        {/* Drop overlay — centered "Drop to upload" text shown only
+            when dragging over the area. pointerEvents:none so the
+            overlay doesn't interfere with the drop event landing on
+            the container. */}
+        {dragActive && (
+          <div
+            aria-hidden
+            style={{
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              pointerEvents: "none",
+              zIndex: 5,
+            }}
+          >
+            <div
+              style={{
+                padding: "12px 20px",
+                background: "rgba(16,140,233,0.18)",
+                border: "1px solid #108CE9",
+                borderRadius: 999,
+                color: "#108CE9",
+                fontSize: 13,
+                fontWeight: 600,
+              }}
+            >
+              Drop to upload
+            </div>
+          </div>
         )}
       </div>
 

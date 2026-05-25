@@ -15,11 +15,38 @@ import type { createSupabaseServerClient } from "./supabase-server";
  * Ordering: most-recent first (added_at DESC) so newly-uploaded files
  * land at the top of the list — matches user expectation for any
  * file-management UI.
+ *
+ * Uploader profile join — TWO-QUERY PATTERN (locked):
+ *   pipeline_links.added_by references auth.users(id), NOT
+ *   public.profiles(id). PostgREST's nested
+ *   `added_by_profile:profiles!inner(...)` returns 0 rows because the
+ *   schema has no direct FK between the two. Same forever-rule as
+ *   canvas-chrome-data.ts and chat-data.ts. We collect distinct
+ *   added_by uuids, batch SELECT profiles, in-memory join.
+ *
+ *   Profile RLS coverage:
+ *     * Agency-side callers see uploader profiles via the existing
+ *       workspace-membership + pipeline-membership branches.
+ *     * Client-side callers (4b-3-c portal) see them via branches 5
+ *       (users_share_pipeline) and 6 (caller_pipeline_in_workspace_
+ *       owned_by) added in migrations 20260527120000 + 20260529120000.
+ *
+ *   If a profile isn't readable (RLS denies for some unexpected
+ *   relationship OR the user has been deleted), added_by_profile is
+ *   null — the card falls back to a placeholder avatar + "Pending
+ *   member" label, same pattern chat uses for un-resolvable authors.
  */
 
 type SupabaseServerClient = Awaited<
   ReturnType<typeof createSupabaseServerClient>
 >;
+
+export type UploaderProfile = {
+  id: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  email: string | null;
+};
 
 export type FileItem = {
   id: string;
@@ -44,18 +71,20 @@ export type FileItem = {
   file_size: number | null;
   /** MIME from File.type at upload (browser-sniffed). Null for
    *  kind='url' OR when the browser couldn't determine the MIME.
-   *  The UI uses this to dispatch image/* → lightbox,
-   *  application/pdf → iframe, everything else → download. */
+   *  The UI uses this to dispatch image/* → lightbox / inline thumb,
+   *  application/pdf → iframe / inline embed,
+   *  everything else → download-only. */
   mime_type: string | null;
   /** Whether clients can see this row. Defaults to false at INSERT.
-   *  The visibility toggle in FileRow flips it; the same RLS gates
+   *  The visibility toggle in FileCard flips it; the same RLS gates
    *  the toggle (uploader OR can_edit_pipeline). */
   client_visible: boolean;
-  /** Original uploader's user_id. Used for the "uploader OR can_edit"
-   *  branch of the UPDATE/DELETE RLS — and the UI's canEdit gate
-   *  (members can manage their own uploads even without
-   *  can_edit_pipeline). Null if the user has been deleted. */
+  /** Original uploader's user_id. Null if the user has been deleted. */
   added_by: string | null;
+  /** Joined profile for the uploader. Null when added_by is null OR
+   *  when RLS denies the profile read (defense-in-depth — would only
+   *  trigger in edge cases). */
+  added_by_profile: UploaderProfile | null;
   /** ISO timestamp. */
   added_at: string;
 };
@@ -64,7 +93,8 @@ export async function fetchPipelineFiles(
   supabase: SupabaseServerClient,
   pipelineId: string,
 ): Promise<FileItem[]> {
-  const { data, error } = await supabase
+  // 1. Files
+  const { data: filesData, error: filesErr } = await supabase
     .from("pipeline_links")
     .select(
       "id, kind, label, url, storage_path, file_name, file_size, mime_type, client_visible, added_by, added_at",
@@ -72,10 +102,50 @@ export async function fetchPipelineFiles(
     .eq("pipeline_id", pipelineId)
     .order("added_at", { ascending: false });
 
-  if (error) {
-    console.error("[pipeline-files] fetch failed:", error);
+  if (filesErr) {
+    console.error("[pipeline-files] files fetch failed:", filesErr);
     return [];
   }
 
-  return (data ?? []) as FileItem[];
+  const rawFiles = (filesData ?? []) as Array<
+    Omit<FileItem, "added_by_profile">
+  >;
+
+  // 2. Batch uploader profiles. Same forever-pattern as chat-data.ts /
+  //    canvas-chrome-data.ts — no nested PostgREST join because
+  //    added_by → auth.users, not profiles.
+  const uploaderIds = Array.from(
+    new Set(
+      rawFiles
+        .map((f) => f.added_by)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  );
+
+  const profilesRes = uploaderIds.length
+    ? await supabase
+        .from("profiles")
+        .select("id, display_name, avatar_url, email")
+        .in("id", uploaderIds)
+    : { data: [], error: null };
+
+  if (profilesRes.error) {
+    console.error(
+      "[pipeline-files] profile fetch failed (will fall back to null profiles):",
+      profilesRes.error,
+    );
+  }
+
+  const profileById = new Map<string, UploaderProfile>();
+  for (const p of (profilesRes.data ?? []) as UploaderProfile[]) {
+    profileById.set(p.id, p);
+  }
+
+  // 3. In-memory join.
+  return rawFiles.map((f) => ({
+    ...f,
+    added_by_profile: f.added_by
+      ? (profileById.get(f.added_by) ?? null)
+      : null,
+  }));
 }

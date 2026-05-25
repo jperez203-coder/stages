@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 
+import { normalizeUrl } from "@/lib/normalize-url";
+
 /**
  * Add-link modal — the form for adding a kind='url' row to a
  * pipeline_files list. Phase 4b-3-b agency-only (clients never see
@@ -50,10 +52,20 @@ export function AddLinkModal({ onCancel, onSave }: Props) {
 
   const handleSave = async () => {
     if (!canSave) return;
+    // Normalize the URL before persisting: bare domains like
+    // "facebook.com" lack a protocol and get treated as relative
+    // paths by window.open, 404ing on the app origin. normalizeUrl
+    // prepends "https://" when no http(s) prefix is present, so the
+    // row lands in the DB already absolute. (See lib/normalize-url.ts.)
+    const normalized = normalizeUrl(url);
+    if (!normalized) {
+      setError("Enter a URL.");
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
-      await onSave(label.trim(), url.trim());
+      await onSave(label.trim(), normalized);
       // Parent closes the modal on success — no setSaving(false) here
       // (component unmounts before the state would matter).
     } catch (e) {
