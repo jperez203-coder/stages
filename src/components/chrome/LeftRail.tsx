@@ -70,8 +70,10 @@ export function LeftRail({
   // with this commit.
   const canvasPath = `/w/${workspaceSlug}/p/${pipelineId}`;
   const chatPath = `${canvasPath}/chat`;
+  const filesPath = `${canvasPath}/files`;
   const onCanvas = pathname === canvasPath;
   const onChat = pathname === chatPath;
+  const onFiles = pathname === filesPath;
 
   return (
     <>
@@ -109,11 +111,12 @@ export function LeftRail({
           <Activity size={18} />
         </RailIcon>
 
-        {/* Files — COMING SOON. Folder icon per polish round (was a
-            generic Link icon; folder reads more clearly as "the
-            attachments + links section." Figma shows a "1" badge here
-            when files exist — we'll add it when files ship. */}
-        <RailIcon label="Files — coming soon" comingSoon>
+        {/* Files — LIVE as of 4b-3-b. Active when pathname ends /files.
+            Folder icon per polish round; figma's "1" badge for non-empty
+            state is deferred (file counts come from pipeline_links;
+            badge wire-up can come in a polish pass once we have real
+            usage data on whether the count is useful here). */}
+        <RailIcon label="Files" href={filesPath} active={onFiles}>
           <Folder size={18} />
         </RailIcon>
 
