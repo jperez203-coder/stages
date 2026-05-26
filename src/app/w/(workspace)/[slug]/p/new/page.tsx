@@ -2,10 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { AlertCircle, ArrowLeft, Plus } from "lucide-react";
+import { AlertCircle, ArrowLeft, ArrowRight } from "lucide-react";
 import { useSession } from "@/hooks/useSession";
 import { useUserContexts } from "@/hooks/useUserContexts";
 import { supabase } from "@/lib/supabase";
+import { TemplatePickerModal } from "@/components/templates/TemplatePickerModal";
 
 const MAX_NAME_LENGTH = 80;
 const DEFAULT_EMOJI = "📋";
@@ -60,6 +61,21 @@ export default function CreatePipelinePage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // ── Phase 4c slice 4: two-step flow ────────────────────────────────────
+  // Step 1: today's form (name + emoji + company). Submit button is now
+  //         "Next →" instead of "Create pipeline" — it advances to step 2
+  //         WITHOUT firing the RPC.
+  // Step 2: TemplatePickerModal overlays the form. Step-1 values are
+  //         preserved in this component's state (name/company/emoji),
+  //         so "Back" from the modal returns to step 1 with everything
+  //         intact. "Create Pipeline" in the modal fires the 5-arg RPC
+  //         (workspace_id, name, emoji, company, template_id).
+  // The picker selects a template_id; we never call the RPC with NULL
+  // template_id from this UI (Blank Workspace built-in IS the from-
+  // scratch option). The RPC's NULL-fallback stays for backward compat
+  // with direct-PostgREST callers, but the picker always sends a uuid.
+  const [step, setStep] = useState<1 | 2>(1);
+
   // ── Resolve workspace from slug + check permission ──────────────────────
   // useUserContexts is already fetched on AppShell mount (siblings to this
   // route use it for the workspace switcher), so this is a free read.
@@ -113,9 +129,22 @@ export default function CreatePipelinePage() {
   const canSubmit =
     !empty && !tooLong && !submitting && canCreate && !!workspace;
 
-  const submit = async (e: React.FormEvent) => {
+  // Step 1 → Step 2 advance. Validates the form, does NOT call the
+  // RPC. The RPC fires later, from handleCreate when the picker
+  // resolves a template_id.
+  const handleNext = (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit || !workspace) return;
+    setError(null);
+    setStep(2);
+  };
+
+  // Final create — invoked by TemplatePickerModal when the user
+  // selects a template + clicks "Create Pipeline". Identical to the
+  // pre-slice-4 submit body EXCEPT it adds template_id to the RPC
+  // args + targets the 5-arg overload of create_pipeline_with_channels.
+  const handleCreate = async (templateId: string) => {
+    if (!workspace) return;
     if (session.status !== "authenticated") return;
 
     setSubmitting(true);
@@ -133,6 +162,9 @@ export default function CreatePipelinePage() {
         // rule the dashboard's PipelineCard uses to render the company
         // line.
         pipeline_company: trimmedCompany,
+        // NEW (slice 4): the chosen template's id. Picker always sends
+        // a uuid (Blank Workspace built-in IS the from-scratch option).
+        template_id: templateId,
       },
     );
 
@@ -276,7 +308,7 @@ export default function CreatePipelinePage() {
         <span className="text-zinc-300">{workspace.workspaceName}</span>.
       </p>
 
-      <form onSubmit={submit} className="panel-card p-6">
+      <form onSubmit={handleNext} className="panel-card p-6">
         <label className="block mb-1.5">
           <span className="text-[13px] text-zinc-400">Pipeline name</span>
         </label>
@@ -379,12 +411,39 @@ export default function CreatePipelinePage() {
             disabled={!canSubmit}
             className="btn-primary"
           >
-            <Plus size={14} strokeWidth={2.5} />
-            {submitting ? "Creating…" : "Create pipeline"}
+            Next
+            <ArrowRight size={14} strokeWidth={2.5} />
           </button>
         </div>
       </form>
       </div>
+
+      {/* Step 2 overlay — template picker. Mounted on top of step 1 so
+          Back can dismiss the modal and reveal the form with its values
+          intact. Step 1's form values (name/company/emoji) live in this
+          component's state; the modal only owns the selectedTemplateId.
+          See TemplatePickerModal header for the visibility-filter +
+          defense-in-depth rationale. */}
+      {step === 2 && workspace && (
+        <TemplatePickerModal
+          workspaceId={workspace.workspaceId}
+          onBack={() => {
+            // Return to step 1. Don't clear `error` — the picker
+            // surfaces its own errors via createError prop; step-1
+            // errors (e.g., validation) are separate.
+            setStep(1);
+          }}
+          onCancel={() => {
+            // Abandon the whole flow. Route to the workspace dashboard
+            // — same target as the existing "Cancel" / "Back to <ws>"
+            // affordances elsewhere on step 1.
+            router.push(`/w/${slug}`);
+          }}
+          onCreate={handleCreate}
+          isCreating={submitting}
+          createError={error}
+        />
+      )}
     </div>
   );
 }
