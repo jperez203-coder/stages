@@ -4,73 +4,81 @@ A running log of what shipped in each session. Newest first.
 
 ---
 
-## PLANNED — Pipeline templates (NOT YET BUILT) (2026-05-26)
+## Pipeline templates — full feature shipped (2026-05-26)
 
-**Status:** SCOPED, APPROVED, NOT BUILT. Picker mockup reviewed. Next chat picks up at slice 1.
+**Status:** SHIPPED end-to-end across four slices. Save → store → instantiate flow live. Built-ins seeded. Cross-workspace isolation verified by the 13-test RLS harness against real Jordan + Casey JWTs.
 
-Three capabilities: (A) agency saves a pipeline as a template, (B) two-step creation flow picks a template, (C) Stages ships built-in starter templates so day-one workspaces aren't empty.
+### Slice commits
 
-### 🔒 LOCKED CONSTRAINT (must respect when building)
+- **`882753a`** — slice 1: schema + RLS. Three tables (`templates`, `template_stages`, `template_tasks`) + 12 policies (4 per table). Built-ins represented as `workspace_id IS NULL`; write policies require `workspace_id IS NOT NULL` so built-ins are read-only to all agencies.
+- **`fdcfd71`** — slice 2: built-in starter templates seed (plain CTE inserts with `WHERE NOT EXISTS` idempotency — DO-block version silently failed in the Supabase SQL editor; root cause never fully pinned, plain CTE pattern worked first time).
+- **`05638aa`** — slice 3: `save_pipeline_as_template` RPC (security definer, atomic, stage-loop pattern to handle position duplicates safely) + UI entry point on the canvas header.
+- **`a809afd`** — slice 4: `create_pipeline_with_channels` extended with optional `template_id` (5-arg overload; 4-arg version kept for backward compat) + two-step creation modal.
 
-**Stage color = completion state per `src/lib/current-stage.ts`** (the file is LOCKED — never modify). Therefore:
+### Built-ins live
 
-- **Instantiated pipelines start ALL-GREY** — every stage is incomplete on creation, which renders grey per the state-color model. There is no other valid initial state.
-- **Stage color is NEVER stored on `template_stages`** and NEVER copied to `stages.color` on instantiate. The instantiate RPC must not write anything that would short-circuit the state-color computation.
-- The picker's stage pills MAY use a decorative position-index palette for visual variety in the modal — but that's UI-only sugar derived at render time, not a column on `template_stages` and not source-of-truth for any live pipeline.
+- **Blank Workspace** (✨) — 1 stage ("Stage 1"), 0 tasks. Replaces the "Start from scratch" UI affordance — every creation picks a template; this one yields the empty-canvas case.
+- **GHL Client Onboarding** (🚀) — 6 stages, 38 tasks, 13 client-visible. Founder-provided GHL-agency content: Kickoff & Intake → Account Build → Compliance & Telephony → Creative & Campaign Prep → Review & Approval → Launch & Handoff.
 
-This is a correction from my initial scope (I'd proposed preserving stage color on templates). The correct shape: template_stages has no color column; live stages start incomplete; current-stage.ts handles all visual color.
+### Full flow works end-to-end
 
-### Schema (3 new tables)
+- **Save** — `PipelineHeader` overflow `...` menu's "Save as template" item opens `SaveAsTemplateModal`. RPC copies stages + tasks stripping **all** live data (color, deadline, completed/completed_at, done, pos_x/y, assignee_id, completed_by, note, created_at). Silent close on success.
+- **Two-step creation** — `/w/[slug]/p/new` flow: step 1 (name + emoji + company → "Next →") → step 2 (`TemplatePickerModal` overlay). Two sections ("Your templates" + "Starter templates"), card grid, single-pick selection, "Create Pipeline" CTA enabled on selection. Matches the picker mockup at `pipeline-snapshot.png`.
+- **Instantiate** — picker's selected `template_id` flows to the 5-arg RPC. Stages + tasks copied verbatim from the chosen template; all live fields default (`done=false`, no assignee, no deadline, no positions). **New pipelines start ALL-GREY** because every stage starts incomplete and `src/lib/current-stage.ts` renders color from completion state (locked model preserved).
+- **Cross-workspace visibility re-check** in the RPC — defense-in-depth against a direct-PostgREST caller forging a `template_id` from another workspace. Built-in (`workspace_id IS NULL`) OR same-workspace template → allowed; anything else → 42501.
 
-- **`templates`** — `id`, **nullable `workspace_id`** (NULL = built-in, NOT NULL = workspace-owned), `name`, `description` (optional prose for cards), `emoji`, `source_pipeline_id` (provenance, nullable), `created_by`, `created_at`. ON DELETE CASCADE from workspaces.
-- **`template_stages`** — `id`, `template_id`, `position`, `name`, `description`, `client_visible`. **No color, no live state.** ON DELETE CASCADE from templates.
-- **`template_tasks`** — `id`, `template_stage_id`, `position`, `title`/`text` (see unresolved item below), `description`/`note`, `client_visible`. **No `done`, no `deadline`, no `pos_x/pos_y`, no `assignee_id`, no `completed_*`.** ON DELETE CASCADE from template_stages.
+### Migrations applied
 
-### RLS (5 policies)
+```
+20260606120000_pipeline_templates_schema_and_rls.sql            (slice 1)
+20260607120000_seed_builtin_starter_templates.sql               (slice 2)
+20260608120000_save_pipeline_as_template_rpc.sql                (slice 3)
+20260609120000_create_pipeline_with_channels_template_id.sql    (slice 4 — added the 5-arg overload; 4-arg version preserved)
+```
 
-- **Saved templates: workspace-private.** SELECT requires `is_workspace_member(workspace_id)`. INSERT / UPDATE / DELETE require `is_workspace_owner_or_admin(workspace_id)` AND `workspace_id IS NOT NULL`.
-- **Built-ins: read-only to everyone.** SELECT additionally allows `workspace_id IS NULL`. Write policies require `workspace_id IS NOT NULL`, so built-ins are uneditable/undeletable by any agency. Built-ins land via migration seed (running as migration role, RLS bypassed).
-- `template_stages` and `template_tasks` policies join through to the parent template's visibility — same pattern as `channel_memberships` joining via `channels`.
+### Files (UI)
 
-### RPCs
+```
+new file:  src/components/templates/SaveAsTemplateModal.tsx      (slice 3)
+new file:  src/components/templates/TemplatePickerModal.tsx      (slice 4)
+new file:  src/components/templates/TemplateCard.tsx             (slice 4 — reuses pickColor from @/lib/constants for decorative pill colors)
+modified:  src/components/chrome/PipelineHeader.tsx              (slice 3 — new overflow ... menu + modal mount)
+modified:  src/app/w/(workspace)/[slug]/p/new/page.tsx           (slice 4 — two-step state + handleNext / handleCreate split)
+new file:  scripts/test-templates-rls.mjs                        (gitignored dev harness — 13 RLS tests, real JWTs via signInWithPassword)
+```
 
-- **NEW** `save_pipeline_as_template(source_pipeline_id, name, description?, emoji?)` — security definer, single transaction. Validates `can_edit_pipeline(source_pipeline_id)`, reads source's `workspace_id`, inserts template + template_stages + template_tasks. Strips all live state (done/deadline/pos/assignee/completed/timestamps).
-- **EXTEND** `create_pipeline_with_channels(...workspace_id, name, emoji, company, template_id?)` — optional `template_id` at the end (default NULL → today's zero-stages behavior, preserves backward compat). When non-null, after the existing channel inserts, copy `template_stages` → `stages` (position, name, description, client_visible) and `template_tasks` → `tasks` (position, title, description, client_visible). Entire RPC stays in one transaction.
+### Locked constraint preserved
 
-### "Blank Workspace" — eliminates from-scratch special case
+Stage color is **NEVER stored on `template_stages`** (no column) and **NEVER copied to `stages.color` on instantiate**. New pipelines from any template — including the GHL onboarding flow — start ALL-GREY because every stage's `completed = false`; the state-color computation in `current-stage.ts` (LOCKED file) renders them grey. The picker's decorative pill colors come from `pickColor(position % 12)` at render time and are not persisted.
 
-One of the seeded built-ins. Has exactly one `template_stages` row ("Stage 1") and zero `template_tasks`. Every creation in the UI picks a template; there's no separate "Start from scratch" affordance. The RPC's NULL fallback stays for direct-PostgREST safety but the UI never sends NULL.
+### Privacy verified
 
-### UI (slice 4)
+13-test RLS harness (`scripts/test-templates-rls.mjs`, gitignored, real JWTs):
 
-- **Existing route `/w/[slug]/p/new` becomes two-step**:
-  - Step 1: today's form (name + emoji + company), button copy changes to "Next".
-  - Step 2: **`TemplatePickerModal`** overlay — dark modal with backdrop, two sections ("Your templates" with bookmark icon, "Starter templates" with sparkle icon), single-pick selection, "Back" returns to step 1 with step-1 values preserved, "Create Pipeline" CTA enabled on selection.
-- New **`TemplateCard`** component — emoji + name + description-or-auto-summary ("N stages · M tasks") + row of stage-name pills + "+N more" overflow. Reusable in case a future "manage templates" workspace settings surface wants the same card.
-- Picker fetches templates with one query using PostgREST nested select: `templates` + `template_stages(...)` + `template_tasks(count)`. Sorted built-ins first (`workspace_id` ASC NULLS FIRST), then workspace-saved by recency.
+- Tests 1–9 (slice 1): Jordan can insert into his own workspace; Casey can't read or write Jordan's; cascade delete works; child-table policies join through correctly.
+- Tests 10–13 (slice 2): both agencies see the same 2 built-ins; Jordan's UPDATE/DELETE attempts on a built-in 0-affect; Casey's SELECT on built-in's child stages returns all 6 rows.
+- Slice 4 RPC defense: cross-workspace template_id forgery via direct PostgREST returns `42501 "Template not found or not accessible in this workspace"` — verified manually.
 
-### Built-in seeding mechanism
+### Two bugs caught + fixed during slice 4
 
-Migration with `INSERT INTO public.templates ... VALUES (null, ...)` + nested template_stages + template_tasks. Idempotent via `ON CONFLICT DO NOTHING` or a "skip if name already exists" guard. Founder provides GHL-agency content (Paid Ads Onboarding, Agency Project Workflow, Sales Pipeline, Blank Workspace per the mockup) — the migration is just a wrapper for the inserts.
+- `column reference "workspace_id" is ambiguous` in the visibility-check EXISTS subquery. Fix: qualify with `create_pipeline_with_channels.workspace_id` on the right side.
+- Latent same-shape bug in the stage loop's `where template_id = ...` (column collides with parameter). Fix: alias `template_stages` as `ts`, qualify LEFT side with `ts.template_id`. Both fixes landed in `a809afd`.
 
-### Slice order (each independently shippable + testable)
+### Out of scope for v1 — deferred to wishlist
 
-1. **Schema + RLS** — three tables, five policies. No UI, no data. Verifiable via SQL editor + the `scripts/test-client-upload-rls.mjs` harness pattern (write a parallel `test-templates-rls.mjs` that signs in as two agency accounts in different workspaces, confirms saved templates don't cross over, confirms built-ins are visible to both).
-2. **Built-in seed migration** — depends on (1). Seeds Blank Workspace + the three GHL templates (or whatever founder provides). Verifiable: `SELECT count(*) FROM templates WHERE workspace_id IS NULL` returns expected count; both agency accounts see them; neither can DELETE.
-3. **Save flow** — `save_pipeline_as_template` RPC + UI entry point. **Open design decision**: proposed a new overflow `...` menu on `PipelineHeader` (no overflow menu exists today, this would be its first item). Verifiable end-to-end: save a real pipeline, query template tables, confirm structure matches minus live data; other-workspace agency can't see the saved template.
-4. **Picker UI + instantiate** — refactor `/w/[slug]/p/new` to two-step, add `TemplatePickerModal` + `TemplateCard`, extend `create_pipeline_with_channels` with `template_id`. Verifiable end-to-end: create from built-in → new pipeline has those stages/tasks (all grey, all incomplete); create from workspace-saved template → same; create from "Blank Workspace" → one empty stage; privacy: agency can't pass another workspace's template_id via direct RPC call.
-
-### ⚠️ Unresolved before slice 1
-
-**Verify the CURRENT column names on `public.tasks`.** The initial-schema migration (`20260508120000`) has `text` + `note`, but the TS type `TaskRaw` (in `src/app/w/(canvas)/[slug]/p/[pipeline-id]/page.tsx`) uses `title` + `description` — there was a rename migration I didn't trace. `template_tasks` columns MUST mirror whatever the live column names actually are. First action of slice 1 implementation: run `\d public.tasks` in the SQL editor (or read the latest tasks-touching migration), match the column names exactly. Same check for `public.stages` columns (`name`/`description` confirmed, but verify).
-
-### Out of scope for v1 (intentionally deferred)
+Migrated to `WISHLIST.md` (v1.1 wishlist section):
 
 - Public / cross-workspace template library
-- Template editing post-save (workaround: delete + re-save)
+- Template editing post-save (delete + re-save workaround stays)
 - Template version history
-- Stage color preservation (explicitly disallowed by the locked constraint above)
-- "Manage templates" workspace settings view (saved templates can be deleted via SQL or future UI; not blocking v1)
+- "Manage templates" workspace settings surface (rename/delete saved templates from UI instead of SQL)
+
+### Verified by
+
+- `npx tsc --noEmit` — clean after each slice
+- `npm run build` — green, 15 routes
+- 13-test RLS harness — all green
+- Real-app end-to-end smoke: save → pick → instantiate → new pipeline canvas shows expected stages, all grey
 
 ---
 
