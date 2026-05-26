@@ -4,6 +4,92 @@ A running log of what shipped in each session. Newest first.
 
 ---
 
+## Client portal — two-way complete (2026-05-26)
+
+**Status:** SHIPPED. Portal now matches the agency surface for read + write: chat (read + post), canvas (view), files (view, preview, download, **upload, add link, delete-own**). Three commits across the file-write slices:
+
+- **`89eafee`** — phase 4b-3-d: client file upload. Three RLS migrations land the defense-in-depth (policy WITH CHECK + BEFORE INSERT trigger + table-level CHECK binding `storage_path` to `pipeline_id`).
+- **`21de234`** — phase 4b-3-e: client URL link adding. Relaxed the `kind='file'` lock; `client_visible=true` + `added_by=auth.uid()` enforcement preserved in both policy + trigger.
+- **`4057521`** — UI reconciliation: `FileCard` Eye/Trash prop split (delete-own without granting visibility-toggle); `viewerProfile` threaded into `PortalFilesBody` for instant-name reconcile on freshly-uploaded rows; link cards get the existing favicon treatment via `FileCard`'s `kind='url'` dispatch.
+
+All privacy verified by `scripts/test-client-upload-rls.mjs` (gitignored, real Casey + Agency JWTs via `signInWithPassword` + publishable key — no SQL-editor impersonation, no service-role bypass). **10/10 tests pass.** STOP-gates on tests 2/3/4 (cross-pipeline block, `client_visible` forge, `added_by` impersonation) and tests 9/10 (URL equivalents) all hold. Detailed per-slice entries below (4b-3-d, 4b-3-e).
+
+---
+
+## Dashboard cleanup (2026-05-26)
+
+**Status:** SHIPPED across four commits.
+
+- **`e841c9a`** — removed the "Team chat" empty-state strip. Workspace-team chat is deferred-not-built; the strip read as a broken promise on every dashboard load. Component kept on disk (`TeamChatStrip.tsx`); mount-site comment in `app/w/(workspace)/[slug]/page.tsx` documents the 3-step re-add recipe. Per-pipeline chat untouched.
+- **`4d18f45`** — wired the previously-inert "Search by name or company…" header bar. New `HeaderSearch` component: client-side filter over the active workspace's pipelines (name + company), dropdown with arrow-key nav, ⌘K binding. No per-keystroke DB queries. Task / file / message search intentionally deferred.
+- **`6dd0831`** — wired `member_joined` writer in `accept_client_invite` RPC. Mirrors the existing `auto_advance_stage` insert pattern. Brings the dashboard Activity feed from "queried but never written" to actually populating when a client accepts a portal invite. `pipeline_created` + `pipeline_submitted` writers deferred (Jordan-as-actor would be filtered for solo agencies).
+- **`4941bfe`** — removed the "See all activity →" link (route never built, 404'd). Same posture as Team-strip removal: hide deferred surfaces instead of showing broken promises. Activity card's 5-most-recent feed unchanged.
+
+---
+
+## Performance wins (2026-05-26)
+
+**Status:** Wins #1 + #2 SHIPPED. Win #3 deferred.
+
+- **`6941891`** — **Win #1**: `loading.tsx` skeletons on all authed routes (workspace dashboard, canvas main + chat/files/clients tabs, portal). Shared `CanvasChromeSkeleton` for the canvas tabs. Purely additive; zero data/auth/RLS changes. Eliminates the "frozen on old page" feel during navigation.
+- **`48c74ac`** — **Win #2**: hoisted the canvas gate + chrome + caller-profile + aggregate task counts into a shared `(canvas)/[slug]/p/[pipeline-id]/layout.tsx`. `React.cache`-wrapped helper (`src/lib/canvas-route-cache.ts`) so layout AND pages dedupe — defense-in-depth gate in BOTH layers (layout fires first; pages re-call for free via the cache). Tab switches now run only the tab-specific fetch, not the gate. `PipelineChromeShell` auto-derives `hideEditButton` via `usePathname`. **Prod-confirmed smooth.**
+- **Win #3 deferred** — lazy-load `TaskDetailPanel` (1940 lines) + other modals via `next/dynamic`. Not needed; Wins #1 + #2 fixed the perceived-speed complaint.
+
+---
+
+## Client boundary cleanup — pure clients vs agency UI (2026-05-26)
+
+**Status:** Tier A + B1 + C1 all SHIPPED.
+
+- **`44fedef`** — **Tier A** (pure UI, no auth/routing change). AppShell derives `hasAnyAgencyContext` from `useUserContexts`. For pure clients (no agency contexts):
+  - workspace switcher hidden (A1)
+  - "← Back to portal" link rendered in its slot pointing to `/portal/<their pipelineId>` (A2)
+  - "Create new workspace" dropdown item gated inside `HeaderWorkspaceSwitcher` as defense-in-depth (A3)
+  - +Pipeline button gated explicitly
+  
+  Agency users' chrome is byte-for-byte identical when `hasAnyAgencyContext === true`.
+
+- **`147ae34`** — **B1** (post-sign-in routing). `resolveDestination.urlForContext` branches on `ctx.type`: clients route to `/portal/<pipelineId>`, agency to `/w/<slug>` (unchanged). Exported + reused by the multi-context chooser (`WorkspaceSelector`) so the auto-route and chooser paths agree. Pure clients land directly on the portal instead of bouncing through `/w/<slug>` → `/` → legacy app.
+
+- **`e3ed98a`** — **C1** (paywall integrity). Blocks pure clients from creating workspaces — clients gaining free agency functionality would undercut Solo/Team tiers. Three-case rule (locked):
+  - `hasClient && !hasAgency` → **BLOCK** (pure client)
+  - zero contexts → **ALLOW** (brand-new agency signup — must not break or onboarding breaks)
+  - any agency context → **ALLOW** (adding more workspaces)
+  
+  Defense in depth: server-side page gate (`page.tsx` refactored to server component + extracted `CreateWorkspaceForm.tsx`) + RPC check inside `create_workspace_with_owner` (migration `20260605120000`). `blockedClientDestination` wrapper isolates the future "upgrade to paid agency" CTA swap (see Deferred entry below).
+
+---
+
+## Deferred / future work — parked notes (2026-05-26)
+
+Not shipped this session; logged here so they don't get lost.
+
+### Paid-agency upgrade CTA for blocked clients
+
+C1 currently bounces a pure client trying to create a workspace back to their portal. Future swap once Stripe billing exists: redirect to an upsell page (`/upgrade/create-workspace` or similar) explaining the agency tier and offering checkout. **Single swap point**: the `blockedClientDestination` function in `src/app/onboarding/create-workspace/page.tsx`. Mirror swap in the RPC's error message (migration `20260605120000`).
+
+### Name-on-invite — first / last name capture
+
+Invite-accept flow doesn't capture a display name, so freshly-accepted users show as raw email in activity rows / uploader avatars / "Pending member" fallbacks. Fix: capture first + last name on `/accept-invite/[token]` and `/portal/accept/[token]`, write to `profiles.display_name` in the same transaction as the membership insert.
+
+### Pre-launch hardening list
+
+- **Automated RLS test suite.** Pattern already exists (`scripts/test-client-upload-rls.mjs`). Extend to cover every table's policies, not just `pipeline_links` + storage. Run in CI before deploys.
+- **Auth bugs.** Forgot-password 404 (reset page missing). Magic-link redirects to prod `app.trystages.com` instead of current origin. Localhost doesn't consume `#access_token=` hashes from pasted URLs. All three documented in the header comment of `scripts/set-test-password.mjs`.
+- **Agency-route guard sweep.** Every `/w/<slug>/*` route should require `workspace_memberships` OR an agency-role `pipeline_memberships` row. Most do via per-route gates (canvas tabs hoisted to layout in Win #2); sweep for any that miss.
+- **Turbopack dev-cache crashes.** Recurring "ENOENT on build-manifest.json" after interrupted SST writes — current workaround is `turbopackFileSystemCacheForDev: false` in `next.config.ts`. Revisit when Next.js hardens the SST format (likely 16.3 / 16.4).
+- **Prod redirect-loop / blank-render on stale session.** Reported intermittently; reproduce + fix before launch.
+
+### Minor / cosmetic
+
+- Hide the empty `HeaderSearch` bar on client `/settings/account` (currently renders but has no active workspace to search).
+- **Orphan test data to purge before launch**:
+  - Casey's "Acme client test" workspace (created during C1 bug investigation)
+  - `brandnew-c1-test` test account (if it persists after C1 verification)
+  - ~7 test files in the `pipeline_files` bucket from privacy-harness runs (privacy-safe — no joined `pipeline_links` rows — but bucket bloat). Janitor pass.
+
+---
+
 ## Phase 4b-3-e — client portal: add LINK affordance (2026-05-25)
 
 **Status:** SHIPPED. One relaxation migration applied via Supabase SQL editor; full 10-test privacy harness green (including three new URL-specific tests) BEFORE any UI code. UI then added to PortalFilesBody by re-importing the shared AddLinkModal and forking handleAddLink off the agency surface.
