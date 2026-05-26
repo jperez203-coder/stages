@@ -9,7 +9,7 @@ import { normalizeUrl } from "@/lib/normalize-url";
 import { AddLinkModal } from "@/components/files/AddLinkModal";
 import { FileCard } from "@/components/files/FileCard";
 import { FilePreview } from "@/components/files/FilePreview";
-import type { FileItem } from "@/lib/pipeline-files-data";
+import type { FileItem, UploaderProfile } from "@/lib/pipeline-files-data";
 
 /**
  * Client-portal Files tab body. Phase 4b-3-d added CLIENT UPLOAD on
@@ -96,6 +96,14 @@ type Props = {
    *  uploader names AND used as the gate for delete-own (canEdit ==
    *  row.added_by === viewerId). */
   viewerId: string;
+  /** Caller's own profile (display_name + avatar). Used to enrich
+   *  `added_by_profile` on freshly-inserted rows so the optimistic
+   *  card shows the client's real name immediately instead of the
+   *  "Pending member" fallback that would show until next page reload.
+   *  Server-fetched in page.tsx via profiles_select branch 1
+   *  (`id = auth.uid()`). Always carries `id` even when downstream
+   *  fields are null — the reconcile branches match by id alone. */
+  viewerProfile: UploaderProfile;
   /** Required for the upload INSERT. Storage path is built with
    *  buildStoragePath(pipelineId, fileName) — first folder segment must
    *  be the pipeline UUID per the storage RLS policy AND the table-level
@@ -114,7 +122,12 @@ type PreviewState =
 const SELECT_COLS =
   "id, kind, label, url, storage_path, file_name, file_size, mime_type, client_visible, added_by, added_at";
 
-export function PortalFilesBody({ initialFiles, viewerId, pipelineId }: Props) {
+export function PortalFilesBody({
+  initialFiles,
+  viewerId,
+  viewerProfile,
+  pipelineId,
+}: Props) {
   const [files, setFiles] = useState<RowWithStatus[]>(initialFiles);
   const [preview, setPreview] = useState<PreviewState>(null);
   const [inlineError, setInlineError] = useState<string | null>(null);
@@ -153,7 +166,15 @@ export function PortalFilesBody({ initialFiles, viewerId, pipelineId }: Props) {
         mime_type: mimeType,
         client_visible: true,
         added_by: viewerId,
-        added_by_profile: null,
+        // Inject the caller's own profile so the optimistic row shows
+        // "Casey Client (You)" with her avatar during the upload
+        // spinner — instead of "Pending member (You)" flashing for a
+        // few hundred ms until reconcile. added_by is hardcoded to
+        // viewerId above, so the conditional below is always-true
+        // here; spelled out as a conditional anyway for symmetry with
+        // the post-INSERT reconcile sites.
+        added_by_profile:
+          viewerId === viewerProfile.id ? viewerProfile : null,
         added_at: new Date().toISOString(),
         status: "uploading",
       };
@@ -218,13 +239,18 @@ export function PortalFilesBody({ initialFiles, viewerId, pipelineId }: Props) {
       }
 
       // 4. Reconcile — swap optimistic row for the server row.
+      // Match by added_by so the joined profile carries through; the
+      // conditional is defensive (clients always upload as themselves
+      // today, but checking id keeps this correct if a future code
+      // path inserts on someone else's behalf).
       const enriched: FileItem = {
         ...(row as Omit<FileItem, "added_by_profile">),
-        added_by_profile: null,
+        added_by_profile:
+          row.added_by === viewerProfile.id ? viewerProfile : null,
       };
       setFiles((prev) => prev.map((f) => (f.id === tempId ? enriched : f)));
     },
-    [pipelineId, viewerId],
+    [pipelineId, viewerId, viewerProfile],
   );
 
   // Hidden file-input → file picker change event.
@@ -310,22 +336,22 @@ export function PortalFilesBody({ initialFiles, viewerId, pipelineId }: Props) {
         throw new Error(error?.message ?? "Insert failed");
       }
 
-      // Hydrate the joined uploader profile from the viewer's own
-      // record where we know it (added_by === viewerId is always true
-      // for client inserts; same shortcut the file-upload helper would
-      // use if we wired it). For now, follow the agency pattern and
-      // leave added_by_profile null — FileCard's UserAvatar falls back
-      // gracefully, the next page reload runs fetchPipelineFiles +
-      // re-batches profiles. Tech debt logged with the upload-helper
-      // fork; same fix would address both.
+      // Hydrate the joined uploader profile from the caller's own
+      // record so the new link card shows "Casey Client (You)" with
+      // her avatar immediately instead of "Pending member (You)" until
+      // the next page reload. Conditional match on added_by is
+      // defensive — client inserts always set added_by=self, but
+      // keying by id keeps this correct if a future code path inserts
+      // on someone else's behalf.
       const enriched: FileItem = {
         ...(row as Omit<FileItem, "added_by_profile">),
-        added_by_profile: null,
+        added_by_profile:
+          row.added_by === viewerProfile.id ? viewerProfile : null,
       };
       setFiles((prev) => [enriched, ...prev]);
       setShowAddLink(false);
     },
-    [pipelineId, viewerId],
+    [pipelineId, viewerId, viewerProfile],
   );
 
   // ── Delete-own (RLS allows via added_by = auth.uid()) ───────────────
