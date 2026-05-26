@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { usePathname } from "next/navigation";
 import { PipelineHeader } from "./PipelineHeader";
 import { LeftRail } from "./LeftRail";
 import { EditModeProvider } from "./EditModeContext";
@@ -58,9 +59,13 @@ type Props = {
     displayName: string | null;
     avatarUrl: string | null;
   };
-  /** Hide the "Edit pipeline" toggle button in the header. Set on the
-   *  /clients route — edit mode belongs on the canvas surface only.
-   *  Defaults to false (button visible when canEditPipeline === true). */
+  /** Hide the "Edit pipeline" toggle button in the header. OPTIONAL —
+   *  defaults to "hide on tab sub-routes (chat/files/clients), show on
+   *  canvas main" via usePathname below. Pre-Win-#2 (perf hoist) this
+   *  was a required-on-tabs prop passed by each tab page; post-hoist
+   *  the shell renders in the shared layout and derives the default
+   *  itself. Callers can still pass an explicit override if they need
+   *  to force a value. */
   hideEditButton?: boolean;
   children: ReactNode;
 };
@@ -71,9 +76,20 @@ export function PipelineChromeShell({
   completedTasks,
   totalTasks,
   user,
-  hideEditButton = false,
+  hideEditButton,
   children,
 }: Props) {
+  // Edit-button default: hide on the three tab sub-routes (chat/files/
+  // clients), show on the canvas-main route (no trailing tab segment).
+  // The shell now lives in the shared canvas layout, so it needs to
+  // self-derive this rather than each page passing it. Caller-provided
+  // `hideEditButton` (when defined) overrides the pathname default.
+  const pathname = usePathname();
+  const isTabRoute = pathname
+    ? /\/p\/[^/]+\/(chat|files|clients)(\/|$)/.test(pathname)
+    : false;
+  const effectiveHideEditButton = hideEditButton ?? isTabRoute;
+
   return (
     <EditModeProvider canEditPipeline={chrome.canEditPipeline}>
       <div
@@ -86,7 +102,7 @@ export function PipelineChromeShell({
           completedTasks={completedTasks}
           totalTasks={totalTasks}
           user={user}
-          hideEditButton={hideEditButton}
+          hideEditButton={effectiveHideEditButton}
         />
 
         {/* Body row: rail on the left, page content on the right. */}

@@ -1,32 +1,28 @@
-import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { PipelineCanvas } from "@/components/canvas/PipelineCanvas";
-import { PipelineChromeShell } from "@/components/chrome/PipelineChromeShell";
-import { fetchCanvasChromeData } from "@/lib/canvas-chrome-data";
+import { fetchCanvasRouteBundle } from "@/lib/canvas-route-cache";
 
 /**
- * /w/[slug]/p/[pipeline-id] — pipeline canvas. Phase 4a step 5d.
+ * /w/[slug]/p/[pipeline-id] — pipeline canvas surface.
  *
- * 5d adds the canvas chrome (PipelineHeader + LeftRail) around the
- * canvas surface from 5c. The page now:
- *   1. Auth gate (unchanged)
- *   2. Workspace membership (unchanged)
- *   3. Pipeline lookup (extended — emoji/company/last_edited_at)
- *   4. Stages + tasks + member roster + caller's pipeline_memberships
- *      + caller's profile (added member roster query for the chrome's
- *      avatar cluster + popover; profile for the HeaderProfileMenu)
- *   5. Derive canEditPipeline (unchanged)
- *   6. Render <PipelineChromeShell {...chromeData}><PipelineCanvas /></PipelineChromeShell>
+ * Phase 4b perf Win #2 (2026-05-26): the gate + chrome render moved
+ * up to layout.tsx. This page now:
+ *   1. Calls `fetchCanvasRouteBundle` for defense-in-depth on the
+ *      gate (cached — returns the layout's already-computed result
+ *      with zero DB round-trips on the happy path).
+ *   2. Fetches its OWN canvas-specific data only: stages + tasks +
+ *      coachmark flag.
+ *   3. Returns just <PipelineCanvas /> — the surrounding chrome
+ *      (header + LeftRail) comes from layout.tsx wrapping every
+ *      child of this segment.
  *
- * The chrome fetches happen via the shared `fetchCanvasChromeData()`
- * helper so this page and /clients (the sibling route in the canvas
- * group) share one definition of "what the chrome needs."
+ * Pre-Win-#2 this page did the gate + chrome fetch itself (and so did
+ * each sibling tab page). The layout hoist eliminates that duplication
+ * across tab navigations — chrome stays mounted as the user clicks
+ * Canvas ↔ Chat ↔ Files ↔ Clients.
  *
- * Pipeline data sent to PipelineCanvas no longer includes
- * pipelineName/workspaceSlug — the chrome owns those; PipelineCanvas is
- * just the pan/zoom + stages + tasks surface now.
- *
- * Auth + redirect rules unchanged from 5c.
+ * Auth + redirect rules unchanged from pre-hoist; see
+ * src/lib/canvas-route-cache.ts header for the redirect cases.
  */
 
 export const dynamic = "force-dynamic";
@@ -67,99 +63,37 @@ export default async function PipelineCanvasPage({
   const pipelineId = resolved["pipeline-id"];
   const supabase = await createSupabaseServerClient();
 
-  // ── Auth gate ──────────────────────────────────────────────────────────
-  const { data: userRes } = await supabase.auth.getUser();
-  const user = userRes.user;
-  if (!user) {
-    redirect(
-      `/auth/signin?next=/w/${encodeURIComponent(slug)}/p/${encodeURIComponent(
-        pipelineId,
-      )}`,
-    );
-  }
+  // Defense-in-depth gate (cached). Layout ran the same call first —
+  // this returns its bundle without re-hitting the DB.
+  const bundle = await fetchCanvasRouteBundle(slug, pipelineId);
 
-  // ── Workspace membership check ─────────────────────────────────────────
-  const wsMembershipResult = await supabase
-    .from("workspace_memberships")
-    .select(`role, workspace:workspaces!inner(id, name, slug)`)
-    .eq("user_id", user.id)
-    .eq("workspace.slug", slug)
-    .maybeSingle();
+  // Canvas-specific parallel fetches: stages + tasks + coachmark.
+  // (Chrome / caller-profile / task counts now come from the bundle.)
+  const [stagesRes, tasksRes, profileRes] = await Promise.all([
+    supabase
+      .from("stages")
+      .select("id, position, name")
+      .eq("pipeline_id", pipelineId)
+      .order("position", { ascending: true }),
 
-  type WsRow = { id: string; name: string; slug: string };
-  const wsRaw = wsMembershipResult.data?.workspace as unknown;
-  const ws: WsRow | null = Array.isArray(wsRaw)
-    ? ((wsRaw[0] as WsRow | undefined) ?? null)
-    : ((wsRaw as WsRow | null) ?? null);
+    supabase
+      .from("tasks")
+      .select(
+        `id, stage_id, position, title, done, assignee_id,
+         completed_at, completed_by,
+         description, deadline, client_visible, created_at,
+         stage:stages!inner(pipeline_id)`,
+      )
+      .eq("stage.pipeline_id", pipelineId)
+      .order("position", { ascending: true }),
 
-  if (!wsMembershipResult.data || !ws) {
-    redirect("/");
-  }
-
-  // ── Pipeline workspace match (cheap pre-check) ────────────────────────
-  // Quick query to confirm the pipeline belongs to this workspace before
-  // we kick off the parallel chrome + stages + tasks fetch. Saves a
-  // round-trip if the pipeline-id is wrong/stale.
-  const pipelineMatchRes = await supabase
-    .from("pipelines")
-    .select("id, workspace_id")
-    .eq("id", pipelineId)
-    .maybeSingle();
-
-  if (!pipelineMatchRes.data || pipelineMatchRes.data.workspace_id !== ws.id) {
-    redirect(`/w/${slug}`);
-  }
-
-  // ── Parallel fetches: chrome data + stages + tasks + coachmark + profile ──
-  const [chrome, stagesRes, tasksRes, profileRes, callerProfileRes] =
-    await Promise.all([
-      // Chrome data (pipeline emoji/company/last_edited_at + member
-      // roster + canEditPipeline). Shared helper used by /clients too.
-      fetchCanvasChromeData(
-        supabase,
-        pipelineId,
-        user.id,
-        wsMembershipResult.data.role,
-      ),
-
-      supabase
-        .from("stages")
-        .select("id, position, name")
-        .eq("pipeline_id", pipelineId)
-        .order("position", { ascending: true }),
-
-      supabase
-        .from("tasks")
-        .select(
-          `id, stage_id, position, title, done, assignee_id,
-           completed_at, completed_by,
-           description, deadline, client_visible, created_at,
-           stage:stages!inner(pipeline_id)`,
-        )
-        .eq("stage.pipeline_id", pipelineId)
-        .order("position", { ascending: true }),
-
-      // Coachmark flag — SSR'd to avoid flash on dismissed users.
-      supabase
-        .from("profiles")
-        .select("canvas_hint_dismissed")
-        .eq("id", user.id)
-        .maybeSingle(),
-
-      // Caller's profile fields — feed HeaderProfileMenu (display_name,
-      // avatar_url for the top-right user menu in the chrome).
-      supabase
-        .from("profiles")
-        .select("display_name, avatar_url")
-        .eq("id", user.id)
-        .maybeSingle(),
-    ]);
-
-  if (!chrome) {
-    // Pipeline lookup inside fetchCanvasChromeData returned null —
-    // shouldn't happen after the pre-check above, but defensive.
-    redirect(`/w/${slug}`);
-  }
+    // Coachmark flag — SSR'd to avoid flash on dismissed users.
+    supabase
+      .from("profiles")
+      .select("canvas_hint_dismissed")
+      .eq("id", bundle.user.id)
+      .maybeSingle(),
+  ]);
 
   // ── Cast stages + tasks ───────────────────────────────────────────────
   const stages: StageRaw[] = (stagesRes.data ?? []).map((s) => ({
@@ -186,37 +120,20 @@ export default async function PipelineCanvasPage({
     };
   });
 
-  // Task counts for the header subline. Compute once here vs duplicating
-  // a count() server query.
-  const totalTasks = tasks.length;
-  const completedTasks = tasks.filter((t) => t.done).length;
-
   const coachmarkInitiallyDismissed =
     (profileRes.data?.canvas_hint_dismissed as boolean | null | undefined) ??
     false;
 
   return (
-    <PipelineChromeShell
-      workspaceSlug={ws.slug}
-      chrome={chrome}
-      completedTasks={completedTasks}
-      totalTasks={totalTasks}
-      user={{
-        email: user.email ?? "",
-        displayName: callerProfileRes.data?.display_name ?? null,
-        avatarUrl: callerProfileRes.data?.avatar_url ?? null,
-      }}
-    >
-      <PipelineCanvas
-        pipelineId={chrome.pipeline.id}
-        pipelineName={chrome.pipeline.name}
-        coachmarkInitiallyDismissed={coachmarkInitiallyDismissed}
-        stages={stages}
-        tasks={tasks}
-        members={chrome.members}
-        currentUserId={user.id}
-        canEditPipeline={chrome.canEditPipeline}
-      />
-    </PipelineChromeShell>
+    <PipelineCanvas
+      pipelineId={bundle.chrome.pipeline.id}
+      pipelineName={bundle.chrome.pipeline.name}
+      coachmarkInitiallyDismissed={coachmarkInitiallyDismissed}
+      stages={stages}
+      tasks={tasks}
+      members={bundle.chrome.members}
+      currentUserId={bundle.user.id}
+      canEditPipeline={bundle.chrome.canEditPipeline}
+    />
   );
 }
