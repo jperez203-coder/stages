@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Check, Pencil } from "lucide-react";
+import { ArrowLeft, BookmarkPlus, Check, MoreHorizontal, Pencil } from "lucide-react";
 import { UserAvatar } from "@/components/UserAvatar";
 import { HeaderProfileMenu } from "@/components/app/HeaderProfileMenu";
+import { SaveAsTemplateModal } from "@/components/templates/SaveAsTemplateModal";
 import { MembersPopover } from "./MembersPopover";
 import { useEditMode } from "./EditModeContext";
 import type {
@@ -69,6 +70,7 @@ export function PipelineHeader({
   hideEditButton = false,
 }: Props) {
   const [membersOpen, setMembersOpen] = useState(false);
+  const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
   const { editMode, toggleEditMode } = useEditMode();
 
   const lastEdited = relativeTime(chrome.pipeline.last_edited_at);
@@ -186,6 +188,22 @@ export function PipelineHeader({
           />
         )}
 
+        {/* Overflow menu (slice 3, 2026-05-26). Only item today is
+            "Save as template" — gated on canEditPipeline because the
+            RPC also gates on can_edit_pipeline server-side (defense
+            in depth). Trigger button is gated on the same flag so
+            non-editors don't see an empty menu.
+            NOT gated on `hideEditButton` — the overflow menu is
+            independent of edit mode; saving a template makes sense
+            on any canvas-group tab (chat/files/clients too). When
+            more items are added later that don't require
+            canEditPipeline, the trigger gate can relax. */}
+        {chrome.canEditPipeline && (
+          <PipelineOverflowMenu
+            onSaveAsTemplate={() => setSaveTemplateOpen(true)}
+          />
+        )}
+
         {/* Visual separator between "pipeline people" (left) and
             "the logged-in user, me" (right). 1px vertical line with
             extra horizontal spacing on each side so the two regions
@@ -220,6 +238,15 @@ export function PipelineHeader({
           anchorPosition="header"
           anchorTop={HEADER_HEIGHT + 6}
           onClose={() => setMembersOpen(false)}
+        />
+      )}
+
+      {saveTemplateOpen && (
+        <SaveAsTemplateModal
+          sourcePipelineId={chrome.pipeline.id}
+          defaultName={chrome.pipeline.name}
+          onCancel={() => setSaveTemplateOpen(false)}
+          onSaved={() => setSaveTemplateOpen(false)}
         />
       )}
     </>
@@ -433,4 +460,137 @@ function buildSubline({
   ];
   if (company) parts.push(company);
   return parts.join(" · ");
+}
+
+// ─── Overflow menu (slice 3 — 2026-05-26) ──────────────────────────────
+//
+// Small "..." button + dropdown anchored bottom-right of the trigger.
+// Self-contained: owns its open state, click-outside listener, Esc
+// handler. Parent passes a callback per menu item.
+//
+// Currently one item — "Save as template". Future items (Archive,
+// Duplicate, Rename, etc.) get added here without restructuring the
+// trigger. When a future item should be visible to non-editors, the
+// trigger-level gate in PipelineHeader needs to relax accordingly.
+//
+// Z-index: dropdown sits at z-45, above the header's z-40 sticky
+// container but below any full-screen modal (z-100). Matches the
+// MembersPopover's positioning posture.
+
+function PipelineOverflowMenu({
+  onSaveAsTemplate,
+}: {
+  onSaveAsTemplate: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  // Close on outside mousedown. Mousedown (not click) so the closer
+  // fires before any click handler inside the menu — prevents a stray
+  // re-open race when the trigger button is part of the same DOM.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  // Esc closes.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  return (
+    <div ref={ref} style={{ position: "relative", flexShrink: 0 }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-label="Pipeline actions"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        style={{
+          width: 32,
+          height: 32,
+          borderRadius: 8,
+          background: open ? "rgba(255,255,255,0.06)" : "transparent",
+          border: `1px solid ${open ? "#4A4A50" : "transparent"}`,
+          color: "rgba(255,255,255,0.7)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          cursor: "pointer",
+          transition:
+            "background 120ms ease-out, border-color 120ms ease-out",
+        }}
+        onMouseEnter={(e) => {
+          if (!open) e.currentTarget.style.background = "rgba(255,255,255,0.04)";
+        }}
+        onMouseLeave={(e) => {
+          if (!open) e.currentTarget.style.background = "transparent";
+        }}
+      >
+        <MoreHorizontal size={16} />
+      </button>
+
+      {open && (
+        <div
+          role="menu"
+          style={{
+            position: "absolute",
+            top: "calc(100% + 6px)",
+            right: 0,
+            minWidth: 200,
+            background: "#1A1A1C",
+            border: "1px solid #36363A",
+            borderRadius: 10,
+            boxShadow: "0 16px 40px rgba(0,0,0,0.5)",
+            zIndex: 45,
+            padding: 4,
+          }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onSaveAsTemplate();
+            }}
+            style={{
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              padding: "9px 10px",
+              background: "transparent",
+              border: "none",
+              borderRadius: 6,
+              color: "rgba(255,255,255,0.85)",
+              fontSize: 13,
+              fontWeight: 500,
+              cursor: "pointer",
+              textAlign: "left",
+            }}
+            onMouseEnter={(e) =>
+              (e.currentTarget.style.background = "#28282C")
+            }
+            onMouseLeave={(e) =>
+              (e.currentTarget.style.background = "transparent")
+            }
+          >
+            <BookmarkPlus size={14} style={{ flexShrink: 0 }} />
+            Save as template
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
