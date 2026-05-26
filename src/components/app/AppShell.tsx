@@ -3,7 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Plus } from "lucide-react";
+import { ArrowLeft, Plus } from "lucide-react";
 import { StagesLogo } from "@/components/icons/StagesLogo";
 import { useSession } from "@/hooks/useSession";
 import { useUserContexts } from "@/hooks/useUserContexts";
@@ -86,6 +86,48 @@ export function AppShell({ children }: Props) {
   const canCreatePipeline =
     activeWorkspaceContext?.role === "owner" ||
     activeWorkspaceContext?.role === "admin";
+
+  // ── Pure-client mode detection (2026-05-26, Tier-A fix) ──────────────
+  // A "pure client" is a signed-in user who has zero agency contexts —
+  // i.e., they only appear in pipeline_memberships with role='client',
+  // never in workspace_memberships (and never in pipeline_memberships
+  // with an agency role). For these users we suppress agency chrome:
+  //   * workspace switcher (no workspaces to switch between)
+  //   * +Pipeline button (they can't create pipelines)
+  //   * "Create workspace" item inside the switcher dropdown
+  //     (defense in depth — switcher is hidden, but the item is
+  //     also gated inside HeaderWorkspaceSwitcher itself; see A3)
+  // And we replace the switcher with a "← Back to portal" link
+  // pointing to their client portal (A2).
+  //
+  // PURE UI gate. No redirect, no auth-layer change. When
+  // hasAnyAgencyContext is true, render path is byte-for-byte identical
+  // to pre-fix behavior — agency users see no difference.
+  //
+  // While contexts.status is "loading", we assume agency until proven
+  // otherwise (hasAnyAgencyContext: true) — avoids a brief flash of
+  // client-mode chrome at login for agency users.
+  const hasAnyAgencyContext =
+    contexts.status !== "ready"
+      ? true
+      : contexts.contexts.some((c) => c.type === "agency");
+
+  // For the A2 "Back to portal" link: collect this user's client
+  // contexts. If exactly one, link directly to its portal; if multiple,
+  // link to /select-workspace so the user can pick.
+  const clientContexts =
+    contexts.status === "ready"
+      ? contexts.contexts.filter(
+          (c): c is typeof c & { pipelineId: string } =>
+            c.type === "client" && typeof c.pipelineId === "string",
+        )
+      : [];
+  const backToPortalHref =
+    clientContexts.length === 1
+      ? `/portal/${clientContexts[0].pipelineId}`
+      : clientContexts.length > 1
+        ? "/select-workspace"
+        : null;
 
   // ── Header search: active workspace's pipelines for in-memory filter
   // One fetch per active-workspace change. The list is small (low-
@@ -173,15 +215,56 @@ export function AppShell({ children }: Props) {
             <StagesLogo size={28} />
           </Link>
 
-          {/* Workspace switcher. Empty slot during the brief load window
-              (no placeholder flash). */}
-          {session.status === "authenticated" && contexts.status === "ready" && (
-            <HeaderWorkspaceSwitcher
-              contexts={contexts.contexts}
-              activeSlug={activeSlug}
-              userId={session.user.id}
-            />
-          )}
+          {/* Workspace switcher — agency-only. Hidden for pure clients
+              (no workspaces to switch between, no "Create workspace"
+              affordance they should see). Empty slot during the brief
+              load window (no placeholder flash). See hasAnyAgencyContext
+              derivation above for the 2026-05-26 Tier-A boundary fix. */}
+          {session.status === "authenticated" &&
+            contexts.status === "ready" &&
+            hasAnyAgencyContext && (
+              <HeaderWorkspaceSwitcher
+                contexts={contexts.contexts}
+                activeSlug={activeSlug}
+                userId={session.user.id}
+              />
+            )}
+
+          {/* "← Back to portal" link — pure-client mode only (A2). Sits
+              in the same slot the switcher would have occupied so the
+              header layout doesn't shift. Renders only when:
+                * user is signed-in
+                * has zero agency contexts (so no switcher)
+                * has at least one client context to navigate to
+              When the user has exactly one client context, links
+              directly to that portal; multiple → /select-workspace. */}
+          {session.status === "authenticated" &&
+            contexts.status === "ready" &&
+            !hasAnyAgencyContext &&
+            backToPortalHref && (
+              <Link
+                href={backToPortalHref}
+                className="flex items-center gap-1.5 flex-shrink-0 transition-colors text-[13px]"
+                style={{
+                  color: "#E4E4E7",
+                  background: "#212124",
+                  border: "1px solid #36363A",
+                  borderRadius: 8,
+                  padding: "0 12px",
+                  height: 36,
+                }}
+                onMouseEnter={(e) =>
+                  (e.currentTarget.style.background = "#28282C")
+                }
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.background = "#212124")
+                }
+                aria-label="Back to portal"
+              >
+                <ArrowLeft size={14} strokeWidth={2.5} />
+                Back to portal
+              </Link>
+            )}
 
           {/* Header search — real interactive input as of 2026-05-25.
               Was a styled placeholder div through Phase 4a; now wires
@@ -200,8 +283,14 @@ export function AppShell({ children }: Props) {
               activeSlug is known AND the current user is a workspace
               owner/admin. Members and pipeline-only agency users have
               this hidden; the flex-1 search bar to its left grows to
-              fill the freed space, no layout jump. */}
-          {activeSlug && canCreatePipeline && (
+              fill the freed space, no layout jump.
+              Tier-A boundary fix (2026-05-26): also explicitly gated
+              on hasAnyAgencyContext. canCreatePipeline already
+              evaluates to false for pure clients today (activeWorkspaceContext
+              requires type === "agency"), but the redundant guard makes
+              the intent obvious to future readers and resists
+              regressions in the activeWorkspaceContext derivation. */}
+          {activeSlug && canCreatePipeline && hasAnyAgencyContext && (
             <button
               type="button"
               onClick={() => router.push(`/w/${activeSlug}/p/new`)}

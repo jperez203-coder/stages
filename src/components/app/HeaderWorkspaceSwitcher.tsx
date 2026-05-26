@@ -72,6 +72,16 @@ export function HeaderWorkspaceSwitcher({ contexts, activeSlug, userId }: Props)
   const active = workspaces.find((w) => w.workspaceSlug === activeSlug);
   const onlyOneWorkspace = workspaces.length <= 1;
 
+  // Tier-A defense-in-depth (2026-05-26). AppShell already hides this
+  // entire switcher when the caller has zero agency contexts (A1), so
+  // in practice the "Create new workspace" item won't even render for
+  // a pure client. But if a future refactor ever exposes the switcher
+  // to a non-agency user via some other path, this local check stops
+  // the dropdown from offering them the create-workspace affordance.
+  // Independent of AppShell's gate by design — both layers evaluate to
+  // the same answer for the same input, but neither relies on the other.
+  const hasAnyAgencyContext = contexts.some((c) => c.type === "agency");
+
   const labelForButton = active?.workspaceName ?? "Workspace";
 
   const startEdit = (ctx: UserContext) => {
@@ -325,17 +335,23 @@ export function HeaderWorkspaceSwitcher({ contexts, activeSlug, userId }: Props)
             )}
           </div>
 
-          <div className="border-t border-zinc-800 p-1">
-            <button
-              onClick={createNew}
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-[13px] font-medium text-zinc-300 transition-colors"
-              onMouseEnter={(e) => (e.currentTarget.style.background = "#1F1F22")}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-              style={{ background: "transparent" }}
-            >
-              <Plus size={14} strokeWidth={2.5} /> Create new workspace
-            </button>
-          </div>
+          {/* "Create new workspace" — gated on hasAnyAgencyContext as
+              the second layer of the Tier-A boundary fix (2026-05-26).
+              AppShell hides this whole switcher for pure clients (A1);
+              this guard is the defense-in-depth pair (A3). */}
+          {hasAnyAgencyContext && (
+            <div className="border-t border-zinc-800 p-1">
+              <button
+                onClick={createNew}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-[13px] font-medium text-zinc-300 transition-colors"
+                onMouseEnter={(e) => (e.currentTarget.style.background = "#1F1F22")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                style={{ background: "transparent" }}
+              >
+                <Plus size={14} strokeWidth={2.5} /> Create new workspace
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
