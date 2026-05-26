@@ -1,6 +1,7 @@
 "use client";
 
-import Link from "next/link";
+// next/link import removed alongside the "See all activity →" footer
+// (2026-05-26). Re-add when /w/[slug]/activity ships.
 import { AlertCircle } from "lucide-react";
 import { UserAvatar, type AvatarUser } from "@/components/UserAvatar";
 
@@ -62,6 +63,13 @@ function formatContent(e: ActivityEvent): string {
   }
 }
 
+// workspaceSlug is currently unused inside the component (the "See all
+// activity →" footer that consumed it was removed 2026-05-26 — full
+// activity view is deferred-not-built; see comment near the former
+// footer location). Keeping the prop on Props so the page.tsx call
+// site stays untouched and the link can be re-added in one place when
+// /w/[slug]/activity ships.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function ActivityCard({ workspaceSlug, events, error }: Props) {
   return (
     <div
@@ -191,21 +199,27 @@ export function ActivityCard({ workspaceSlug, events, error }: Props) {
         )}
       </div>
 
-      <div
-        className="mt-4 pt-4"
-        style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}
-      >
-        {/* Count-conditional footer color — same rule + token as
-            MyTasksCard. Grey when there's nothing to navigate to, the
-            figma's light-blue token (#7FA7D9) when there is. */}
-        <Link
-          href={`/w/${workspaceSlug}/activity`}
-          className="text-[14px] font-medium"
-          style={{ color: events.length > 0 ? "#7FA7D9" : "#979393" }}
-        >
-          See all activity →
-        </Link>
-      </div>
+      {/* "See all activity →" footer link REMOVED 2026-05-26 — the
+          /w/[slug]/activity full-view route was never built and the
+          link 404'd. Same posture as the Team chat strip removal:
+          hide deferred-not-built surfaces rather than show broken
+          promises. The 5-most-recent feed above is fully functional.
+          To re-add when /w/[slug]/activity ships:
+            1. Re-import `Link from "next/link"` at the top of this file.
+            2. Restore the footer block here, using the workspaceSlug
+               prop (still in Props, still passed by page.tsx — see
+               comment above the component definition):
+                 <div className="mt-4 pt-4"
+                      style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                   <Link href={`/w/${workspaceSlug}/activity`}
+                         className="text-[14px] font-medium"
+                         style={{ color: events.length > 0 ? "#7FA7D9" : "#979393" }}>
+                     See all activity →
+                   </Link>
+                 </div>
+            3. Remove the eslint-disable on the destructure line.
+          Nothing else (events query, RLS, ActivityCard renderer) needs
+          to change. */}
     </div>
   );
 }
