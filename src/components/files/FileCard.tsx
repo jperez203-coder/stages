@@ -65,10 +65,20 @@ type RowWithStatus = FileItem & { status?: OptimisticStatus };
 
 type Props = {
   row: RowWithStatus;
-  /** uploader OR pipeline-editor — gates the eye toggle + trash.
-   *  The download button is NOT gated by this (clients in 4b-3-c
-   *  still need to download). */
+  /** Trash button gate. For agency: uploader OR can_edit_pipeline.
+   *  For portal client (4b-3-d): row.added_by === viewerId, so a
+   *  client can delete their OWN uploaded rows but nothing else.
+   *  The download button is NOT gated by this. */
   canEdit: boolean;
+  /** Visibility-toggle (eye) gate — SEPARATE from canEdit so the
+   *  portal can grant a client delete-own without granting them
+   *  visibility-toggle. Optional; defaults to `canEdit` to preserve
+   *  agency-side behavior with no call-site change. Portal passes
+   *  `false` explicitly to force-hide the eye even when canEdit is
+   *  true for the client's own row. (Clients must never toggle
+   *  client_visible: the RLS UPDATE policy on pipeline_links blocks
+   *  it server-side, and this prop hides the affordance client-side.) */
+  canToggleVisibility?: boolean;
   /** Current viewer's user_id — for the "(You)" suffix on the
    *  uploader name when the row is theirs. */
   viewerId: string;
@@ -83,6 +93,7 @@ type ThumbStatus = "idle" | "loading" | "loaded" | "error";
 export function FileCard({
   row,
   canEdit,
+  canToggleVisibility,
   viewerId,
   onToggleVisibility,
   onRequestDelete,
@@ -90,6 +101,11 @@ export function FileCard({
   onDownload,
 }: Props) {
   const isUploading = row.status === "uploading";
+  // The eye gate falls back to `canEdit` when the prop is omitted —
+  // preserves agency behavior with zero call-site changes. Portal
+  // passes `false` explicitly to keep the eye hidden for client
+  // delete-own rows (where canEdit is true for delete purposes only).
+  const showVisibilityToggle = canToggleVisibility ?? canEdit;
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [thumbStatus, setThumbStatus] = useState<ThumbStatus>("idle");
   const [thumbUrl, setThumbUrl] = useState<string | null>(null);
@@ -269,7 +285,11 @@ export function FileCard({
                 <Download size={14} color="rgba(255,255,255,0.65)" />
               </button>
             )}
-            {canEdit && (
+            {/* Eye is gated on showVisibilityToggle (separate from canEdit)
+                so the portal can grant a client delete-own without
+                granting visibility-toggle. See Props.canToggleVisibility
+                for the full rationale. */}
+            {showVisibilityToggle && (
               <button
                 type="button"
                 onClick={(e) => {

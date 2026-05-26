@@ -44,7 +44,11 @@ next-env.d.ts
 # claude code tooling (preview server config etc.)
 .claude/
 
-# dev-only scripts that touch the Supabase service-role key. NEVER commit.
+# dev-only scripts that touch the Supabase service-role key OR contain
+# test credentials inline. NEVER commit.
 # (env files are already gitignored above; this protects the script bodies
-# in case any of them inline a key by mistake.)
+# in case any of them inline a key/password by mistake.)
 scripts/set-test-password.mjs
+scripts/test-client-upload-rls.mjs
+scripts/verify-storage-path-conformance.mjs
+scripts/probe-casey-profile-read.mjs

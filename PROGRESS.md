@@ -4,6 +4,124 @@ A running log of what shipped in each session. Newest first.
 
 ---
 
+## Phase 4b-3-e — client portal: add LINK affordance (2026-05-25)
+
+**Status:** SHIPPED. One relaxation migration applied via Supabase SQL editor; full 10-test privacy harness green (including three new URL-specific tests) BEFORE any UI code. UI then added to PortalFilesBody by re-importing the shared AddLinkModal and forking handleAddLink off the agency surface.
+
+### Migration
+
+```
+supabase/migrations/20260603120000_client_url_insert_relaxation.sql
+```
+
+Surgical relaxation of two layers from the 4b-3-d defenses:
+
+- **`pipeline_links_insert` policy** — dropped the `and kind = 'file'` clause from the client OR-branch. Client branch now: `is_pipeline_client(pipeline_id) AND added_by = auth.uid() AND client_visible = true`. Agency branch byte-for-byte unchanged.
+- **`enforce_client_pipeline_link_insert_scope` trigger** — dropped the `kind != 'file'` raise. Trigger body now only enforces `client_visible = true` and `added_by = auth.uid()`. Defense-in-depth on those two rules is fully preserved (each appears in BOTH the policy WITH CHECK AND the trigger body).
+
+Untouched: `pipeline_links_kind_payload` (table-level shape CHECK), `pipeline_links_storage_path_matches_pipeline` (URL rows have `storage_path = null`, hit the IS NULL branch of the CHECK trivially), `pipeline_links_update` (clients still can't edit), `pipeline_links_delete` (clients still delete-own only), storage policies (URL rows never touch storage).
+
+### Privacy harness — 10/10 green
+
+Tests 1–7 from 4b-3-d all stayed green (no collateral damage from the relaxation). Three new tests added:
+
+- **Test 8** — Casey CAN insert kind='url' to Pipeline A; agency sees it. PASS (201, agency SELECT returns row).
+- **Test 9** — Casey CANNOT insert kind='url' to Pipeline B. PASS (42501, `is_pipeline_client` still gates).
+- **Test 10** — Casey CANNOT forge `client_visible=false` on a URL row. PASS (P0001 trigger exception — kind-agnostic enforcement intact).
+
+All three new tests run as real Casey JWT via `scripts/test-client-upload-rls.mjs` (gitignored).
+
+### Files (UI)
+
+```
+modified:  src/components/portal/v2/PortalFilesBody.tsx   (re-imported AddLinkModal + LinkIcon; added showAddLink state, handleAddLink callback, "Add link" header button, AddLinkModal mount; header comment updated to reflect 4b-3-e)
+modified:  PROGRESS.md                                    (this entry; tech-debt note appended to the 4b-3-d entry below)
+```
+
+### Tech debt logged — `handleAddLink` fork (alongside `uploadFile` fork)
+
+`PortalFilesBody.handleAddLink` is a FORK of `FilesBody.handleAddLink` (agency, `src/app/w/(canvas)/[slug]/p/[pipeline-id]/files/FilesBody.tsx`). Differences from agency:
+
+1. `client_visible: true` hardcoded (agency uses `false` — the policy+trigger reject `false` from a client).
+2. `added_by: viewerId` is also hardcoded (agency uses the same prop, but the semantic meaning shifts — client side enables delete-own).
+
+`AddLinkModal` itself is SHARED (`src/components/files/AddLinkModal.tsx`) — only the save callback was forked. URL normalization (https:// prefix on bare domains) is inside the modal, so both surfaces get it.
+
+**Refactor trigger** (extended from the 4b-3-d note): if either upload-helper OR add-link-helper acquires a non-trivial bug, extract `useAddLink(pipelineId, { forceClientVisible })` + `useFileUpload(pipelineId, { forceClientVisible })` as shared hooks and consolidate. Until then, duplication is the lesser risk vs. destabilizing prod-verified agency code.
+
+### Out of scope (deferred)
+
+- URL validation beyond the existing `normalizeUrl` (no domain allowlist, no phishing-pattern detection, no click-through warning on the agency side). Founder accepted the social-engineering risk as analogous to email/chat-message links. v1.1 if a customer asks.
+- Soft-delete + audit-log for client-added URL rows (same v1.1 deferral as file deletes).
+
+### Verified by
+
+- `npx tsc --noEmit` — clean
+- `npm run build` — green, all 15 routes
+- 10/10 privacy harness — green
+
+---
+
+## Phase 4b-3-d — client portal file upload (2026-05-25)
+
+**Status:** SHIPPED. Two migrations applied via Supabase SQL editor, full privacy harness (Tests 1–7) green against real Casey/Agency JWTs before any UI code. UI then forked from the agency upload helper into `PortalFilesBody` per "fork, don't refactor" directive.
+
+### Migrations (applied in order)
+
+```
+supabase/migrations/20260601120000_client_file_upload_rls.sql
+supabase/migrations/20260602120000_pipeline_links_storage_path_binding.sql
+```
+
+1. **`20260601120000`** — extended `pipeline_links_insert` and `pipeline_files_storage_insert` policies with a client OR-branch, plus a BEFORE INSERT trigger `enforce_client_pipeline_link_insert_scope` that re-enforces the same three rules (kind='file', client_visible=true, added_by=auth.uid()). Defense-in-depth: policy WITH CHECK is layer 1, trigger is layer 2. Matches the existing `enforce_client_task_update_scope` pattern. **Do not remove either layer in a future cleanup pass.**
+2. **`20260602120000`** — hotfix CHECK constraint `pipeline_links_storage_path_matches_pipeline` binding `storage_path` to `pipeline_id` at the table level (`storage_path IS NULL OR storage_path LIKE pipeline_id::text || '/%'`). Closes the path-spoof gap Test 7 exposed: prior policies validated `pipeline_id`, `kind`, `client_visible`, `added_by` but not that `storage_path` was scoped to its own `pipeline_id`. The CHECK is independent of any policy/trigger so no future RLS change can bypass it.
+
+### Privacy harness — all 7 tests green
+
+Real JWTs via `signInWithPassword` (publishable key, never service-role), executed by `scripts/test-client-upload-rls.mjs` (gitignored). STOP-gates on Tests 2/3/4 all blocked; Test 7 PASS after the hotfix CHECK landed (rejects with `23514 / check_violation` naming the constraint). See conversation log for verbatim output.
+
+### Files (this slice — UI)
+
+```
+modified:  src/components/files/FileCard.tsx                       (+~10 lines — added optional canToggleVisibility prop; eye gate split from canEdit/trash gate, defaults to canEdit to preserve agency behavior with zero call-site change)
+modified:  src/components/portal/v2/PortalFilesBody.tsx            (forked from agency FilesBody.tsx upload helper — Upload button, hidden file input, drag-and-drop, optimistic-then-reconcile, delete-own, inline DeleteConfirm; ~520 lines total)
+modified:  src/app/portal/[pipeline-id]/files/page.tsx             (passes initialFiles + viewerId + pipelineId to PortalFilesBody)
+modified:  PROGRESS.md                                             (this entry)
+```
+
+### Eye/Trash gate split — the (3) clarification
+
+Pre-this-slice, FileCard's `canEdit` boolean gated both the Eye (visibility toggle) AND the Trash buttons. To grant Casey delete-own without granting visibility-toggle, the props split into two: `canEdit` (Trash gate, unchanged semantics) and a new optional `canToggleVisibility?: boolean` (Eye gate). When omitted, falls back to `canEdit` — agency caller doesn't pass it and behaves identically. Portal passes `canToggleVisibility={false}` explicitly, so the Eye stays hidden even on Casey's own rows where `canEdit=true`.
+
+UI mirror of RLS: `pipeline_links_update` policy still requires `can_edit_pipeline`, so a client clicking the Eye would no-op anyway. Hiding the affordance prevents the confusing "I clicked it but nothing happened" UX.
+
+### Tech debt logged — upload helper duplication
+
+`PortalFilesBody.uploadFile` is a FORK of `FilesBody.uploadFile` (agency surface, src/app/w/(canvas)/[slug]/p/[pipeline-id]/files/FilesBody.tsx). Three differences:
+
+1. `client_visible: true` on both the optimistic row and the INSERT body (agency uses `false` — clients can't anyway per the trigger).
+2. `added_by: viewerId` represents the client uploader (agency uses the same prop name but the semantic meaning shifts — client side is delete-own's key).
+3. No `canEditPipeline` gate on Upload/drag-drop (the surface is client-only and clients always have the affordance here).
+
+Drag-and-drop handlers (`handleDragEnter/Leave/Over/Drop` + `dragCounterRef`) and the inline `DeleteConfirm` sub-component are also duplicated.
+
+**Refactor trigger**: if either upload path acquires a non-trivial bug, that's the moment to extract `useFileUpload(pipelineId, { forceClientVisible })` as a shared hook and consolidate. Until then, duplication is the lesser risk vs. destabilizing prod-verified agency upload. Per 2026-05-25 founder directive: "Ship client upload without touching the working agency path."
+
+### Out of scope (deferred)
+
+- Soft-delete + audit-log for client uploads — currently a client-uploaded-then-deleted file leaves no trace. If a customer asks for "show me what client X previously shared and removed," that's a v1.1 feature requiring a tombstone table + delete trigger.
+- Realtime subscription for portal Files list — agency uploads still require a portal page reload for the client to see them. Matches the 4b-3-c read-only baseline.
+- Per-task attachments — separate slice, also v1.1.
+- Storage-bucket janitor for orphan bytes (accumulate one per agency or client metadata-delete, see headers in both Body files for the trade-off rationale).
+
+### Verified by
+
+- `npx tsc --noEmit` — clean
+- `npm run build` — green, 15 routes
+- Privacy harness 7/7 — green (script gitignored)
+
+---
+
 ## Phase 4a — step 6: task detail side panel (2026-05-22)
 
 **Status:** COMPLETE. Shipped in [`09b66db`](https://github.com/) — "step 6: task detail side panel + profiles RLS fix for pipeline-only member names". Live on prod, verified hands-on. Canvas surface is now feature-complete for the validation-MVP (5a → 5e → 6, all shipped).

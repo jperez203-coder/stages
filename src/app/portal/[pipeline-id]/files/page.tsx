@@ -49,7 +49,13 @@ export default async function PortalFilesPage({
 
   // Same fetch helper as the agency-side files route. RLS auto-filters
   // to client_visible=true rows for client viewers.
-  const files = await fetchPipelineFiles(supabase, pipelineId);
+  const initialFiles = await fetchPipelineFiles(supabase, pipelineId);
 
-  return <PortalFilesBody files={files} viewerId={user.id} />;
+  return (
+    <PortalFilesBody
+      initialFiles={initialFiles}
+      viewerId={user.id}
+      pipelineId={pipelineId}
+    />
+  );
 }
