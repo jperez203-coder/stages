@@ -3,7 +3,9 @@ import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { DashboardGreeting } from "@/components/dashboard/DashboardGreeting";
 import { MyTasksCard } from "@/components/dashboard/MyTasksCard";
 import { ActivityCard } from "@/components/dashboard/ActivityCard";
-import { TeamChatStrip } from "@/components/dashboard/TeamChatStrip";
+// TeamChatStrip import intentionally removed — see deferred-not-deleted
+// comment at the former mount point below. The component file is kept
+// in src/components/dashboard/ for easy reinstatement.
 import { PipelinesSection } from "@/components/dashboard/PipelinesSection";
 import type { AvatarUser } from "@/components/UserAvatar";
 import { pickAnchorStage, stageStateFromCounts } from "@/lib/current-stage";
@@ -585,7 +587,22 @@ export default async function WorkspaceDashboardPage({
           />
         </div>
 
-        <TeamChatStrip />
+        {/* Team chat strip — DEFERRED, not deleted (2026-05-25).
+            Workspace-level team chat was scoped out for v1: the prior
+            "Team / internal only / no messages yet / Start a
+            conversation / Open chat" empty-state strip rendered on
+            every dashboard load with no path to a working surface,
+            which read as a broken promise to first-time users.
+            Per-pipeline chat is unaffected — fully live in the canvas
+            chrome (/w/[slug]/p/[id]/chat).
+            To re-add when workspace chat schema lands:
+              1. Re-import TeamChatStrip from
+                 @/components/dashboard/TeamChatStrip (file kept).
+              2. Re-mount here between ActivityCard and
+                 PipelinesSection — same slot as before.
+              3. Gate on workspaces.plan === 'team' once the plan
+                 column ships (Phase 6 Stripe billing).
+            No tables, no migrations, no per-pipeline chat affected. */}
 
         <PipelinesSection
           workspaceSlug={ws.slug}
