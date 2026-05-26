@@ -8,7 +8,7 @@ import { WorkspaceIcon } from "@/components/icons/WorkspaceIcon";
 import { useSession } from "@/hooks/useSession";
 import { useUserContexts, type UserContext } from "@/hooks/useUserContexts";
 import { consumePendingAcceptInvite } from "@/lib/auth";
-import { resolveDestination } from "@/lib/resolveDestination";
+import { resolveDestination, urlForContext } from "@/lib/resolveDestination";
 import { supabase } from "@/lib/supabase";
 
 /**
@@ -155,7 +155,11 @@ export function WorkspaceSelector() {
               if (session.status === "authenticated") {
                 void commitLastActive(session.user.id, ctx.workspaceId);
               }
-              router.push(`/w/${ctx.workspaceSlug}`);
+              // Use the shared URL builder (B1 fix, 2026-05-26) so the
+              // chooser path stays in lockstep with the auto-route
+              // path in resolveDestination. Client contexts go to
+              // /portal/[pipelineId]; agency contexts go to /w/[slug].
+              router.push(urlForContext(ctx));
             }}
           />
         ))}

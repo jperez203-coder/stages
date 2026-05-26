@@ -59,12 +59,41 @@ export function resolveDestination(
 }
 
 /**
- * Currently every context routes to /w/[slug]. Phase 4 wires role-aware
- * rendering inside that route (client portal vs agency view), and may
- * route client contexts to a separate /portal/[pipelineId] structure
- * instead. Centralising the URL construction here means there's one place
- * to change when that decision lands.
+ * Resolves the destination URL for a context. The fix that landed
+ * 2026-05-26 (B1 in the agency↔client boundary cleanup): client
+ * contexts route to /portal/[pipelineId]; agency contexts route to
+ * /w/[slug] exactly as before.
+ *
+ * Pre-fix: every context routed to /w/[slug], which meant a pure
+ * client signing in would land on the agency dashboard, the
+ * dashboard's workspace-membership gate would redirect them to /,
+ * and they'd end up on the legacy in-memory app. Now they land
+ * directly on their portal.
+ *
+ * EXPORTED so the chooser (WorkspaceSelector) can use the same
+ * URL-construction logic when a user clicks a context. Keeping the
+ * two call sites in lockstep — bypassing this function would let
+ * the chooser drift from the auto-route behavior.
+ *
+ * Agency routing is BYTE-FOR-BYTE UNCHANGED: any context with
+ * `type === "agency"` still returns /w/[slug]. The fix is purely
+ * additive on the client branch.
  */
-function urlForContext(ctx: UserContext): string {
+export function urlForContext(ctx: UserContext): string {
+  if (ctx.type === "client") {
+    if (ctx.pipelineId) {
+      return `/portal/${ctx.pipelineId}`;
+    }
+    // Defensive fallback: a client context with no pipelineId is a
+    // data bug — useUserContexts only sets type='client' on rows
+    // sourced from pipeline_memberships, which always have a
+    // pipeline_id. If this ever fires, log + fall through to the
+    // agency URL. The /w/[slug] route's gate will redirect the user
+    // to / cleanly (no new failure mode introduced).
+    console.warn(
+      "[resolveDestination] client context missing pipelineId; falling back to /w/[slug]",
+      { workspaceId: ctx.workspaceId, role: ctx.role },
+    );
+  }
   return `/w/${ctx.workspaceSlug}`;
 }
