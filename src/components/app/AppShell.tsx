@@ -1,14 +1,20 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Plus, Search } from "lucide-react";
+import { Plus } from "lucide-react";
 import { StagesLogo } from "@/components/icons/StagesLogo";
 import { useSession } from "@/hooks/useSession";
 import { useUserContexts } from "@/hooks/useUserContexts";
 import { HeaderWorkspaceSwitcher } from "@/components/app/HeaderWorkspaceSwitcher";
 import { HeaderProfileMenu } from "@/components/app/HeaderProfileMenu";
+import {
+  HeaderSearch,
+  type HeaderSearchPipeline,
+  type HeaderSearchStatus,
+} from "@/components/app/HeaderSearch";
+import { supabase } from "@/lib/supabase";
 
 type Props = {
   children: ReactNode;
@@ -81,6 +87,53 @@ export function AppShell({ children }: Props) {
     activeWorkspaceContext?.role === "owner" ||
     activeWorkspaceContext?.role === "admin";
 
+  // ── Header search: active workspace's pipelines for in-memory filter
+  // One fetch per active-workspace change. The list is small (low-
+  // double-digits per agency), client-side filter is trivially fast
+  // — no debounce, no per-keystroke DB round-trip. Swap to a debounced
+  // ilike query if a workspace ever crosses ~100 pipelines.
+  //
+  // Refetch triggers: workspaceId change (switching workspaces). NOT
+  // re-fetched when the user creates a new pipeline in another tab —
+  // that's a future polish (window-focus listener or supabase realtime
+  // subscription); for v1, refresh the page to see new ones in search.
+  const activeWorkspaceId = activeWorkspaceContext?.workspaceId ?? null;
+  const [searchPipelines, setSearchPipelines] = useState<HeaderSearchPipeline[]>([]);
+  const [searchStatus, setSearchStatus] = useState<HeaderSearchStatus>("loading");
+
+  useEffect(() => {
+    if (!activeWorkspaceId) {
+      // No agency context yet (contexts loading, or user not an agency
+      // member of the URL's workspace). Mark "ready" with empty list
+      // so HeaderSearch shows its "Choose a workspace…" hint instead
+      // of an indefinite Loading…
+      setSearchPipelines([]);
+      setSearchStatus("ready");
+      return;
+    }
+    let cancelled = false;
+    setSearchStatus("loading");
+    void (async () => {
+      const { data, error } = await supabase
+        .from("pipelines")
+        .select("id, name, company, emoji")
+        .eq("workspace_id", activeWorkspaceId)
+        .order("last_edited_at", { ascending: false });
+      if (cancelled) return;
+      if (error) {
+        console.error("[app-shell] header-search pipelines fetch failed:", error);
+        setSearchPipelines([]);
+        setSearchStatus("error");
+        return;
+      }
+      setSearchPipelines(data ?? []);
+      setSearchStatus("ready");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspaceId]);
+
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "#212124" }}>
       <header
@@ -130,52 +183,18 @@ export function AppShell({ children }: Props) {
             />
           )}
 
-          {/* Search bar — Phase 4a visual placeholder. The actual search
-              + command palette wire-up is post-4a, but the ⌘K hint badge
-              on the right is the public commitment that this shortcut
-              is RESERVED for search (Slack / Linear convention). When
-              search ships, ⌘K opens it from anywhere; no other shortcut
-              should claim ⌘K. flex-1 absorbs leftover header space;
-              hidden below md so mobile chrome stays tight. */}
-          <div className="flex-1 min-w-0 hidden md:block">
-            <div
-              className="flex items-center gap-2"
-              style={{
-                background: "rgba(255,255,255,0.04)",
-                border: "1px solid rgba(255,255,255,0.06)",
-                borderRadius: 8,
-                padding: "8px 12px",
-                cursor: "not-allowed",
-                opacity: 0.7,
-              }}
-              aria-label="Search (coming soon)"
-              title="Search arrives in a later step"
-            >
-              <Search size={14} style={{ color: "rgba(255,255,255,0.5)" }} />
-              <span
-                className="flex-1 text-[13px] truncate"
-                style={{ color: "rgba(255,255,255,0.4)" }}
-              >
-                Search by name or company…
-              </span>
-              {/* ⌘K hint badge — reserved for search. Don't bind this
-                  combo elsewhere. */}
-              <kbd
-                className="text-[11px] flex-shrink-0"
-                style={{
-                  background: "rgba(255,255,255,0.06)",
-                  color: "rgba(255,255,255,0.5)",
-                  border: "1px solid rgba(255,255,255,0.08)",
-                  borderRadius: 4,
-                  padding: "2px 6px",
-                  fontFamily:
-                    "ui-monospace, SFMono-Regular, Menlo, monospace",
-                }}
-              >
-                ⌘K
-              </kbd>
-            </div>
-          </div>
+          {/* Header search — real interactive input as of 2026-05-25.
+              Was a styled placeholder div through Phase 4a; now wires
+              the reserved ⌘K binding to focus the input and runs a
+              client-side substring filter over the active workspace's
+              pipelines (name + company). flex-1 absorbs leftover
+              header space; hidden below md so mobile chrome stays
+              tight. See HeaderSearch.tsx for v1 scope decisions. */}
+          <HeaderSearch
+            pipelines={searchPipelines}
+            status={searchStatus}
+            workspaceSlug={activeSlug}
+          />
 
           {/* + Pipeline button — only on workspace-scoped routes where
               activeSlug is known AND the current user is a workspace
