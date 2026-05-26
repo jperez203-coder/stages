@@ -54,3 +54,17 @@ Items intentionally **deferred from MVP** to v1.1. The discipline is to ship the
 ### Stage page
 
 - **Per-task notes are currently a single text field.** Some users may want them as a thread (multi-note with author/timestamp, like stage notes). Build only if real customer feedback confirms the need — don't pre-emptively rebuild. The inconsistency between *stage notes* (threaded) and *task notes* (single field) is intentional for now: stage notes are for substantive ongoing commentary, task notes are for quick reminders. If customers complain they want both threaded, we'll build it. Don't change the current design without that signal.
+
+### Canvas surface
+
+- **Double-click task to edit in canvas.** Currently a task click opens the side panel; in edit mode the title becomes inline-editable. A double-click shortcut to enter inline rename directly (without going through panel or edit mode) would be faster for power users who rename a lot of tasks. Wait for customer feedback — the existing paths already cover the use case; this is convenience.
+- **Hide the members icon cluster when the pipeline has 1 member.** Single-member pipelines (typical solo agency) render a cluster of one avatar, which adds chrome noise without conveying information. Hide when `members.length === 1`. Pure cosmetic polish.
+
+### Project completion / lifecycle
+
+- **Confetti on project completion.** When the final stage's last task gets marked done (whole pipeline reaches a "fully done" state), trigger a brief confetti burst on the canvas. The prototype had this; deferred to v1.1. Make it dismissible / disable-able for agencies who find it noisy.
+- **Restart a project in the same pipeline.** Once a pipeline is "completed," an agency may want to re-use the same client engagement structure for a new round (quarterly retainer cycles, recurring campaigns, etc.). Options to scope when this lands: (a) bulk-uncheck all tasks (resets state, keeps the pipeline + members + history); (b) snapshot the completed state to `activity_events` then reset; (c) deep-copy to a new pipeline keeping the same client member; (d) flip a "round number" counter and archive the prior state. Wait for customer signal on which they actually want — likely (a) or (c), but the trade-off is data-history vs. visual-clutter.
+
+### Pipeline templates
+
+- **"Manage templates" workspace settings surface.** Today: saved templates can only be renamed or deleted via direct SQL (no UI). The Pipeline Templates feature (shipped 2026-05-26 — see PROGRESS.md) covers create / use / save-from-existing, but managing the library happens at the DB level. A `/w/[slug]/settings/templates` route with a list of saved templates + rename + delete affordances would close the gap. Gated on `is_workspace_owner_or_admin`. Built-ins (`workspace_id IS NULL`) read-only — RLS already enforces this so the UI can show but not edit them. Defer until an agency reports actually needing it post-MVP; until then, accidental-cleanup via SQL is cheap and the feature works without it.
