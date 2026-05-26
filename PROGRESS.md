@@ -4,6 +4,76 @@ A running log of what shipped in each session. Newest first.
 
 ---
 
+## PLANNED — Pipeline templates (NOT YET BUILT) (2026-05-26)
+
+**Status:** SCOPED, APPROVED, NOT BUILT. Picker mockup reviewed. Next chat picks up at slice 1.
+
+Three capabilities: (A) agency saves a pipeline as a template, (B) two-step creation flow picks a template, (C) Stages ships built-in starter templates so day-one workspaces aren't empty.
+
+### 🔒 LOCKED CONSTRAINT (must respect when building)
+
+**Stage color = completion state per `src/lib/current-stage.ts`** (the file is LOCKED — never modify). Therefore:
+
+- **Instantiated pipelines start ALL-GREY** — every stage is incomplete on creation, which renders grey per the state-color model. There is no other valid initial state.
+- **Stage color is NEVER stored on `template_stages`** and NEVER copied to `stages.color` on instantiate. The instantiate RPC must not write anything that would short-circuit the state-color computation.
+- The picker's stage pills MAY use a decorative position-index palette for visual variety in the modal — but that's UI-only sugar derived at render time, not a column on `template_stages` and not source-of-truth for any live pipeline.
+
+This is a correction from my initial scope (I'd proposed preserving stage color on templates). The correct shape: template_stages has no color column; live stages start incomplete; current-stage.ts handles all visual color.
+
+### Schema (3 new tables)
+
+- **`templates`** — `id`, **nullable `workspace_id`** (NULL = built-in, NOT NULL = workspace-owned), `name`, `description` (optional prose for cards), `emoji`, `source_pipeline_id` (provenance, nullable), `created_by`, `created_at`. ON DELETE CASCADE from workspaces.
+- **`template_stages`** — `id`, `template_id`, `position`, `name`, `description`, `client_visible`. **No color, no live state.** ON DELETE CASCADE from templates.
+- **`template_tasks`** — `id`, `template_stage_id`, `position`, `title`/`text` (see unresolved item below), `description`/`note`, `client_visible`. **No `done`, no `deadline`, no `pos_x/pos_y`, no `assignee_id`, no `completed_*`.** ON DELETE CASCADE from template_stages.
+
+### RLS (5 policies)
+
+- **Saved templates: workspace-private.** SELECT requires `is_workspace_member(workspace_id)`. INSERT / UPDATE / DELETE require `is_workspace_owner_or_admin(workspace_id)` AND `workspace_id IS NOT NULL`.
+- **Built-ins: read-only to everyone.** SELECT additionally allows `workspace_id IS NULL`. Write policies require `workspace_id IS NOT NULL`, so built-ins are uneditable/undeletable by any agency. Built-ins land via migration seed (running as migration role, RLS bypassed).
+- `template_stages` and `template_tasks` policies join through to the parent template's visibility — same pattern as `channel_memberships` joining via `channels`.
+
+### RPCs
+
+- **NEW** `save_pipeline_as_template(source_pipeline_id, name, description?, emoji?)` — security definer, single transaction. Validates `can_edit_pipeline(source_pipeline_id)`, reads source's `workspace_id`, inserts template + template_stages + template_tasks. Strips all live state (done/deadline/pos/assignee/completed/timestamps).
+- **EXTEND** `create_pipeline_with_channels(...workspace_id, name, emoji, company, template_id?)` — optional `template_id` at the end (default NULL → today's zero-stages behavior, preserves backward compat). When non-null, after the existing channel inserts, copy `template_stages` → `stages` (position, name, description, client_visible) and `template_tasks` → `tasks` (position, title, description, client_visible). Entire RPC stays in one transaction.
+
+### "Blank Workspace" — eliminates from-scratch special case
+
+One of the seeded built-ins. Has exactly one `template_stages` row ("Stage 1") and zero `template_tasks`. Every creation in the UI picks a template; there's no separate "Start from scratch" affordance. The RPC's NULL fallback stays for direct-PostgREST safety but the UI never sends NULL.
+
+### UI (slice 4)
+
+- **Existing route `/w/[slug]/p/new` becomes two-step**:
+  - Step 1: today's form (name + emoji + company), button copy changes to "Next".
+  - Step 2: **`TemplatePickerModal`** overlay — dark modal with backdrop, two sections ("Your templates" with bookmark icon, "Starter templates" with sparkle icon), single-pick selection, "Back" returns to step 1 with step-1 values preserved, "Create Pipeline" CTA enabled on selection.
+- New **`TemplateCard`** component — emoji + name + description-or-auto-summary ("N stages · M tasks") + row of stage-name pills + "+N more" overflow. Reusable in case a future "manage templates" workspace settings surface wants the same card.
+- Picker fetches templates with one query using PostgREST nested select: `templates` + `template_stages(...)` + `template_tasks(count)`. Sorted built-ins first (`workspace_id` ASC NULLS FIRST), then workspace-saved by recency.
+
+### Built-in seeding mechanism
+
+Migration with `INSERT INTO public.templates ... VALUES (null, ...)` + nested template_stages + template_tasks. Idempotent via `ON CONFLICT DO NOTHING` or a "skip if name already exists" guard. Founder provides GHL-agency content (Paid Ads Onboarding, Agency Project Workflow, Sales Pipeline, Blank Workspace per the mockup) — the migration is just a wrapper for the inserts.
+
+### Slice order (each independently shippable + testable)
+
+1. **Schema + RLS** — three tables, five policies. No UI, no data. Verifiable via SQL editor + the `scripts/test-client-upload-rls.mjs` harness pattern (write a parallel `test-templates-rls.mjs` that signs in as two agency accounts in different workspaces, confirms saved templates don't cross over, confirms built-ins are visible to both).
+2. **Built-in seed migration** — depends on (1). Seeds Blank Workspace + the three GHL templates (or whatever founder provides). Verifiable: `SELECT count(*) FROM templates WHERE workspace_id IS NULL` returns expected count; both agency accounts see them; neither can DELETE.
+3. **Save flow** — `save_pipeline_as_template` RPC + UI entry point. **Open design decision**: proposed a new overflow `...` menu on `PipelineHeader` (no overflow menu exists today, this would be its first item). Verifiable end-to-end: save a real pipeline, query template tables, confirm structure matches minus live data; other-workspace agency can't see the saved template.
+4. **Picker UI + instantiate** — refactor `/w/[slug]/p/new` to two-step, add `TemplatePickerModal` + `TemplateCard`, extend `create_pipeline_with_channels` with `template_id`. Verifiable end-to-end: create from built-in → new pipeline has those stages/tasks (all grey, all incomplete); create from workspace-saved template → same; create from "Blank Workspace" → one empty stage; privacy: agency can't pass another workspace's template_id via direct RPC call.
+
+### ⚠️ Unresolved before slice 1
+
+**Verify the CURRENT column names on `public.tasks`.** The initial-schema migration (`20260508120000`) has `text` + `note`, but the TS type `TaskRaw` (in `src/app/w/(canvas)/[slug]/p/[pipeline-id]/page.tsx`) uses `title` + `description` — there was a rename migration I didn't trace. `template_tasks` columns MUST mirror whatever the live column names actually are. First action of slice 1 implementation: run `\d public.tasks` in the SQL editor (or read the latest tasks-touching migration), match the column names exactly. Same check for `public.stages` columns (`name`/`description` confirmed, but verify).
+
+### Out of scope for v1 (intentionally deferred)
+
+- Public / cross-workspace template library
+- Template editing post-save (workaround: delete + re-save)
+- Template version history
+- Stage color preservation (explicitly disallowed by the locked constraint above)
+- "Manage templates" workspace settings view (saved templates can be deleted via SQL or future UI; not blocking v1)
+
+---
+
 ## Client portal — two-way complete (2026-05-26)
 
 **Status:** SHIPPED. Portal now matches the agency surface for read + write: chat (read + post), canvas (view), files (view, preview, download, **upload, add link, delete-own**). Three commits across the file-write slices:
