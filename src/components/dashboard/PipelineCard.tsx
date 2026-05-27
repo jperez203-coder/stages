@@ -115,10 +115,16 @@ export function PipelineCard({
               aria-label={`${pipeline.unreadCount} unread updates`}
               style={{
                 position: "absolute",
-                top: -2,
-                left: -2,
-                width: 8,
-                height: 8,
+                // Bumped 8 → 14 (~3× visible red area after the 2px
+                // ring) so the dot reads at glance from the dashboard
+                // grid. Was barely visible at 8px; user feedback
+                // 2026-05-26. Offset shifted -2 → -4 so the dot
+                // tucks into the icon's top-left corner without
+                // floating detached.
+                top: -4,
+                left: -4,
+                width: 14,
+                height: 14,
                 borderRadius: "50%",
                 background: "#DF1E5A",
                 border: "2px solid #2C2C2F",
