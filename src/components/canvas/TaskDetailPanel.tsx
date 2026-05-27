@@ -129,6 +129,36 @@ export function TaskDetailPanel({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // ── Wheel containment ─────────────────────────────────────────────────
+  //
+  // PipelineCanvas mounts a NATIVE non-passive wheel listener on its
+  // wrapper element that calls e.preventDefault() unconditionally (for
+  // canvas pan semantics — see canvas useEffect at PipelineCanvas.tsx
+  // ~L335). The TaskDetailPanel is rendered as a DOM child of that
+  // wrapper, so wheel events anywhere on the panel bubble up, hit the
+  // wrapper's listener, and have their default action (scrolling the
+  // panel's overflow-y:auto body) cancelled. The result is the bug:
+  // wheeling over the panel pans the canvas instead of scrolling the
+  // panel.
+  //
+  // Fix: stop propagation at the panel's outer <aside> via a native
+  // bubble-phase wheel listener (NOT a React onWheel — React 19
+  // delegates onWheel at the root, which fires AFTER the wrapper's
+  // listener, too late to stop it). We do NOT call preventDefault here
+  // — only stopPropagation — so the browser's default scroll on the
+  // body's overflow-y:auto proceeds as usual. The wrapper's listener
+  // simply never sees the event.
+  const asideRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const aside = asideRef.current;
+    if (!aside) return;
+    const stop = (e: WheelEvent) => {
+      e.stopPropagation();
+    };
+    aside.addEventListener("wheel", stop, { passive: true });
+    return () => aside.removeEventListener("wheel", stop);
+  }, []);
+
   // ── Inline title rename state ──────────────────────────────────────────
   const [isRenamingTitle, setIsRenamingTitle] = useState(false);
   const [pendingTitle, setPendingTitle] = useState(task.title);
@@ -282,6 +312,7 @@ export function TaskDetailPanel({
 
       {/* Panel */}
       <aside
+        ref={asideRef}
         role="dialog"
         aria-label={`Task details: ${task.title}`}
         style={{
