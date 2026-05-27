@@ -1,5 +1,6 @@
 "use client";
 
+import { Suspense } from "react";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { SignInForm } from "@/components/auth/SignInForm";
 import { WorkspaceSelector } from "@/components/auth/WorkspaceSelector";
@@ -23,7 +24,22 @@ export function SignInPanel() {
   }
 
   if (session.status === "authenticated") {
-    return <WorkspaceSelector />;
+    // WorkspaceSelector calls useSearchParams (for the ?intent=portal
+    // fork). Next.js 16 requires a Suspense boundary around any tree
+    // that reads search params during static prerender — without this
+    // the production build fails at /auth/signin too once the static
+    // pass tries to render the authenticated branch.
+    return (
+      <Suspense
+        fallback={
+          <AuthShell title="Loading…" subtitle="Fetching your workspaces.">
+            <div className="h-32" />
+          </AuthShell>
+        }
+      >
+        <WorkspaceSelector />
+      </Suspense>
+    );
   }
 
   return (
