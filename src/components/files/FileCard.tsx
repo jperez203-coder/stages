@@ -289,9 +289,9 @@ export function FileCard({
                 <span
                   aria-hidden
                   style={{
-                    marginLeft: 8,
-                    marginRight: 8,
-                    fontSize: 16,
+                    marginLeft: 6,
+                    marginRight: 6,
+                    fontSize: 13,
                     lineHeight: 1,
                     color: "rgba(255,255,255,0.4)",
                     flexShrink: 0,
