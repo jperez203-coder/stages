@@ -195,11 +195,16 @@ export function FileCard({
         if (!isUploading) e.currentTarget.style.borderColor = "#36363A";
       }}
     >
-      {/* ── Header row: icon + title block + actions ──────────────── */}
+      {/* ── Header row: icon + title block + actions ────────────────
+          alignItems: center vertically centers the title-block (and
+          the action cluster) against the 40×40 icon, so the icon's
+          horizontal midline lines up with the gap between filename
+          and type label — fixes the slight visual misalignment where
+          the text used to sit a touch below the icon. */}
       <div
         style={{
           display: "flex",
-          alignItems: "flex-start",
+          alignItems: "center",
           gap: 12,
         }}
       >
