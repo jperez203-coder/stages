@@ -280,20 +280,39 @@ export function FileCard({
           >
             <span style={{ flexShrink: 0 }}>{typeText}</span>
             {row.task_id && row.task_title && (
-              <span
-                style={{
-                  marginLeft: 6,
-                  fontSize: 11,
-                  fontWeight: 400,
-                  color: "rgba(255,255,255,0.35)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  minWidth: 0,
-                }}
-              >
-                · from {row.task_title}
-              </span>
+              <>
+                {/* Standalone separator span — bullet glyph at a larger
+                    size than the surrounding text so it reads as an
+                    intentional bullet rather than a hyphen-adjacent
+                    middot. Equal horizontal margins (8px) sit it
+                    visually centered between "Video" and "from …". */}
+                <span
+                  aria-hidden
+                  style={{
+                    marginLeft: 8,
+                    marginRight: 8,
+                    fontSize: 16,
+                    lineHeight: 1,
+                    color: "rgba(255,255,255,0.4)",
+                    flexShrink: 0,
+                  }}
+                >
+                  •
+                </span>
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 400,
+                    color: "rgba(255,255,255,0.35)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    minWidth: 0,
+                  }}
+                >
+                  from {row.task_title}
+                </span>
+              </>
             )}
           </div>
         </div>
