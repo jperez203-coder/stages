@@ -122,21 +122,6 @@ export function PortalShell({
           gap: 16,
         }}
       >
-        {/* Workspace switcher trigger — mounted in portal chrome so the
-            "top-of-app" pill is present in both agency AND client
-            portal modes (per the slice-2 spec). usePathname inside the
-            switcher detects the /portal/[id] route and renders the
-            label as "Client of: <Agency Name>" with the agency's
-            tinted "#" tile. activeSlug is null here because portal
-            routes don't have a /w/[slug] component to match. */}
-        {switcherReady && (
-          <HeaderWorkspaceSwitcher
-            contexts={switcherContexts.contexts}
-            activeSlug={null}
-            userId={session.user.id}
-          />
-        )}
-
         {/* Pipeline identity */}
         <div
           style={{
@@ -200,6 +185,24 @@ export function PortalShell({
             )}
           </div>
         </div>
+
+        {/* Workspace switcher trigger — mounted on the RIGHT side of
+            the portal top bar (just left of the avatar) so it doesn't
+            compete with the pipeline icon + name for visual attention.
+            usePathname inside the switcher detects /portal/[id] and
+            renders the pill as "Client of: <Agency Name>" with the
+            agency's tinted "#" tile. activeSlug is null here — portal
+            routes don't have a /w/[slug] component to match — so the
+            switcher relies entirely on the portal-mode pathname check.
+            Spacing comes from the header's gap: 16 (same unit between
+            every top-bar element). */}
+        {switcherReady && (
+          <HeaderWorkspaceSwitcher
+            contexts={switcherContexts.contexts}
+            activeSlug={null}
+            userId={session.user.id}
+          />
+        )}
 
         {/* Viewer identity + sign-out via the shared HeaderProfileMenu.
             Same component as the agency surface — consistent UX +
