@@ -7,12 +7,17 @@ import {
   useRef,
   useState,
 } from "react";
+import Image from "next/image";
 import {
   Check,
   ChevronRight,
+  Download,
+  ExternalLink,
   Eye,
   EyeOff,
   Link as LinkIcon,
+  Loader2,
+  Maximize2,
   Plus,
   Trash2,
   Upload,
@@ -21,7 +26,6 @@ import {
 import { UserAvatar } from "@/components/UserAvatar";
 import { DatePickerPopover } from "@/components/my-tasks/DatePickerPopover";
 import { AddLinkModal } from "@/components/files/AddLinkModal";
-import { FileCard } from "@/components/files/FileCard";
 import { FilePreview } from "@/components/files/FilePreview";
 import { buildStoragePath } from "@/lib/build-storage-path";
 import { triggerFileDownload } from "@/lib/file-signed-url";
@@ -354,10 +358,17 @@ export function TaskDetailPanel({
           </button>
         </div>
 
-        {/* ── Scrollable body ────────────────────────────────────────── */}
+        {/* ── Scrollable body ──────────────────────────────────────────
+            minHeight: 0 is the flexbox-column scroll fix — without it,
+            the implicit min-content height of this flex item lets its
+            children push the box taller than the parent <aside>, so
+            overflowY never triggers and content below the fold becomes
+            unreachable. Surfaces immediately once the attachments
+            section grows past the viewport. */}
         <div
           style={{
             flex: 1,
+            minHeight: 0,
             overflowY: "auto",
             padding: "16px 18px 24px",
           }}
@@ -1408,7 +1419,7 @@ function Toggle({ on }: { on: boolean }) {
 // re-thread modal state through props for negligible win. If a third
 // caller appears, then promote.
 
-type TaskAttachmentRow = FileItem & { status?: "uploading" };
+type TaskAttachmentItem = FileItem & { status?: "uploading" };
 type TaskAttachmentPreview = { type: "image" | "pdf"; row: FileItem } | null;
 type TaskAttachmentDelete = { id: string; label: string } | null;
 
@@ -1427,7 +1438,7 @@ function TaskAttachmentsSection({
   canEdit: boolean;
   viewerId: string;
 }) {
-  const [files, setFiles] = useState<TaskAttachmentRow[]>([]);
+  const [files, setFiles] = useState<TaskAttachmentItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [inlineError, setInlineError] = useState<string | null>(null);
@@ -1501,7 +1512,7 @@ function TaskAttachmentsSection({
         profileById.set(p.id, p);
       }
 
-      const items: TaskAttachmentRow[] = rawRows.map((r) => ({
+      const items: TaskAttachmentItem[] = rawRows.map((r) => ({
         ...r,
         added_by_profile: r.added_by
           ? (profileById.get(r.added_by) ?? null)
@@ -1524,7 +1535,7 @@ function TaskAttachmentsSection({
       const tempId = crypto.randomUUID();
       const mimeType = file.type || null;
 
-      const optimistic: TaskAttachmentRow = {
+      const optimistic: TaskAttachmentItem = {
         id: tempId,
         kind: "file",
         label: null,
@@ -1913,11 +1924,10 @@ function TaskAttachmentsSection({
           </div>
         ) : (
           files.map((row) => (
-            <FileCard
+            <TaskAttachmentRow
               key={row.id}
               row={row}
               canEdit={canEdit || row.added_by === viewerId}
-              viewerId={viewerId}
               onToggleVisibility={handleToggleVisibility}
               onRequestDelete={(id) => {
                 const r = files.find((f) => f.id === id);
@@ -1986,6 +1996,277 @@ function TaskAttachmentsSection({
       )}
     </div>
   );
+}
+
+// Compact attachment row used INSIDE the task panel only. Same data
+// model as FileCard but no preview thumbnail — the row is one line
+// (icon · title · type · action buttons) so a task with many
+// attachments doesn't blow the panel out vertically. The Files tab
+// keeps the full preview-forward FileCard layout unchanged.
+//
+// Primary action button (leftmost of the cluster) adapts to the row
+// type so the affordance reads correctly at a glance:
+//   * Previewable file (image / pdf) → Maximize2 (opens FilePreview)
+//   * Other file types               → Download (signed-URL trigger)
+//   * URL                            → ExternalLink (opens new tab)
+// All three route through the SAME onClick/onDownload dispatchers the
+// panel already owns, so the row body click + button click produce the
+// same outcome.
+//
+// We deliberately do not reuse the green Eye icon for "open preview"
+// even though the user described it as "eye/preview button" — that
+// would clash with the existing Eye / EyeOff visibility toggle that
+// also lives in the action cluster. Maximize2 reads as "expand"
+// without colliding visually with the visibility affordance.
+function TaskAttachmentRow({
+  row,
+  canEdit,
+  onToggleVisibility,
+  onRequestDelete,
+  onClick,
+  onDownload,
+}: {
+  row: TaskAttachmentItem;
+  /** Combined gate — true for pipeline editors AND for the row's own
+   *  uploader (matching the pipeline_links UPDATE/DELETE RLS). Controls
+   *  visibility toggle + trash button. */
+  canEdit: boolean;
+  onToggleVisibility: (id: string, next: boolean) => void;
+  onRequestDelete: (id: string) => void;
+  onClick: (row: FileItem) => void;
+  onDownload: (row: FileItem) => void;
+}) {
+  const isUploading = row.status === "uploading";
+  const mime = row.mime_type ?? "";
+  const isImage = row.kind === "file" && mime.startsWith("image/");
+  const isPdf = row.kind === "file" && mime === "application/pdf";
+  const isPreviewable = isImage || isPdf;
+
+  const iconSrc = pickRowIcon(row);
+  const displayLabel =
+    row.label?.trim() ||
+    row.file_name ||
+    (row.kind === "url" ? row.url : null) ||
+    "Untitled";
+  const typeText = rowTypeLabel(row);
+
+  return (
+    <div
+      onClick={() => {
+        if (!isUploading) onClick(row);
+      }}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "8px 10px",
+        background: "#212124",
+        border: "1px solid #2A2A2D",
+        borderRadius: 6,
+        cursor: isUploading ? "wait" : "pointer",
+        opacity: isUploading ? 0.7 : 1,
+        transition: "border-color 120ms ease-out, background 120ms ease-out",
+      }}
+      onMouseEnter={(e) => {
+        if (!isUploading) e.currentTarget.style.borderColor = "#3A3A3E";
+      }}
+      onMouseLeave={(e) => {
+        if (!isUploading) e.currentTarget.style.borderColor = "#2A2A2D";
+      }}
+    >
+      <Image
+        src={iconSrc}
+        alt=""
+        width={22}
+        height={22}
+        style={{ flexShrink: 0 }}
+      />
+
+      <div
+        style={{
+          flex: 1,
+          minWidth: 0,
+          display: "flex",
+          flexDirection: "column",
+          gap: 1,
+        }}
+      >
+        <span
+          title={displayLabel}
+          style={{
+            fontSize: 13,
+            fontWeight: 600,
+            color: "white",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            lineHeight: 1.3,
+          }}
+        >
+          {displayLabel}
+        </span>
+        <span
+          style={{
+            fontSize: 11,
+            fontWeight: 500,
+            color: "rgba(255,255,255,0.5)",
+            lineHeight: 1.2,
+          }}
+        >
+          {typeText}
+        </span>
+      </div>
+
+      {isUploading ? (
+        <Loader2
+          size={16}
+          color="rgba(255,255,255,0.6)"
+          style={{
+            flexShrink: 0,
+            animation: "taskAttachmentSpin 1s linear infinite",
+          }}
+        />
+      ) : (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 2,
+            flexShrink: 0,
+          }}
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              // Non-previewable files use the explicit download helper
+              // (signed-URL + anchor click). Previewable files + URLs
+              // both dispatch through onClick which routes correctly.
+              if (row.kind === "file" && !isPreviewable) {
+                onDownload(row);
+              } else {
+                onClick(row);
+              }
+            }}
+            aria-label={
+              row.kind === "url"
+                ? `Open "${displayLabel}" in new tab`
+                : isPreviewable
+                  ? `Preview "${displayLabel}"`
+                  : `Download "${displayLabel}"`
+            }
+            title={
+              row.kind === "url"
+                ? "Open"
+                : isPreviewable
+                  ? "Preview"
+                  : "Download"
+            }
+            style={rowIconBtnStyle(false)}
+          >
+            {row.kind === "url" ? (
+              <ExternalLink size={13} color="rgba(255,255,255,0.65)" />
+            ) : isPreviewable ? (
+              <Maximize2 size={13} color="rgba(255,255,255,0.65)" />
+            ) : (
+              <Download size={13} color="rgba(255,255,255,0.65)" />
+            )}
+          </button>
+
+          {canEdit && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleVisibility(row.id, !row.client_visible);
+              }}
+              aria-label={
+                row.client_visible
+                  ? `Hide "${displayLabel}" from client`
+                  : `Show "${displayLabel}" to client`
+              }
+              aria-pressed={row.client_visible}
+              title={
+                row.client_visible ? "Visible to client" : "Hidden from client"
+              }
+              style={rowIconBtnStyle(row.client_visible)}
+            >
+              {row.client_visible ? (
+                <Eye size={13} color="#15B981" />
+              ) : (
+                <EyeOff size={13} color="rgba(255,255,255,0.45)" />
+              )}
+            </button>
+          )}
+
+          {canEdit && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRequestDelete(row.id);
+              }}
+              aria-label={`Delete "${displayLabel}"`}
+              title="Delete"
+              style={rowIconBtnStyle(false)}
+            >
+              <Trash2 size={13} color="rgba(255,255,255,0.55)" />
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Spinner keyframes scoped to this component — small enough to
+          colocate; avoids touching globals.css for one icon. */}
+      <style>{`
+        @keyframes taskAttachmentSpin {
+          from { transform: rotate(0deg); }
+          to   { transform: rotate(360deg); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+function pickRowIcon(row: FileItem): string {
+  if (row.kind === "url") return "/icons/file-link.svg";
+  const mime = row.mime_type ?? "";
+  if (mime.startsWith("image/")) return "/icons/file-image.svg";
+  if (mime === "application/pdf") return "/icons/file-pdf.svg";
+  if (mime.startsWith("video/")) return "/icons/file-video.svg";
+  return "/icons/file-pdf.svg";
+}
+
+function rowTypeLabel(row: FileItem): string {
+  if (row.kind === "url") return "Link";
+  const mime = row.mime_type ?? "";
+  if (mime === "application/pdf") return "PDF";
+  if (mime.startsWith("image/")) return "Image";
+  if (mime.startsWith("video/")) return "Video";
+  const fn = row.file_name ?? "";
+  const dotIdx = fn.lastIndexOf(".");
+  if (dotIdx > 0) {
+    const ext = fn.slice(dotIdx + 1).toUpperCase();
+    if (ext.length > 0 && ext.length <= 6) return ext;
+  }
+  return "File";
+}
+
+function rowIconBtnStyle(active: boolean): React.CSSProperties {
+  return {
+    width: 26,
+    height: 26,
+    borderRadius: 5,
+    background: active ? "rgba(21,185,129,0.10)" : "rgba(255,255,255,0.04)",
+    border: `1px solid ${active ? "rgba(21,185,129,0.25)" : "#36363A"}`,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+    padding: 0,
+    flexShrink: 0,
+    transition: "background 120ms ease-out, border-color 120ms ease-out",
+  };
 }
 
 function TaskAttachmentDeleteConfirm({
