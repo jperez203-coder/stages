@@ -21,6 +21,11 @@ type Props = {
   activeSlug: string | null;
   /** Current user's id, needed to write last_active_workspace_id. */
   userId: string;
+  /** Trigger-pill density. AppShell mounts at default (40px tall — matches
+   *  its 40px HeaderProfileMenu avatar). PortalShell mounts compact (32px
+   *  tall — matches its 32px avatar) so the right-side cluster reads as
+   *  one unit. Dropdown panel is unaffected by this prop. */
+  compact?: boolean;
 };
 
 /**
@@ -57,7 +62,22 @@ type Props = {
  * Portal-mode detection lives inline via usePathname() to avoid
  * changing AppShell's prop contract.
  */
-export function HeaderWorkspaceSwitcher({ contexts, activeSlug, userId }: Props) {
+export function HeaderWorkspaceSwitcher({
+  contexts,
+  activeSlug,
+  userId,
+  compact = false,
+}: Props) {
+  // Trigger-pill dimensions derived from `compact`. Default (agency
+  // mode) sits at 40 to match AppShell's 40px avatar; compact (portal
+  // mode) sits at 32 to match PortalShell's 32px avatar. Inner tile
+  // scales proportionally so the # mark's visual weight stays roughly
+  // ~70% of the pill height in both modes.
+  const triggerHeight = compact ? 32 : 40;
+  const triggerTileSize = compact ? 22 : 28;
+  const triggerPadding = compact ? "0 8px 0 3px" : "0 10px 0 4px";
+  const triggerFontSize = compact ? 12 : 13;
+  const triggerLabelMaxWidth = compact ? 180 : 200;
   const router = useRouter();
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
@@ -229,16 +249,22 @@ export function HeaderWorkspaceSwitcher({ contexts, activeSlug, userId }: Props)
           background: "#212124",
           border: "1px solid #36363A",
           borderRadius: "8px",
-          padding: "0 10px 0 4px",
-          height: "40px",
+          padding: triggerPadding,
+          height: `${triggerHeight}px`,
           color: "#E4E4E7",
           cursor: "pointer",
         }}
         onMouseEnter={(e) => (e.currentTarget.style.background = "#28282C")}
         onMouseLeave={(e) => (e.currentTarget.style.background = "#212124")}
       >
-        <StagesHashTile workspaceId={triggerWorkspaceId} size={28} />
-        <span className="text-[13px] font-semibold max-w-[200px] truncate">
+        <StagesHashTile workspaceId={triggerWorkspaceId} size={triggerTileSize} />
+        <span
+          className="font-semibold truncate"
+          style={{
+            fontSize: triggerFontSize,
+            maxWidth: triggerLabelMaxWidth,
+          }}
+        >
           {triggerLabel}
         </span>
         <ChevronDown

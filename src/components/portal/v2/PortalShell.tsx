@@ -201,6 +201,7 @@ export function PortalShell({
             contexts={switcherContexts.contexts}
             activeSlug={null}
             userId={session.user.id}
+            compact
           />
         )}
 
