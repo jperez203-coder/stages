@@ -38,21 +38,24 @@ export const dynamic = "force-dynamic";
 
 /**
  * Where to send a blocked pure client. Wrapped in a named function so
- * the future swap — from "bounce to portal" to "show upsell page"
- * (once Stripe billing exists) — is a one-line change here. Today:
- *   * one client context → `/portal/<pipelineId>`
- *   * multiple client contexts → `/select-workspace` (let them pick)
- * Tomorrow:
- *   * `/upgrade/create-workspace` (or whatever the upsell route is)
+ * the swap point stays explicit and discoverable.
+ *
+ * Phase 1 (pre-Stripe, 2026-06-12 onward): all pure clients route to
+ * `/upgrade?source=c1_block` — the paid-agency waitlist. They land on
+ * a form to capture interest + plan preference rather than getting
+ * silently bounced to their portal.
+ *
+ * Phase 2 (Stripe billing live, future): this same function will route
+ * to a checkout-or-trial flow instead of the waitlist. Same swap point,
+ * one-line change — the C1 gate logic ("pure client AND not agency")
+ * stays untouched.
+ *
+ * The `summary` parameter is kept in the signature even though we don't
+ * branch on it today, because the next iteration likely will (e.g. show
+ * a personalised CTA based on which pipeline they're a client on).
  */
-function blockedClientDestination(summary: CallerContextSummary): string {
-  // FUTURE: when paid agency tier exists, return an upgrade-flow URL
-  // here instead of bouncing the user back to their portal. Single
-  // swap point — the rest of this gate doesn't need to change.
-  if (summary.singleClientPipelineId) {
-    return `/portal/${summary.singleClientPipelineId}`;
-  }
-  return "/select-workspace";
+function blockedClientDestination(_summary: CallerContextSummary): string {
+  return "/upgrade?source=c1_block";
 }
 
 export default async function CreateWorkspacePage() {

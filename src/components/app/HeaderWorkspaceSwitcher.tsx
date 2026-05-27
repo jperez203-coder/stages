@@ -2,7 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Check, ChevronDown, Pencil, Plus, Trash2 } from "lucide-react";
+import {
+  ArrowRight,
+  Check,
+  ChevronDown,
+  Pencil,
+  Plus,
+  Trash2,
+} from "lucide-react";
 import { StagesHashTile } from "@/components/icons/StagesHashTile";
 import { urlForContext } from "@/lib/resolveDestination";
 import { supabase } from "@/lib/supabase";
@@ -398,9 +405,49 @@ export function HeaderWorkspaceSwitcher({
                 );
               })}
 
+              {/* Pure-client empty state — the user has zero agency
+                  workspaces, so instead of the dead "No workspaces yet"
+                  line, surface a CTA that routes to /upgrade where they
+                  can join the paid-plan waitlist. The "+ New workspace"
+                  button below this list is already gated on
+                  hasAnyAgencyContext so it auto-hides for this persona;
+                  this card is the affordance that replaces it. */}
               {workspaces.length === 0 && (
-                <div className="px-4 py-3 text-[12px] text-zinc-600 text-center">
-                  No workspaces yet.
+                <div className="px-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpen(false);
+                      router.push("/upgrade?source=switcher_empty");
+                    }}
+                    className="w-full flex items-center gap-3 px-2 py-2 rounded-lg transition-colors text-left"
+                    onMouseEnter={(e) =>
+                      (e.currentTarget.style.background = "#1F1F22")
+                    }
+                    onMouseLeave={(e) =>
+                      (e.currentTarget.style.background = "transparent")
+                    }
+                    style={{ background: "transparent" }}
+                  >
+                    {/* Brand-tinted tile — uses a stable per-user seed
+                        (the userId) so the same pure client always
+                        sees the same tint, while different clients
+                        see different ones. Picked over a workspace-id
+                        hash because the user has no workspace yet. */}
+                    <StagesHashTile workspaceId={userId} size={40} />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[14px] font-semibold text-white">
+                        Create your own workspace
+                      </div>
+                      <div className="text-[12px] text-zinc-500 mt-0.5">
+                        Run your own agency on Stages
+                      </div>
+                    </div>
+                    <ArrowRight
+                      size={16}
+                      className="text-zinc-500 flex-shrink-0"
+                    />
+                  </button>
                 </div>
               )}
             </div>
