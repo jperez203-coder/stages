@@ -33,6 +33,17 @@ type Props = {
    *  tall — matches its 32px avatar) so the right-side cluster reads as
    *  one unit. Dropdown panel is unaffected by this prop. */
   compact?: boolean;
+  /** Dropdown alignment relative to the trigger pill.
+   *   * "start" (default) — dropdown's LEFT edge aligns with trigger's
+   *      left edge and extends rightward. Right answer when the trigger
+   *      lives on the LEFT side of the top bar (AppShell).
+   *   * "end" — dropdown's RIGHT edge aligns with trigger's right edge
+   *      and extends LEFTWARD. Right answer when the trigger lives on
+   *      the RIGHT side of the top bar (PortalShell), so the panel
+   *      doesn't overflow the viewport.
+   *  Independent of `compact` — these are orthogonal concerns even if
+   *  they currently happen to co-vary (PortalShell uses both). */
+  align?: "start" | "end";
 };
 
 /**
@@ -74,6 +85,7 @@ export function HeaderWorkspaceSwitcher({
   activeSlug,
   userId,
   compact = false,
+  align = "start",
 }: Props) {
   // Trigger-pill dimensions derived from `compact`. Default (agency
   // mode) sits at 40 to match AppShell's 40px avatar; compact (portal
@@ -286,7 +298,9 @@ export function HeaderWorkspaceSwitcher({
 
       {open && (
         <div
-          className="absolute left-0 mt-2 fade-in z-50 space-y-2"
+          className={`absolute mt-2 fade-in z-50 space-y-2 ${
+            align === "end" ? "right-0" : "left-0"
+          }`}
           style={{ width: "320px" }}
         >
           {/* ── Agency panel ────────────────────────────────────────── */}

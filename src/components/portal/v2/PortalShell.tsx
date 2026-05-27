@@ -202,6 +202,7 @@ export function PortalShell({
             activeSlug={null}
             userId={session.user.id}
             compact
+            align="end"
           />
         )}
 
