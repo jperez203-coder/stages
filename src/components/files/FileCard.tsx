@@ -292,7 +292,7 @@ export function FileCard({
                   style={{
                     marginLeft: 6,
                     marginRight: 6,
-                    fontSize: 13,
+                    fontSize: 11,
                     lineHeight: 1,
                     color: "rgba(255,255,255,0.4)",
                     flexShrink: 0,
