@@ -2,10 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, BookmarkPlus, Check, MoreHorizontal, Pencil } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ArrowLeft, BookmarkPlus, Check, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { UserAvatar } from "@/components/UserAvatar";
 import { HeaderProfileMenu } from "@/components/app/HeaderProfileMenu";
 import { SaveAsTemplateModal } from "@/components/templates/SaveAsTemplateModal";
+import { DeletePipelineModal } from "./DeletePipelineModal";
 import { MembersPopover } from "./MembersPopover";
 import { useEditMode } from "./EditModeContext";
 import type {
@@ -71,7 +73,9 @@ export function PipelineHeader({
 }: Props) {
   const [membersOpen, setMembersOpen] = useState(false);
   const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
+  const [deletePipelineOpen, setDeletePipelineOpen] = useState(false);
   const { editMode, toggleEditMode } = useEditMode();
+  const router = useRouter();
 
   const lastEdited = relativeTime(chrome.pipeline.last_edited_at);
   const subline = buildSubline({
@@ -201,6 +205,7 @@ export function PipelineHeader({
         {chrome.canEditPipeline && (
           <PipelineOverflowMenu
             onSaveAsTemplate={() => setSaveTemplateOpen(true)}
+            onDeletePipeline={() => setDeletePipelineOpen(true)}
           />
         )}
 
@@ -247,6 +252,23 @@ export function PipelineHeader({
           defaultName={chrome.pipeline.name}
           onCancel={() => setSaveTemplateOpen(false)}
           onSaved={() => setSaveTemplateOpen(false)}
+        />
+      )}
+
+      {deletePipelineOpen && (
+        <DeletePipelineModal
+          pipelineId={chrome.pipeline.id}
+          pipelineName={chrome.pipeline.name}
+          onCancel={() => setDeletePipelineOpen(false)}
+          onDeleted={() => {
+            // Don't toggle deletePipelineOpen off — the router.push
+            // unmounts the canvas + this header + the modal together
+            // as part of the route change. Setting state on the
+            // unmounting tree is wasted work AND would race the
+            // navigation. Leaving the modal in its "Deleting…"
+            // disabled state until unmount is the correct read.
+            router.push(`/w/${workspaceSlug}`);
+          }}
         />
       )}
     </>
@@ -479,8 +501,10 @@ function buildSubline({
 
 function PipelineOverflowMenu({
   onSaveAsTemplate,
+  onDeletePipeline,
 }: {
   onSaveAsTemplate: () => void;
+  onDeletePipeline: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -588,6 +612,56 @@ function PipelineOverflowMenu({
           >
             <BookmarkPlus size={14} style={{ flexShrink: 0 }} />
             Save as template
+          </button>
+
+          {/* Visual separator before the destructive zone. Standard
+              menu pattern — non-destructive items above, divider, then
+              destructive items below. Matches the AppShell switcher's
+              "Create new workspace" separator pattern. */}
+          <div
+            aria-hidden
+            style={{
+              height: 1,
+              background: "#2A2A2D",
+              margin: "4px 6px",
+            }}
+          />
+
+          {/* Delete pipeline — destructive. Red icon + text against the
+              same hover background. Visibility gated upstream at the
+              menu mount (chrome.canEditPipeline); RPC server-side
+              re-checks the same gate as defense in depth. */}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onDeletePipeline();
+            }}
+            style={{
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              padding: "9px 10px",
+              background: "transparent",
+              border: "none",
+              borderRadius: 6,
+              color: "#F43F5E",
+              fontSize: 13,
+              fontWeight: 500,
+              cursor: "pointer",
+              textAlign: "left",
+            }}
+            onMouseEnter={(e) =>
+              (e.currentTarget.style.background = "rgba(244,63,94,0.08)")
+            }
+            onMouseLeave={(e) =>
+              (e.currentTarget.style.background = "transparent")
+            }
+          >
+            <Trash2 size={14} style={{ flexShrink: 0 }} />
+            Delete pipeline
           </button>
         </div>
       )}
