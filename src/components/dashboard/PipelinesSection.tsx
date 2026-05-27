@@ -127,10 +127,12 @@ export function PipelinesSection({
         />
       ) : (
         // Responsive grid breakpoints scale columns with viewport:
-        //   sm/default 1 → md 2 → lg 3 → xl 4 → 2xl 5
-        // so the pipelines section fills horizontal space on wide
-        // displays instead of leaving the right half empty.
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
+        //   sm/default 1 → md 2 → lg 3 → 2xl 4
+        // Cap at 3 columns for typical laptop / desktop widths so each
+        // card has room for the title, current-stage text, member
+        // avatars, and progress bar without things truncating. Only
+        // genuinely wide displays (≥1536px) get a 4th column.
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-4">
           {sorted.map((p) => (
             <PipelineCard
               key={p.id}
