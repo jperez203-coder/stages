@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Check, Plus } from "lucide-react";
 import type { TaskWithMeta } from "./types";
 import { BUCKET_PILL, type Bucket } from "@/lib/task-buckets";
@@ -72,6 +72,11 @@ export function TaskRow({
   onDeadlineChange,
 }: Props) {
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Ref to the date pill button. DatePickerPopover renders via Portal +
+  // position:fixed (so it escapes the bucket card's overflow:hidden) and
+  // uses this ref to position itself anchored to the button's viewport
+  // rect.
+  const pillRef = useRef<HTMLButtonElement | null>(null);
 
   const isOverdue = bucket === "overdue";
   const pillTreatment = BUCKET_PILL[bucket];
@@ -226,6 +231,7 @@ export function TaskRow({
           </span>
         ) : task.deadline === null ? (
           <button
+            ref={pillRef}
             type="button"
             onClick={(e) => {
               e.stopPropagation();
@@ -246,6 +252,7 @@ export function TaskRow({
           </button>
         ) : (
           <button
+            ref={pillRef}
             type="button"
             onClick={(e) => {
               e.stopPropagation();
@@ -267,6 +274,7 @@ export function TaskRow({
 
         {pickerOpen && (
           <DatePickerPopover
+            anchor={pillRef.current}
             currentDeadline={task.deadline}
             onSelect={(newDeadline) => {
               setPickerOpen(false);

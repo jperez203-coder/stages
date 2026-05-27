@@ -1245,10 +1245,15 @@ function DeadlineField({
   onPick: (iso: string | null) => void;
 }) {
   const label = deadline ? formatDeadline(deadline) : "No deadline";
+  // Anchor ref for DatePickerPopover. The popover renders via Portal +
+  // position:fixed (so it escapes the task panel's scroll container) and
+  // uses this ref to position itself.
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
 
   return (
     <div style={{ position: "relative" }}>
       <button
+        ref={buttonRef}
         type="button"
         disabled={!canChange}
         onClick={onOpenPicker}
@@ -1279,6 +1284,7 @@ function DeadlineField({
       </button>
       {pickerOpen && (
         <DatePickerPopover
+          anchor={buttonRef.current}
           currentDeadline={deadline}
           onSelect={onPick}
           onClose={onClosePicker}

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 
 /**
@@ -12,18 +13,39 @@ import { ChevronLeft, ChevronRight, X } from "lucide-react";
  * Selecting any option writes the new deadline immediately via the
  * parent's `onSelect` callback and closes (no debounce — discrete picks).
  *
- * Popover behavior:
- *   * Anchored to its parent (TaskRow's pill button) via position
- *     absolute + the parent's position relative.
- *   * Closes on outside click, Esc key, or successful select.
- *   * Auto-flips to render above the anchor if the popover would
- *     extend past the viewport bottom.
+ * Positioning:
+ *   * Rendered via React Portal into document.body so it escapes any
+ *     ancestor's overflow:hidden + stacking context. The /my-tasks
+ *     bucket sections use `rounded-xl overflow-hidden` to clip TaskRow
+ *     hover tints to the rounded card corners — that overflow:hidden
+ *     also clips an absolutely-positioned popover, which was the bug:
+ *     the picker was invisible (clipped) for rows near the section's
+ *     bottom edge. Portal + position:fixed sidesteps that entirely.
+ *   * Position is calculated from the anchor button's viewport rect
+ *     (passed in via the `anchor` prop). Re-runs on scroll/resize so
+ *     the popover stays glued to the anchor while the page moves.
+ *   * Auto-flips above the anchor when there isn't enough room below
+ *     the viewport bottom (same intent as before, now with a real
+ *     viewport-vs-fixed-rect calculation instead of after-the-fact
+ *     measurement).
+ *
+ * Close behavior:
+ *   * Outside click — except clicks on the anchor itself (which has its
+ *     own toggle handler; double-handling would close+reopen on the
+ *     same click and net to "stays open").
+ *   * Esc key.
+ *   * Successful select.
  *
  * Calendar is hand-rolled (~one month at a time, no external dep). Day
  * cells are buttons; the selected date is highlighted in primary blue.
  */
 
 type Props = {
+  /** The button element the popover should attach to. Required — the
+   *  popover renders via portal and needs the anchor to compute its
+   *  viewport-fixed position. May be null briefly while the parent
+   *  resolves its own ref; the popover renders null until set. */
+  anchor: HTMLElement | null;
   /** Current deadline (ISO string) or null. Used to highlight the
    *  initial month + selected date when opening. */
   currentDeadline: string | null;
@@ -36,13 +58,25 @@ type Props = {
 
 const WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
 
+// Approximate popover dimensions for the flip-up calculation. The actual
+// rendered popover may be a few pixels off depending on font metrics, but
+// the calculation only needs to decide DOWN vs UP — small drift is fine.
+const POPOVER_HEIGHT = 360;
+const POPOVER_WIDTH = 288;
+const GAP = 8;
+const VIEWPORT_PAD = 16;
+
 export function DatePickerPopover({
+  anchor,
   currentDeadline,
   onSelect,
   onClose,
 }: Props) {
   const ref = useRef<HTMLDivElement | null>(null);
-  const [flipUp, setFlipUp] = useState(false);
+  const [position, setPosition] = useState<{
+    top: number;
+    right: number;
+  } | null>(null);
 
   // Visible month state — start at the current deadline's month if set,
   // else today's month.
@@ -50,9 +84,48 @@ export function DatePickerPopover({
   const [viewYear, setViewYear] = useState(initialDate.getFullYear());
   const [viewMonth, setViewMonth] = useState(initialDate.getMonth());
 
-  // Outside click + Esc to close.
+  // ── Position computation (anchor-relative, viewport-fixed) ────────────
+  useLayoutEffect(() => {
+    if (!anchor) return;
+    const compute = () => {
+      const a = anchor.getBoundingClientRect();
+      const bottomIfBelow = a.bottom + GAP + POPOVER_HEIGHT;
+      const flipUp = bottomIfBelow > window.innerHeight - VIEWPORT_PAD;
+      const top = flipUp
+        ? Math.max(VIEWPORT_PAD, a.top - GAP - POPOVER_HEIGHT)
+        : a.bottom + GAP;
+      // Anchor to the right edge of the anchor button so the popover
+      // hangs off the same side regardless of viewport width. This
+      // mirrors the previous `right: 0` behavior, just calculated as
+      // a viewport offset for position:fixed.
+      const right = Math.max(
+        VIEWPORT_PAD,
+        window.innerWidth - a.right,
+      );
+      setPosition({ top, right });
+    };
+    compute();
+    // Re-anchor on scroll (anywhere in the page, including the bucket
+    // sections that scroll independently) + window resize. The `true`
+    // third arg is critical — captures scrolls on ANY scrollable
+    // ancestor, not just window.
+    window.addEventListener("scroll", compute, true);
+    window.addEventListener("resize", compute);
+    return () => {
+      window.removeEventListener("scroll", compute, true);
+      window.removeEventListener("resize", compute);
+    };
+  }, [anchor]);
+
+  // ── Outside click + Esc to close ──────────────────────────────────────
   useEffect(() => {
     const onMouseDown = (e: MouseEvent) => {
+      // Clicks on the anchor button are handled by the anchor's own
+      // toggle — if we ALSO closed here, the close-then-toggle race
+      // would net to "stays open" and the user couldn't close via the
+      // button. Skipping anchor-targeted mousedowns lets the anchor's
+      // setPickerOpen(v => !v) handle the close cleanly.
+      if (anchor && anchor.contains(e.target as Node)) return;
       if (ref.current && !ref.current.contains(e.target as Node)) {
         onClose();
       }
@@ -66,17 +139,7 @@ export function DatePickerPopover({
       document.removeEventListener("mousedown", onMouseDown);
       document.removeEventListener("keydown", onKey);
     };
-  }, [onClose]);
-
-  // Flip-up check — runs once on mount. If the bottom of the popover
-  // would extend past the viewport, render above the anchor instead.
-  useEffect(() => {
-    if (!ref.current) return;
-    const rect = ref.current.getBoundingClientRect();
-    if (rect.bottom > window.innerHeight - 16) {
-      setFlipUp(true);
-    }
-  }, []);
+  }, [anchor, onClose]);
 
   // ── Quick-set handlers ────────────────────────────────────────────────
   const setToday = () => {
@@ -136,16 +199,22 @@ export function DatePickerPopover({
     }
   };
 
-  return (
+  // Don't render until we have a position. SSR-safe portal target.
+  if (!position || typeof document === "undefined") return null;
+
+  return createPortal(
     <div
       ref={ref}
       role="dialog"
       aria-label="Pick a deadline"
       onClick={(e) => e.stopPropagation()}
-      className="absolute right-0 z-50 fade-in"
+      className="fade-in"
       style={{
-        [flipUp ? "bottom" : "top"]: "calc(100% + 8px)",
-        width: 288,
+        position: "fixed",
+        top: position.top,
+        right: position.right,
+        zIndex: 60,
+        width: POPOVER_WIDTH,
         background: "#1A1A1A",
         border: "1px solid #36363A",
         borderRadius: 12,
@@ -261,7 +330,8 @@ export function DatePickerPopover({
           );
         })}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
