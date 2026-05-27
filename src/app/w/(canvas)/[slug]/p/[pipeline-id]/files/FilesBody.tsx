@@ -72,8 +72,15 @@ export function FilesBody({
   // SELECT clause shared across the two INSERT call sites — keeps the
   // returned row shape in sync with FileItem so reconciliation works
   // without surprise nulls.
+  //
+  // task_id is included so the row shape matches FileItem (which now
+  // carries it for task-scoped rows). FilesBody itself only inserts
+  // pipeline-scoped rows (task_id is always null on its inserts) —
+  // task-scoped rows are inserted from the task detail panel and
+  // surface here via the next list re-fetch (with the joined
+  // task_title badge populated by fetchPipelineFiles).
   const SELECT_COLS =
-    "id, kind, label, url, storage_path, file_name, file_size, mime_type, client_visible, added_by, added_at";
+    "id, kind, label, url, storage_path, file_name, file_size, mime_type, client_visible, added_by, added_at, task_id";
 
   // ── Upload (single file) ────────────────────────────────────────────
   // Extracted so the file picker (single file) AND the drop handler
@@ -99,6 +106,8 @@ export function FilesBody({
         added_by: viewerId,
         added_by_profile: null,
         added_at: new Date().toISOString(),
+        task_id: null,
+        task_title: null,
         status: "uploading",
       };
       setFiles((prev) => [optimistic, ...prev]);
@@ -163,8 +172,9 @@ export function FilesBody({
       // the FileCard's UserAvatar falls back gracefully and the next
       // page refresh hydrates the profile via fetchPipelineFiles.
       const enriched: FileItem = {
-        ...(row as Omit<FileItem, "added_by_profile">),
+        ...(row as Omit<FileItem, "added_by_profile" | "task_title">),
         added_by_profile: null,
+        task_title: null,
       };
       setFiles((prev) => prev.map((f) => (f.id === tempId ? enriched : f)));
     },
@@ -279,8 +289,9 @@ export function FilesBody({
       // rows until the page refreshes; the FileCard's UserAvatar
       // falls back gracefully.
       const enriched: FileItem = {
-        ...(row as Omit<FileItem, "added_by_profile">),
+        ...(row as Omit<FileItem, "added_by_profile" | "task_title">),
         added_by_profile: null,
+        task_title: null,
       };
       setFiles((prev) => [enriched, ...prev]);
       setShowAddLink(false);

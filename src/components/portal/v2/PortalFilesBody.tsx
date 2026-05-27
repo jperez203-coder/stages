@@ -120,7 +120,7 @@ type PreviewState =
   | null;
 
 const SELECT_COLS =
-  "id, kind, label, url, storage_path, file_name, file_size, mime_type, client_visible, added_by, added_at";
+  "id, kind, label, url, storage_path, file_name, file_size, mime_type, client_visible, added_by, added_at, task_id";
 
 export function PortalFilesBody({
   initialFiles,
@@ -176,6 +176,8 @@ export function PortalFilesBody({
         added_by_profile:
           viewerId === viewerProfile.id ? viewerProfile : null,
         added_at: new Date().toISOString(),
+        task_id: null,
+        task_title: null,
         status: "uploading",
       };
       setFiles((prev) => [optimistic, ...prev]);
@@ -244,9 +246,10 @@ export function PortalFilesBody({
       // today, but checking id keeps this correct if a future code
       // path inserts on someone else's behalf).
       const enriched: FileItem = {
-        ...(row as Omit<FileItem, "added_by_profile">),
+        ...(row as Omit<FileItem, "added_by_profile" | "task_title">),
         added_by_profile:
           row.added_by === viewerProfile.id ? viewerProfile : null,
+        task_title: null,
       };
       setFiles((prev) => prev.map((f) => (f.id === tempId ? enriched : f)));
     },
@@ -344,9 +347,10 @@ export function PortalFilesBody({
       // keying by id keeps this correct if a future code path inserts
       // on someone else's behalf.
       const enriched: FileItem = {
-        ...(row as Omit<FileItem, "added_by_profile">),
+        ...(row as Omit<FileItem, "added_by_profile" | "task_title">),
         added_by_profile:
           row.added_by === viewerProfile.id ? viewerProfile : null,
+        task_title: null,
       };
       setFiles((prev) => [enriched, ...prev]);
       setShowAddLink(false);

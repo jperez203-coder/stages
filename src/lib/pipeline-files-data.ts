@@ -54,6 +54,18 @@ export type FileItem = {
    *  storage_path); 'url' = external link (has url). The DB CHECK
    *  constraint enforces exactly one of {storage_path, url} per kind. */
   kind: "url" | "file";
+  /** Task this row is attached to. Null = pipeline-scoped (Files tab
+   *  default). Non-null = task-scoped (still appears on the Files tab
+   *  with a "from: <task title>" badge AND inside that task's
+   *  attachments section). */
+  task_id: string | null;
+  /** Joined task title for the badge on the Files tab. Populated by
+   *  this fetch via a batched SELECT on tasks. Null when task_id is
+   *  null, OR when RLS denies the task read (defense-in-depth — the
+   *  same RLS that hides the parent task would also hide its
+   *  attachments via pipeline_links_select gating on pipeline_id, so
+   *  in practice this should only be null for pipeline-scoped rows). */
+  task_title: string | null;
   /** Human-friendly label. For links, usually required (the UI gates
    *  the add-link save on non-empty). For files, optional — falls
    *  back to file_name in the row's display label resolution. */
@@ -97,7 +109,7 @@ export async function fetchPipelineFiles(
   const { data: filesData, error: filesErr } = await supabase
     .from("pipeline_links")
     .select(
-      "id, kind, label, url, storage_path, file_name, file_size, mime_type, client_visible, added_by, added_at",
+      "id, kind, label, url, storage_path, file_name, file_size, mime_type, client_visible, added_by, added_at, task_id",
     )
     .eq("pipeline_id", pipelineId)
     .order("added_at", { ascending: false });
@@ -108,7 +120,7 @@ export async function fetchPipelineFiles(
   }
 
   const rawFiles = (filesData ?? []) as Array<
-    Omit<FileItem, "added_by_profile">
+    Omit<FileItem, "added_by_profile" | "task_title">
   >;
 
   // 2. Batch uploader profiles. Same forever-pattern as chat-data.ts /
@@ -141,11 +153,47 @@ export async function fetchPipelineFiles(
     profileById.set(p.id, p);
   }
 
-  // 3. In-memory join.
+  // 3. Batch task titles for task-scoped rows. Same two-query pattern
+  //    as the uploader-profile join — task_id refs tasks(id), so
+  //    PostgREST nested joins would work, but going through the same
+  //    explicit batch pattern keeps fallback semantics consistent
+  //    (denied row → null title → no badge, instead of mystery empty
+  //    string). Task RLS gates on stage→pipeline membership; in
+  //    practice the same caller that can read the pipeline_links row
+  //    can read the task title.
+  const taskIds = Array.from(
+    new Set(
+      rawFiles
+        .map((f) => f.task_id)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  );
+
+  const tasksRes = taskIds.length
+    ? await supabase.from("tasks").select("id, title").in("id", taskIds)
+    : { data: [], error: null };
+
+  if (tasksRes.error) {
+    console.error(
+      "[pipeline-files] task fetch failed (badges will not render):",
+      tasksRes.error,
+    );
+  }
+
+  const taskTitleById = new Map<string, string>();
+  for (const t of (tasksRes.data ?? []) as Array<{
+    id: string;
+    title: string;
+  }>) {
+    taskTitleById.set(t.id, t.title);
+  }
+
+  // 4. In-memory join — uploader profile + task title.
   return rawFiles.map((f) => ({
     ...f,
     added_by_profile: f.added_by
       ? (profileById.get(f.added_by) ?? null)
       : null,
+    task_title: f.task_id ? (taskTitleById.get(f.task_id) ?? null) : null,
   }));
 }

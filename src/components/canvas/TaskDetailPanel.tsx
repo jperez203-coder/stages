@@ -12,14 +12,26 @@ import {
   ChevronRight,
   Eye,
   EyeOff,
+  Link as LinkIcon,
   Plus,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { UserAvatar } from "@/components/UserAvatar";
 import { DatePickerPopover } from "@/components/my-tasks/DatePickerPopover";
+import { AddLinkModal } from "@/components/files/AddLinkModal";
+import { FileCard } from "@/components/files/FileCard";
+import { FilePreview } from "@/components/files/FilePreview";
+import { buildStoragePath } from "@/lib/build-storage-path";
+import { triggerFileDownload } from "@/lib/file-signed-url";
+import { normalizeUrl } from "@/lib/normalize-url";
 import { supabase } from "@/lib/supabase";
 import type { ChromeMember } from "@/lib/canvas-chrome-data";
+import type {
+  FileItem,
+  UploaderProfile,
+} from "@/lib/pipeline-files-data";
 import type {
   StageRaw,
   TaskRaw,
@@ -64,6 +76,7 @@ const PANEL_WIDTH = 500;
 type Props = {
   task: TaskRaw;
   stage: StageRaw;
+  pipelineId: string;
   pipelineName: string;
   members: ChromeMember[];
   canEditPipeline: boolean;
@@ -84,6 +97,7 @@ type Props = {
 export function TaskDetailPanel({
   task,
   stage,
+  pipelineId,
   pipelineName,
   members,
   canEditPipeline,
@@ -528,9 +542,17 @@ export function TaskDetailPanel({
             </PanelSection>
           )}
 
-          {/* Attachments — STUB only. Files step ships the upload UI. */}
+          {/* Attachments — task-scoped pipeline_links rows. Mirrors the
+              Files-tab upload/add-link/delete plumbing in FilesBody.tsx
+              but filtered to this task and sets task_id on every
+              insert. RLS is unaffected (gates are on pipeline_id). */}
           <PanelSection label="Attachments">
-            <AttachmentsStub />
+            <TaskAttachmentsSection
+              pipelineId={pipelineId}
+              taskId={task.id}
+              canEdit={canEditPipeline}
+              viewerId={currentUserId}
+            />
           </PanelSection>
 
           {/* +Add sibling task — owner/admin only */}
@@ -1370,40 +1392,703 @@ function Toggle({ on }: { on: boolean }) {
   );
 }
 
-// ─── Attachments stub (files step ships the real thing) ───────────────────
+// ─── Task attachments section ─────────────────────────────────────────────
+//
+// Mirrors the Files-tab plumbing in FilesBody.tsx: optimistic upload +
+// reconcile, optimistic add-link, optimistic delete with revert, drag
+// + drop, FilePreview modal dispatch for image/pdf, signed-URL
+// download for everything else. The only meaningful difference is that
+// every INSERT carries `task_id: taskId` so the row is task-scoped
+// (the Files tab still surfaces these rows with a "from: <task>" badge
+// via the joined task_title — see pipeline-files-data.ts).
+//
+// We do NOT re-export the FilesBody implementation as a shared hook;
+// the upload/add-link/delete code is short enough that direct copy
+// keeps both surfaces readable, and a shared abstraction would have to
+// re-thread modal state through props for negligible win. If a third
+// caller appears, then promote.
 
-function AttachmentsStub() {
+type TaskAttachmentRow = FileItem & { status?: "uploading" };
+type TaskAttachmentPreview = { type: "image" | "pdf"; row: FileItem } | null;
+type TaskAttachmentDelete = { id: string; label: string } | null;
+
+function TaskAttachmentsSection({
+  pipelineId,
+  taskId,
+  canEdit,
+  viewerId,
+}: {
+  pipelineId: string;
+  taskId: string;
+  /** Upload + add-link affordances gated on can_edit_pipeline (admin/
+   *  owner). Per-row delete + visibility toggle additionally allow
+   *  the row's own uploader — same rule the Files tab uses, matching
+   *  the pipeline_links RLS UPDATE/DELETE policy. */
+  canEdit: boolean;
+  viewerId: string;
+}) {
+  const [files, setFiles] = useState<TaskAttachmentRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [inlineError, setInlineError] = useState<string | null>(null);
+
+  const [showAddLink, setShowAddLink] = useState(false);
+  const [showDelete, setShowDelete] = useState<TaskAttachmentDelete>(null);
+  const [preview, setPreview] = useState<TaskAttachmentPreview>(null);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [dragActive, setDragActive] = useState(false);
+  const dragCounterRef = useRef(0);
+
+  // Same SELECT shape as FilesBody — keeps the row shape compatible
+  // with FileCard without re-mapping. task_title stays null for rows
+  // in this surface: every row here belongs to THIS task, so the badge
+  // would be redundant noise (it only earns its keep on the Files tab
+  // where rows are mixed pipeline- and task-scoped).
+  const SELECT_COLS =
+    "id, kind, label, url, storage_path, file_name, file_size, mime_type, client_visible, added_by, added_at, task_id";
+
+  // ── Lazy fetch ──────────────────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setFetchError(null);
+    void (async () => {
+      const { data, error: fetchErr } = await supabase
+        .from("pipeline_links")
+        .select(SELECT_COLS)
+        .eq("pipeline_id", pipelineId)
+        .eq("task_id", taskId)
+        .order("added_at", { ascending: false });
+
+      if (cancelled) return;
+      if (fetchErr) {
+        console.error("[task-attachments] fetch failed:", fetchErr);
+        setFetchError("Couldn't load attachments.");
+        setLoading(false);
+        return;
+      }
+
+      const rawRows = (data ?? []) as Array<
+        Omit<FileItem, "added_by_profile" | "task_title">
+      >;
+
+      // Batch uploader profiles — same two-query pattern fetchPipeline-
+      // Files uses (added_by → auth.users not profiles, so PostgREST
+      // nested join returns nothing).
+      const uploaderIds = Array.from(
+        new Set(
+          rawRows
+            .map((r) => r.added_by)
+            .filter((id): id is string => Boolean(id)),
+        ),
+      );
+      const profilesRes = uploaderIds.length
+        ? await supabase
+            .from("profiles")
+            .select("id, display_name, avatar_url, email")
+            .in("id", uploaderIds)
+        : { data: [], error: null };
+      if (cancelled) return;
+      if (profilesRes.error) {
+        console.error(
+          "[task-attachments] profile fetch failed (uploader avatars will fall back):",
+          profilesRes.error,
+        );
+      }
+      const profileById = new Map<string, UploaderProfile>();
+      for (const p of (profilesRes.data ?? []) as UploaderProfile[]) {
+        profileById.set(p.id, p);
+      }
+
+      const items: TaskAttachmentRow[] = rawRows.map((r) => ({
+        ...r,
+        added_by_profile: r.added_by
+          ? (profileById.get(r.added_by) ?? null)
+          : null,
+        task_title: null,
+      }));
+      setFiles(items);
+      setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pipelineId, taskId]);
+
+  // ── Upload (single file) — extracted so file-picker AND drop handler share it.
+  const uploadFile = useCallback(
+    async (file: File) => {
+      setInlineError(null);
+      const storagePath = buildStoragePath(pipelineId, file.name);
+      const tempId = crypto.randomUUID();
+      const mimeType = file.type || null;
+
+      const optimistic: TaskAttachmentRow = {
+        id: tempId,
+        kind: "file",
+        label: null,
+        url: null,
+        storage_path: storagePath,
+        file_name: file.name,
+        file_size: file.size,
+        mime_type: mimeType,
+        client_visible: false,
+        added_by: viewerId,
+        added_by_profile: null,
+        added_at: new Date().toISOString(),
+        task_id: taskId,
+        task_title: null,
+        status: "uploading",
+      };
+      setFiles((prev) => [optimistic, ...prev]);
+
+      const { error: uploadErr } = await supabase
+        .storage
+        .from("pipeline_files")
+        .upload(storagePath, file, {
+          contentType: file.type || undefined,
+          upsert: false,
+        });
+
+      if (uploadErr) {
+        console.error("[task-attachments] storage upload failed:", uploadErr);
+        setFiles((prev) => prev.filter((f) => f.id !== tempId));
+        setInlineError("Upload failed. Try again.");
+        return;
+      }
+
+      const { data: row, error: insertErr } = await supabase
+        .from("pipeline_links")
+        .insert({
+          pipeline_id: pipelineId,
+          task_id: taskId,
+          kind: "file",
+          label: null,
+          storage_path: storagePath,
+          file_name: file.name,
+          file_size: file.size,
+          mime_type: mimeType,
+          added_by: viewerId,
+          client_visible: false,
+        })
+        .select(SELECT_COLS)
+        .single();
+
+      if (insertErr || !row) {
+        console.error("[task-attachments] metadata insert failed:", insertErr);
+        const { error: cleanupErr } = await supabase
+          .storage
+          .from("pipeline_files")
+          .remove([storagePath]);
+        if (cleanupErr) {
+          console.error(
+            "[task-attachments] orphan cleanup ALSO failed — invisible bytes left in bucket:",
+            cleanupErr,
+          );
+        }
+        setFiles((prev) => prev.filter((f) => f.id !== tempId));
+        setInlineError("Couldn't save attachment. Try again.");
+        return;
+      }
+
+      const enriched: FileItem = {
+        ...(row as Omit<FileItem, "added_by_profile" | "task_title">),
+        added_by_profile: null,
+        task_title: null,
+      };
+      setFiles((prev) => prev.map((f) => (f.id === tempId ? enriched : f)));
+    },
+    [pipelineId, taskId, viewerId],
+  );
+
+  const handleFilePick = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      e.target.value = "";
+      void uploadFile(file);
+    },
+    [uploadFile],
+  );
+
+  // ── Drag-and-drop ─────────────────────────────────────────────────────
+  const handleDragEnter = useCallback(
+    (e: React.DragEvent) => {
+      if (!canEdit) return;
+      if (!e.dataTransfer.types.includes("Files")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounterRef.current += 1;
+      setDragActive(true);
+    },
+    [canEdit],
+  );
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setDragActive(false);
+    }
+  }, []);
+
+  const handleDragOver = useCallback(
+    (e: React.DragEvent) => {
+      if (!canEdit) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = "copy";
+    },
+    [canEdit],
+  );
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      if (!canEdit) return;
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounterRef.current = 0;
+      setDragActive(false);
+      const dropped = Array.from(e.dataTransfer.files);
+      if (dropped.length === 0) return;
+      for (const file of dropped) {
+        void uploadFile(file);
+      }
+    },
+    [canEdit, uploadFile],
+  );
+
+  // ── Add link ─────────────────────────────────────────────────────────
+  const handleAddLink = useCallback(
+    async (label: string, url: string) => {
+      const { data: row, error } = await supabase
+        .from("pipeline_links")
+        .insert({
+          pipeline_id: pipelineId,
+          task_id: taskId,
+          kind: "url",
+          label,
+          url,
+          added_by: viewerId,
+          client_visible: false,
+        })
+        .select(SELECT_COLS)
+        .single();
+
+      if (error || !row) {
+        console.error("[task-attachments] add link failed:", error);
+        throw new Error(error?.message ?? "Insert failed");
+      }
+
+      const enriched: FileItem = {
+        ...(row as Omit<FileItem, "added_by_profile" | "task_title">),
+        added_by_profile: null,
+        task_title: null,
+      };
+      setFiles((prev) => [enriched, ...prev]);
+      setShowAddLink(false);
+    },
+    [pipelineId, taskId, viewerId],
+  );
+
+  // ── Toggle visibility ───────────────────────────────────────────────
+  const handleToggleVisibility = useCallback(
+    async (id: string, next: boolean) => {
+      const snapshot = files;
+      setFiles((prev) =>
+        prev.map((f) => (f.id === id ? { ...f, client_visible: next } : f)),
+      );
+      const { error } = await supabase
+        .from("pipeline_links")
+        .update({ client_visible: next })
+        .eq("id", id);
+      if (error) {
+        console.error("[task-attachments] toggle visibility failed:", error);
+        setFiles(snapshot);
+        setInlineError("Couldn't change visibility. Try again.");
+      }
+    },
+    [files],
+  );
+
+  // ── Delete (after confirm) ──────────────────────────────────────────
+  // Same metadata-first → storage-after order FilesBody uses; same
+  // privacy-safe-orphan-on-failure trade-off.
+  const handleDelete = useCallback(
+    async (id: string) => {
+      const row = files.find((f) => f.id === id);
+      if (!row) {
+        setShowDelete(null);
+        return;
+      }
+      const snapshot = files;
+      setFiles((prev) => prev.filter((f) => f.id !== id));
+      setShowDelete(null);
+
+      const { error: metaErr } = await supabase
+        .from("pipeline_links")
+        .delete()
+        .eq("id", id);
+      if (metaErr) {
+        console.error("[task-attachments] metadata delete failed:", metaErr);
+        setFiles(snapshot);
+        setInlineError("Couldn't delete. Try again.");
+        return;
+      }
+
+      if (row.kind === "file" && row.storage_path) {
+        const { error: storageErr } = await supabase
+          .storage
+          .from("pipeline_files")
+          .remove([row.storage_path]);
+        if (storageErr) {
+          console.error(
+            "[task-attachments] storage delete failed — orphan left in bucket:",
+            storageErr,
+          );
+        }
+      }
+    },
+    [files],
+  );
+
+  // ── Row dispatch (preview / download / open) ────────────────────────
+  const handleRowClick = useCallback(async (row: FileItem) => {
+    if (row.kind === "url") {
+      const target = row.url ? normalizeUrl(row.url) : null;
+      if (target) {
+        window.open(target, "_blank", "noopener,noreferrer");
+      }
+      return;
+    }
+    if (!row.storage_path) return;
+    const mime = row.mime_type ?? "";
+    if (mime.startsWith("image/")) {
+      setPreview({ type: "image", row });
+      return;
+    }
+    if (mime === "application/pdf") {
+      setPreview({ type: "pdf", row });
+      return;
+    }
+    const { error } = await triggerFileDownload(
+      row.storage_path,
+      row.file_name,
+    );
+    if (error) {
+      setInlineError("Couldn't download. Try again.");
+    }
+  }, []);
+
+  const handleDownload = useCallback(async (row: FileItem) => {
+    if (row.kind !== "file" || !row.storage_path) return;
+    const { error } = await triggerFileDownload(
+      row.storage_path,
+      row.file_name,
+    );
+    if (error) {
+      setInlineError("Couldn't download. Try again.");
+    }
+  }, []);
+
+  // ── Render ──────────────────────────────────────────────────────────
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {/* Action row — Upload + Add link buttons. canEdit hides the
+          whole row for view-only roles (matching FilesBody). */}
+      {canEdit && (
+        <div style={{ display: "flex", gap: 6 }}>
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            style={panelAttachmentBtnStyle}
+          >
+            <Upload size={12} />
+            Upload
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowAddLink(true)}
+            style={panelAttachmentBtnStyle}
+          >
+            <LinkIcon size={12} />
+            Add link
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            onChange={handleFilePick}
+            style={{ display: "none" }}
+          />
+        </div>
+      )}
+
+      {/* Inline error — fetch failures + upload/add/delete failures. */}
+      {(inlineError || fetchError) && (
+        <div
+          role="alert"
+          style={{
+            padding: "8px 10px",
+            background: "rgba(244,63,94,0.08)",
+            border: "1px solid rgba(244,63,94,0.3)",
+            borderRadius: 6,
+            fontSize: 12,
+            color: "#F43F5E",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+          }}
+        >
+          <span>{inlineError ?? fetchError}</span>
+          {inlineError && (
+            <button
+              type="button"
+              onClick={() => setInlineError(null)}
+              aria-label="Dismiss error"
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "#F43F5E",
+                cursor: "pointer",
+                padding: 0,
+                display: "flex",
+                alignItems: "center",
+              }}
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* List / empty / loading — drag-drop attaches here so drops land
+          on the same container that shows the cards, mirroring FilesBody. */}
+      <div
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+        style={{
+          position: "relative",
+          minHeight: 64,
+          padding: 4,
+          border: `1.5px dashed ${dragActive ? "#108CE9" : "transparent"}`,
+          borderRadius: 8,
+          transition: "border-color 120ms ease-out, background 120ms ease-out",
+          background: dragActive ? "rgba(16,140,233,0.04)" : "transparent",
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+        }}
+      >
+        {loading ? (
+          <div
+            style={{
+              fontSize: 12,
+              color: "rgba(255,255,255,0.45)",
+              padding: "8px 4px",
+            }}
+          >
+            Loading…
+          </div>
+        ) : files.length === 0 ? (
+          <div
+            style={{
+              padding: "12px 10px",
+              background: "rgba(255,255,255,0.02)",
+              border: "1px dashed rgba(255,255,255,0.12)",
+              borderRadius: 6,
+              fontSize: 12,
+              color: "rgba(255,255,255,0.45)",
+              textAlign: "center",
+            }}
+          >
+            {canEdit
+              ? "Drop a file here, or use Upload / Add link."
+              : "No attachments yet."}
+          </div>
+        ) : (
+          files.map((row) => (
+            <FileCard
+              key={row.id}
+              row={row}
+              canEdit={canEdit || row.added_by === viewerId}
+              viewerId={viewerId}
+              onToggleVisibility={handleToggleVisibility}
+              onRequestDelete={(id) => {
+                const r = files.find((f) => f.id === id);
+                const label = r?.label ?? r?.file_name ?? "this item";
+                setShowDelete({ id, label });
+              }}
+              onClick={handleRowClick}
+              onDownload={handleDownload}
+            />
+          ))
+        )}
+
+        {dragActive && (
+          <div
+            aria-hidden
+            style={{
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              pointerEvents: "none",
+              zIndex: 5,
+            }}
+          >
+            <div
+              style={{
+                padding: "8px 14px",
+                background: "rgba(16,140,233,0.18)",
+                border: "1px solid #108CE9",
+                borderRadius: 999,
+                color: "#108CE9",
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              Drop to upload
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Modals — scoped to this section so the panel root stays
+          untouched. AddLinkModal + FilePreview are imported from
+          components/files; DeleteConfirm is local because the Files
+          tab's version is also section-scoped and not exported. */}
+      {showAddLink && (
+        <AddLinkModal
+          onCancel={() => setShowAddLink(false)}
+          onSave={handleAddLink}
+        />
+      )}
+      {showDelete && (
+        <TaskAttachmentDeleteConfirm
+          label={showDelete.label}
+          onCancel={() => setShowDelete(null)}
+          onConfirm={() => void handleDelete(showDelete.id)}
+        />
+      )}
+      {preview && (
+        <FilePreview
+          type={preview.type}
+          row={preview.row}
+          onClose={() => setPreview(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function TaskAttachmentDeleteConfirm({
+  label,
+  onCancel,
+  onConfirm,
+}: {
+  label: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
   return (
     <div
+      onClick={onCancel}
+      role="dialog"
+      aria-label="Confirm delete"
       style={{
-        padding: "14px 12px",
-        background: "rgba(255,255,255,0.02)",
-        border: "1px dashed rgba(255,255,255,0.15)",
-        borderRadius: 8,
-        textAlign: "center",
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.6)",
+        backdropFilter: "blur(4px)",
+        zIndex: 100,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
       }}
     >
       <div
+        onClick={(e) => e.stopPropagation()}
         style={{
-          fontSize: 12,
-          color: "rgba(255,255,255,0.5)",
-          marginBottom: 4,
+          width: "100%",
+          maxWidth: 380,
+          background: "#1A1A1C",
+          border: "1px solid #36363A",
+          borderRadius: 12,
+          padding: 20,
+          display: "flex",
+          flexDirection: "column",
+          gap: 16,
         }}
       >
-        Attachments
-      </div>
-      <div
-        style={{
-          fontSize: 11,
-          color: "rgba(255,255,255,0.35)",
-          fontStyle: "italic",
-        }}
-      >
-        File upload comes in a future step.
+        <p
+          style={{
+            margin: 0,
+            fontSize: 14,
+            color: "white",
+            lineHeight: 1.5,
+          }}
+        >
+          Delete <strong>&ldquo;{label}&rdquo;</strong>? This can&rsquo;t be
+          undone.
+        </p>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            onClick={onCancel}
+            style={{
+              ...panelAttachmentBtnStyle,
+              padding: "8px 14px",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "8px 14px",
+              background: "#F43F5E",
+              border: "1px solid #F43F5E",
+              borderRadius: 8,
+              color: "white",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            Delete
+          </button>
+        </div>
       </div>
     </div>
   );
 }
+
+const panelAttachmentBtnStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "6px 10px",
+  background: "rgba(255,255,255,0.04)",
+  border: "1px solid #36363A",
+  borderRadius: 6,
+  color: "rgba(255,255,255,0.85)",
+  fontSize: 12,
+  fontWeight: 500,
+  cursor: "pointer",
+  transition: "background 120ms ease-out, border-color 120ms ease-out",
+};
 
 // ─── Checklist subsection (lazy-fetches checklist_items) ──────────────────
 

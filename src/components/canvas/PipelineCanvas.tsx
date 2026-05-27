@@ -1496,6 +1496,7 @@ export function PipelineCanvas({
           <TaskDetailPanel
             task={task}
             stage={stage}
+            pipelineId={pipelineId}
             pipelineName={pipelineName}
             members={members}
             canEditPipeline={canEditPipeline}

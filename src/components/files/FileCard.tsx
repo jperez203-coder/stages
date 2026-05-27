@@ -257,6 +257,35 @@ export function FileCard({
           >
             {typeText}
           </div>
+          {/* Task-scoped badge — rendered when this row was attached
+              from a task panel (task_id set + the joined title was
+              resolvable). Subtle pill in the brand blue, sized to sit
+              under the type label without dominating the card. Absent
+              on pipeline-scoped rows (task_id null) — those keep the
+              card chrome unchanged. */}
+          {row.task_id && row.task_title && (
+            <div
+              title={`Attached from task: ${row.task_title}`}
+              style={{
+                marginTop: 4,
+                alignSelf: "flex-start",
+                maxWidth: "100%",
+                padding: "2px 8px",
+                background: "rgba(16,140,233,0.12)",
+                color: "#108CE9",
+                border: "1px solid rgba(16,140,233,0.25)",
+                borderRadius: 999,
+                fontSize: 11,
+                fontWeight: 600,
+                lineHeight: 1.2,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              from: {row.task_title}
+            </div>
+          )}
         </div>
 
         {/* Actions cluster — top-right, always visible (per click).
