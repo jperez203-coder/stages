@@ -54,12 +54,18 @@ export default function PortalSignInPage() {
         // page would let anyone enroll as a Stages user with no agency
         // invite. NON-NEGOTIABLE — see header comment.
         shouldCreateUser: false,
-        // Land them on /select-workspace post-auth. That route already
-        // detects client-only users and redirects them to their portal
-        // (or shows a chooser when they have multiple memberships).
+        // Land them on /select-workspace post-auth with an explicit
+        // portal-intent signal. /select-workspace honors `?intent=portal`
+        // by filtering to client-role contexts BEFORE its normal
+        // resolveDestination decision tree, so a mixed-context user
+        // (e.g. Casey, who is owner of one workspace AND client on
+        // another) lands in their portal — not their agency dashboard
+        // — when they came in through /portal/signin. Without this
+        // query param the same /select-workspace endpoint behaves
+        // exactly as it does for /auth/signin (agency-first routing).
         emailRedirectTo:
           typeof window !== "undefined"
-            ? `${window.location.origin}/select-workspace`
+            ? `${window.location.origin}/select-workspace?intent=portal`
             : undefined,
       },
     });
