@@ -159,17 +159,17 @@ export function FileCard({
   // null for file rows or when hostname parsing fails — falls back
   // to the static iconSrc above.
   const faviconUrl = getFaviconUrl(row);
-  // Header / preview-placeholder icon footprint. All file-type chips
-  // (image, PDF, video, link favicon) now render at the same size.
-  //
-  // 2026-05-25 we boosted the image chip to compensate for its
-  // desaturated dark-teal palette which read smaller than the
-  // high-contrast PDF/video/link chips. Reverted 2026-05-27 per design
-  // — the boosted image icon ended up looking visually heavier than
-  // the others on the Files grid, so equal sizes win out over the
-  // perceptual compensation.
-  const headerIconSize = 32;
-  const previewIconSize = 48;
+  // Header / preview-placeholder icon footprint. The image chip's
+  // desaturated dark-teal palette reads slightly smaller than the
+  // high-contrast PDF / video / link chips at the same render size.
+  // 2026-05-25 we boosted it +8 (to 40/56) which overshot. Settled
+  // 2026-05-27 on a small +2 nudge (34/50) — enough to lift the image
+  // chip's perceived mass to parity with the others without it
+  // looking visibly larger.
+  const isImageIcon =
+    row.kind === "file" && (row.mime_type ?? "").startsWith("image/");
+  const headerIconSize = isImageIcon ? 34 : 32;
+  const previewIconSize = isImageIcon ? 50 : 48;
 
   return (
     <div
