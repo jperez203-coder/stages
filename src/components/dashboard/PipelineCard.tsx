@@ -48,15 +48,6 @@ export type PipelineViewModel = {
   allMembers: PipelineMember[];
 };
 
-const PALETTE = ["#DF1E5A", "#E273C1", "#21B159", "#36C5EF", "#F59E0B"];
-function pickFallbackColor(seed: string): string {
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) {
-    hash = seed.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  return PALETTE[Math.abs(hash) % PALETTE.length];
-}
-
 export function PipelineCard({
   pipeline,
   workspaceSlug,
@@ -65,8 +56,6 @@ export function PipelineCard({
   workspaceSlug: string;
 }) {
   const router = useRouter();
-  const stageColor =
-    pipeline.currentStage?.color ?? pickFallbackColor(pipeline.id);
 
   const pct =
     pipeline.progress.total === 0
@@ -74,6 +63,13 @@ export function PipelineCard({
       : Math.round(
           (pipeline.progress.completed / pipeline.progress.total) * 100,
         );
+
+  // Progress bar fill is driven purely by completion percentage on the
+  // dashboard — stages.color no longer feeds anything visual here.
+  // 0% → width:0% hides the fill so the grey track shows alone.
+  // 0 < pct < 100 → purple = work in progress.
+  // pct === 100 → green = done.
+  const progressBarColor = pct >= 100 ? "#15B981" : "#6E5BE8";
 
   return (
     <div
@@ -171,23 +167,11 @@ export function PipelineCard({
           Current stage
         </div>
         <div className="flex items-center gap-2">
-          {/* Solid colored dot — stage identity reads through color
-              alone. The 3-state visual variant (plain ring / dashed ring /
-              solid) didn't pay off at 8px; completion state is already
-              encoded in the progress bar below. The pre-5c `visual`
-              prop has been removed — it was dead data (computed but
-              never rendered). Per-stage state lives on the canvas
-              surface now (see src/lib/current-stage.ts). */}
-          <span
-            aria-hidden
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: "50%",
-              flexShrink: 0,
-              background: stageColor,
-            }}
-          />
+          {/* Stage-color dot removed — it was tying the dashboard to
+              stages.color (a per-stage rotation palette) which mixed
+              urgency and identity in a confusing way next to the
+              %-based progress bar below. The "Current stage" label +
+              stage name carry the meaning on their own. */}
           <span className="text-[14px] font-medium text-white truncate">
             {pipeline.currentStage?.name ?? "No stages yet"}
           </span>
@@ -224,7 +208,7 @@ export function PipelineCard({
               left: 0,
               height: "100%",
               width: `${pct}%`,
-              background: stageColor,
+              background: progressBarColor,
               borderRadius: 3,
             }}
           />
@@ -283,26 +267,32 @@ function MemberCluster({
         {/* Wrapper border-radius matches the UserAvatar inside (24px size
             → 6px corner). Without this they'd visually disagree — outer
             circle border around a rounded-square avatar. */}
-        {visible.map((m, idx) => (
-          <span
-            key={m.user.id}
-            style={{
-              marginLeft: idx === 0 ? 0 : -8,
-              border: "2px solid #2C2C2F",
-              borderRadius: 6,
-              display: "inline-flex",
-            }}
-          >
-            <UserAvatar user={m.user} size={24} />
-          </span>
-        ))}
+        {visible.map((m, idx) => {
+          const isLastChip = idx === visible.length - 1 && overflow === 0;
+          return (
+            <span
+              key={m.user.id}
+              style={{
+                marginLeft: idx === 0 ? 0 : -8,
+                border: "2px solid #2C2C2F",
+                borderRadius: 6,
+                display: "inline-flex",
+                clipPath: isLastChip
+                  ? undefined
+                  : "path('M 0 6 A 6 6 0 0 1 6 0 L 20 0 L 20 28 L 6 28 A 6 6 0 0 1 0 22 Z')",
+              }}
+            >
+              <UserAvatar user={m.user} size={24} />
+            </span>
+          );
+        })}
         {overflow > 0 && (
           <span
             className="flex items-center justify-center text-[11px] font-medium text-white"
             style={{
               marginLeft: -8,
-              width: 24,
-              height: 24,
+              width: 28,
+              height: 28,
               borderRadius: 6,
               background: "rgba(255,255,255,0.12)",
               border: "2px solid #2C2C2F",

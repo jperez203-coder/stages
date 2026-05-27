@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Plus, AlertCircle } from "lucide-react";
+import { BUCKET_PILL, bucketForDeadline } from "@/lib/task-buckets";
 
 /**
  * My Tasks card on the workspace dashboard. Phase 4a step 2.
@@ -232,8 +233,16 @@ export function MyTasksCard({
         ) : (
           <ul className="space-y-0">
             {tasks.map((task) => {
-              const color =
-                task.stage.color || pickFallbackColor(task.stage.pipelineId);
+              // Color the per-task dot + date pill by deadline-urgency
+              // bucket (NOT stage color) so this widget matches the
+              // /my-tasks page treatment for the same task. Shared
+              // BUCKET_PILL map in task-buckets.ts is the single source
+              // of truth for both surfaces.
+              const deadlineMs = task.deadline
+                ? new Date(task.deadline).getTime()
+                : null;
+              const bucket = bucketForDeadline(deadlineMs);
+              const bucketColors = BUCKET_PILL[bucket];
               const pill = describeDeadline(task.deadline);
               return (
                 <li key={task.id}>
@@ -292,7 +301,7 @@ export function MyTasksCard({
                         width: 8,
                         height: 8,
                         borderRadius: "50%",
-                        background: color,
+                        background: bucketColors.color,
                         flexShrink: 0,
                       }}
                       aria-hidden
@@ -345,8 +354,8 @@ export function MyTasksCard({
                       <span
                         className="flex-shrink-0 text-[12px] font-medium"
                         style={{
-                          background: `${color}1f`,
-                          color,
+                          background: bucketColors.bg,
+                          color: bucketColors.color,
                           padding: "4px 10px",
                           borderRadius: 6,
                         }}

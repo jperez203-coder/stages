@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Check, Plus } from "lucide-react";
 import type { TaskWithMeta } from "./types";
-import type { Bucket } from "@/lib/task-buckets";
+import { BUCKET_PILL, type Bucket } from "@/lib/task-buckets";
 import { DatePickerPopover } from "./DatePickerPopover";
 
 /**
@@ -29,27 +29,9 @@ function pickFallbackColor(seed: string): string {
   return PALETTE[Math.abs(hash) % PALETTE.length];
 }
 
-// Bucket → pill color treatment. Urgency gradient runs:
-//   red (Overdue/Today) → pink (Tomorrow) → blue (This week)
-//   → grey (Later / No date)
-// Green is RESERVED for the "Done" badge (rendered separately below) so a
-// completed row and an upcoming "Sun"/"Wed" row never look the same color
-// at a glance. Earlier rev used green for thisWeek too — fine in isolation,
-// but a screen with a Done and a thisWeek pill side-by-side was hard to
-// scan. Blue keeps the "calm, planned, not urgent" semantic without
-// colliding with completion green.
-//
-// `bg` is explicit (rgba or hex) rather than derived from color+opacity —
-// lets specific buckets use locked figma tokens without breaking the
-// shared rendering path.
-const BUCKET_PILL: Record<Bucket, { color: string; bg: string }> = {
-  overdue:  { color: "#DF1E5A", bg: "rgba(223,30,90,0.18)" },
-  today:    { color: "#DF1E5A", bg: "rgba(223,30,90,0.18)" },
-  tomorrow: { color: "#E273C1", bg: "rgba(226,115,193,0.15)" },
-  thisWeek: { color: "#108CE9", bg: "rgba(16,140,233,0.15)" },
-  later:    { color: "#979393", bg: "rgba(151,147,147,0.12)" },
-  noDate:   { color: "#979393", bg: "transparent" },
-};
+// Bucket → pill color treatment lives in src/lib/task-buckets.ts so
+// the dashboard's MyTasksCard renders identical urgency colors for the
+// same deadlines. Imported above as BUCKET_PILL.
 
 // Pill label derivation. Same calendar-day boundaries as the bucketing
 // logic; reused here for the label text rather than re-deriving.

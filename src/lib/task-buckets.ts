@@ -100,3 +100,33 @@ export function bucketMatchesChip(bucket: Bucket, chip: Chip): boolean {
   if (chip === "noDate") return bucket === "noDate";
   return false;
 }
+
+/**
+ * Shared bucket → pill color treatment. Used by:
+ *   * /my-tasks page (TaskRow per-task date pill)
+ *   * Dashboard's My Tasks card (per-task dot + date pill)
+ * so both surfaces show identical urgency colors for the same deadline.
+ *
+ * Urgency gradient runs:
+ *   red (Overdue / Today) → pink (Tomorrow) → blue (This week)
+ *   → grey (Later / No date)
+ *
+ * Green is RESERVED for the "Done" badge (rendered separately) so a
+ * completed row and an upcoming "Sun"/"Wed" row never look the same
+ * color at a glance. Earlier rev used green for thisWeek too — fine in
+ * isolation, but a screen with a Done and a thisWeek pill side-by-side
+ * was hard to scan. Blue keeps the "calm, planned, not urgent" semantic
+ * without colliding with completion green.
+ *
+ * `bg` is explicit (rgba) rather than derived from color+opacity — lets
+ * specific buckets use locked figma tokens without breaking the shared
+ * rendering path.
+ */
+export const BUCKET_PILL: Record<Bucket, { color: string; bg: string }> = {
+  overdue:  { color: "#DF1E5A", bg: "rgba(223,30,90,0.18)" },
+  today:    { color: "#DF1E5A", bg: "rgba(223,30,90,0.18)" },
+  tomorrow: { color: "#E273C1", bg: "rgba(226,115,193,0.15)" },
+  thisWeek: { color: "#108CE9", bg: "rgba(16,140,233,0.15)" },
+  later:    { color: "#979393", bg: "rgba(151,147,147,0.12)" },
+  noDate:   { color: "#979393", bg: "transparent" },
+};
