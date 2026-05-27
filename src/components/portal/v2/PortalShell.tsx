@@ -3,7 +3,10 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { HeaderProfileMenu } from "@/components/app/HeaderProfileMenu";
+import { HeaderWorkspaceSwitcher } from "@/components/app/HeaderWorkspaceSwitcher";
 import { StagesLogo } from "@/components/icons/StagesLogo";
+import { useSession } from "@/hooks/useSession";
+import { useUserContexts } from "@/hooks/useUserContexts";
 import { PortalTabs } from "./PortalTabs";
 
 /**
@@ -76,6 +79,17 @@ export function PortalShell({
   viewerIsActuallyAgencySide,
   children,
 }: Props) {
+  // Switcher data — read here so the trigger pill at the top-left of
+  // the portal chrome carries the same "#" tile + workspace identity
+  // it shows in the agency chrome. usePathname inside the switcher
+  // detects the portal URL and prefixes the label with "Client of: ".
+  // Both hooks suspend internally (status fields) so we can render
+  // without an explicit loading wrapper.
+  const session = useSession();
+  const switcherContexts = useUserContexts();
+  const switcherReady =
+    session.status === "authenticated" && switcherContexts.status === "ready";
+
   // Subtitle preference: agency workspace name > pipeline.company > nothing.
   // The workspace name reads "by <Agency>" which is the most informative
   // for the client. Falling back to the client's own company is awkward
@@ -108,6 +122,21 @@ export function PortalShell({
           gap: 16,
         }}
       >
+        {/* Workspace switcher trigger — mounted in portal chrome so the
+            "top-of-app" pill is present in both agency AND client
+            portal modes (per the slice-2 spec). usePathname inside the
+            switcher detects the /portal/[id] route and renders the
+            label as "Client of: <Agency Name>" with the agency's
+            tinted "#" tile. activeSlug is null here because portal
+            routes don't have a /w/[slug] component to match. */}
+        {switcherReady && (
+          <HeaderWorkspaceSwitcher
+            contexts={switcherContexts.contexts}
+            activeSlug={null}
+            userId={session.user.id}
+          />
+        )}
+
         {/* Pipeline identity */}
         <div
           style={{

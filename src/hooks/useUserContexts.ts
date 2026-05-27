@@ -16,7 +16,22 @@ import { useSession } from "@/hooks/useSession";
  *   * `client` (source: 'pipeline') — pipeline_memberships row with role
  *      'client'. The user has client-portal access to ONE specific pipeline,
  *      restricted to client_visible content.
+ *
+ * `stats` is populated for AGENCY contexts only (workspaces this user has
+ * agency-side access to). Used by the workspace switcher's stat subtitles
+ * (e.g. "5 teammates · 12 clients"). Counts come from 3 batched queries
+ * aggregated client-side; see fetchWorkspaceStats below. Pure client
+ * contexts leave `stats` undefined — clients don't see agency stats.
  */
+export type WorkspaceStats = {
+  /** Distinct users with workspace_memberships role IN ('owner','admin','member') */
+  teammates: number;
+  /** Distinct users with pipeline_memberships role = 'client' across pipelines in this workspace */
+  clients: number;
+  /** Total pipelines in this workspace */
+  projects: number;
+};
+
 export type UserContext = {
   type: "agency" | "client";
   source: "workspace" | "pipeline";
@@ -29,6 +44,9 @@ export type UserContext = {
   /** Set when source === 'pipeline'. */
   pipelineId?: string;
   pipelineName?: string;
+
+  /** Set only on agency contexts after the stats batch runs. */
+  stats?: WorkspaceStats;
 };
 
 /**
@@ -153,6 +171,121 @@ export function useUserContexts(): UserContextsState {
         displayName: (profResult.data?.display_name as string | null) ?? null,
         avatarUrl: (profResult.data?.avatar_url as string | null) ?? null,
       };
+
+      // Stats batch — only for AGENCY workspaces. Three parallel queries
+      // aggregated client-side: teammate counts, project counts, distinct
+      // client counts (joined to pipelines so we can group by workspace).
+      // RLS keeps cross-workspace data out of these reads — workspace
+      // members see their workspace's rows, no others.
+      const agencyWorkspaceIds = Array.from(
+        new Set(
+          contexts
+            .filter((c) => c.type === "agency")
+            .map((c) => c.workspaceId),
+        ),
+      );
+
+      const statsByWorkspaceId = new Map<string, WorkspaceStats>();
+      if (agencyWorkspaceIds.length > 0) {
+        const [teammatesRows, projectsRows, clientsRows] = await Promise.all([
+          supabase
+            .from("workspace_memberships")
+            .select("workspace_id, user_id, role")
+            .in("workspace_id", agencyWorkspaceIds),
+          supabase
+            .from("pipelines")
+            .select("workspace_id, id")
+            .in("workspace_id", agencyWorkspaceIds),
+          supabase
+            .from("pipeline_memberships")
+            .select("user_id, pipeline:pipelines(workspace_id)")
+            .eq("role", "client"),
+        ]);
+
+        if (!active) return;
+
+        // Don't fail the whole hook on a stats error — degrade gracefully
+        // to "no subtitle" rather than blocking sign-in. Log for ops.
+        const statsErr =
+          teammatesRows.error || projectsRows.error || clientsRows.error;
+        if (statsErr) {
+          console.warn(
+            "useUserContexts stats batch failed (rendering without subtitles):",
+            statsErr.message,
+          );
+        } else {
+          for (const ws of agencyWorkspaceIds) {
+            statsByWorkspaceId.set(ws, {
+              teammates: 0,
+              clients: 0,
+              projects: 0,
+            });
+          }
+
+          // Teammates: distinct users by workspace with role IN
+          // (owner, admin, member). Counting by user_id (not row count)
+          // because someone could theoretically have multiple
+          // workspace_memberships in the same workspace via a future
+          // schema change; staying defensive.
+          const teammatesByWs = new Map<string, Set<string>>();
+          for (const row of (teammatesRows.data ?? []) as Array<{
+            workspace_id: string;
+            user_id: string;
+            role: string;
+          }>) {
+            if (!["owner", "admin", "member"].includes(row.role)) continue;
+            let set = teammatesByWs.get(row.workspace_id);
+            if (!set) {
+              set = new Set();
+              teammatesByWs.set(row.workspace_id, set);
+            }
+            set.add(row.user_id);
+          }
+          for (const [wsId, set] of teammatesByWs.entries()) {
+            const s = statsByWorkspaceId.get(wsId);
+            if (s) s.teammates = set.size;
+          }
+
+          // Projects: simple count by workspace.
+          for (const row of (projectsRows.data ?? []) as Array<{
+            workspace_id: string;
+            id: string;
+          }>) {
+            const s = statsByWorkspaceId.get(row.workspace_id);
+            if (s) s.projects++;
+          }
+
+          // Clients: distinct user_id per workspace, joined through pipelines.
+          // Cast through unknown — same pattern as the main contexts query
+          // above, since Supabase's generated row shape doesn't quite line
+          // up with the unflattened JS object shape we actually receive.
+          const clientsByWs = new Map<string, Set<string>>();
+          for (const row of (clientsRows.data ?? []) as unknown as Array<{
+            user_id: string;
+            pipeline: { workspace_id: string } | null;
+          }>) {
+            const wsId = row.pipeline?.workspace_id;
+            if (!wsId || !statsByWorkspaceId.has(wsId)) continue;
+            let set = clientsByWs.get(wsId);
+            if (!set) {
+              set = new Set();
+              clientsByWs.set(wsId, set);
+            }
+            set.add(row.user_id);
+          }
+          for (const [wsId, set] of clientsByWs.entries()) {
+            const s = statsByWorkspaceId.get(wsId);
+            if (s) s.clients = set.size;
+          }
+
+          // Attach stats back onto each agency context.
+          for (const ctx of contexts) {
+            if (ctx.type === "agency") {
+              ctx.stats = statsByWorkspaceId.get(ctx.workspaceId);
+            }
+          }
+        }
+      }
 
       setState({
         status: "ready",

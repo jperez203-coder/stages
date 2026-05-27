@@ -1,49 +1,65 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { Check, ChevronDown, Pencil, Plus, Trash2 } from "lucide-react";
-import { WorkspaceIcon } from "@/components/icons/WorkspaceIcon";
+import { StagesHashTile } from "@/components/icons/StagesHashTile";
+import { urlForContext } from "@/lib/resolveDestination";
 import { supabase } from "@/lib/supabase";
 import type { UserContext } from "@/hooks/useUserContexts";
 
 type Props = {
   /** All contexts the user has — both agency-side workspace memberships and
-   *  pipeline-level memberships. Filtered + deduplicated below to one
-   *  workspace entry per unique workspace, agency-side only. */
+   *  pipeline-level memberships (incl. client memberships). The switcher
+   *  renders agency contexts in the top panel and client memberships in the
+   *  bottom Client Portal panel. */
   contexts: UserContext[];
-  /** Slug of the workspace currently in the URL (/w/[slug]). May be null
-   *  if the user is on a route outside the /w/[slug] tree (shouldn't
-   *  happen — AppShell is only mounted inside that tree — but defensive). */
+  /** Slug of the workspace currently in the URL (/w/[slug]). May be null if
+   *  the user is on a route outside the /w/[slug] tree (e.g. inside a
+   *  /portal/[id] route — in which case the portal-mode detection below
+   *  takes over). */
   activeSlug: string | null;
   /** Current user's id, needed to write last_active_workspace_id. */
   userId: string;
 };
 
 /**
- * Workspace switcher in the AppShell header. Carries forward the legacy
- * WorkspaceSwitcher's affordances (rename, delete, create new) connected
- * to real Supabase mutations now.
+ * Workspace switcher in the AppShell header. Slice-2 redesign per the
+ * Figma reference. Two stacked panels:
  *
- *   * Switch:  click a row → write last_active_workspace_id, navigate to
- *              /w/[new-slug]. The page route remounts with the new slug.
- *   * Rename:  inline edit on the row, commits via UPDATE on workspaces.
- *              Only the `name` column changes — slug stays stable so URLs
- *              don't break (Notion/GitHub pattern).
- *   * Delete:  trash icon, confirms, runs DELETE on workspaces. Cascades
- *              to memberships/pipelines via FK. Disabled on the only
- *              remaining workspace (matches legacy guard).
- *   * Create:  routes to /onboarding/create-workspace stub (step 5
- *              builds the real form).
+ *   1. Agency panel — one row per workspace the user has agency-side
+ *      access to (deduped via dedupeAgencyContexts). Each row shows a
+ *      tinted Stages "#" tile + workspace name + stat subtitle
+ *      ("5 teammates · 12 clients" / "just you · 3 clients" / "5
+ *      teammates · 1 project" / "just you"). Existing rename / delete /
+ *      switch affordances preserved. Existing green check on the
+ *      currently active workspace preserved. "+ Create new workspace"
+ *      button at the bottom preserved.
  *
- * Per the locked plan, only AGENCY contexts appear here — clients aren't
- * really "workspaces to switch between," they're pipeline-scoped views
- * that get a different navigation surface later. Multiple agency contexts
- * for the same workspace (e.g. user is workspace-owner AND pipeline-admin
- * of one specific pipeline in that workspace) collapse to one row.
+ *   2. Client Portal panel (NEW) — only rendered when the user has at
+ *      least one client membership. Collapsible: defaults expanded when
+ *      total portal count ≤ 3, collapsed when > 3. Each row shows the
+ *      agency workspace name as the title and the pipeline name as the
+ *      subtitle. When a user is a client on multiple pipelines under
+ *      the SAME agency, those collapse to a single row (no pipeline
+ *      subtitle, since no canonical "which one" to show). Clicking
+ *      navigates via urlForContext, which already returns
+ *      /portal/[pipelineId] for client contexts. The row matching the
+ *      pipeline the user is currently inside gets a green-check
+ *      selected state, consistent with the agency panel.
+ *
+ * Trigger pill: always shows the Stages "#" tile + workspace name.
+ * In portal mode (URL matches /portal/...) the label is prefixed with
+ * "Client of: " and the tile tint hashes from the agency workspace id,
+ * not the pipeline id — so it reads as "you're a client of this
+ * agency" rather than "you're inside this pipeline."
+ *
+ * Portal-mode detection lives inline via usePathname() to avoid
+ * changing AppShell's prop contract.
  */
 export function HeaderWorkspaceSwitcher({ contexts, activeSlug, userId }: Props) {
   const router = useRouter();
+  const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -64,25 +80,62 @@ export function HeaderWorkspaceSwitcher({ contexts, activeSlug, userId }: Props)
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
-  // Deduplicate to one entry per workspace, agency contexts only. When the
-  // user has multiple agency contexts for the same workspace, prefer the
-  // workspace-membership context (broader access) over the pipeline-level
-  // one — same precedence as resolveDestination.ts.
+  // Agency rows (deduped). Client contexts handled separately below.
   const workspaces = dedupeAgencyContexts(contexts);
-  const active = workspaces.find((w) => w.workspaceSlug === activeSlug);
+  const activeAgencyCtx = workspaces.find((w) => w.workspaceSlug === activeSlug);
   const onlyOneWorkspace = workspaces.length <= 1;
-
-  // Tier-A defense-in-depth (2026-05-26). AppShell already hides this
-  // entire switcher when the caller has zero agency contexts (A1), so
-  // in practice the "Create new workspace" item won't even render for
-  // a pure client. But if a future refactor ever exposes the switcher
-  // to a non-agency user via some other path, this local check stops
-  // the dropdown from offering them the create-workspace affordance.
-  // Independent of AppShell's gate by design — both layers evaluate to
-  // the same answer for the same input, but neither relies on the other.
   const hasAnyAgencyContext = contexts.some((c) => c.type === "agency");
 
-  const labelForButton = active?.workspaceName ?? "Workspace";
+  // Portal-mode detection: when the current route is /portal/[pipelineId],
+  // figure out which client context owns that pipeline so we can prefix
+  // the trigger pill with the agency name + tint the tile from the agency
+  // workspace id (NOT the pipeline id — the spec calls for hashing on the
+  // agency, since that's the identity the client recognizes).
+  const portalPipelineMatch = pathname?.match(/^\/portal\/([^/]+)/);
+  const activePortalPipelineId = portalPipelineMatch
+    ? portalPipelineMatch[1]
+    : null;
+  const clientContexts = useMemo(
+    () => contexts.filter((c) => c.type === "client"),
+    [contexts],
+  );
+  const activeClientCtx = activePortalPipelineId
+    ? clientContexts.find((c) => c.pipelineId === activePortalPipelineId)
+    : null;
+
+  // Group client contexts by agency workspace. One row per agency. If
+  // the user is a client on multiple pipelines under the same agency,
+  // those collapse to a single row whose label hides the pipeline name
+  // (no canonical "which one" — we lack per-pipeline last-visited
+  // tracking today). Clicking such a row navigates to the first
+  // pipeline in the group — documented v1 behavior; revisit when we
+  // ship last_active_pipeline_id per-user-per-workspace.
+  const clientGroups = useMemo(() => groupClientByAgency(clientContexts), [
+    clientContexts,
+  ]);
+
+  // Client Portal section collapse default: expanded when ≤ 3 portals,
+  // collapsed when > 3 (per spec). The chevron is always present.
+  const [portalSectionOpen, setPortalSectionOpen] = useState(
+    clientGroups.length <= 3,
+  );
+  // Re-sync the default when the user's memberships change underfoot
+  // (sign-in / accept-invite / context refresh). Re-running the effect
+  // only when group COUNT changes — not contents — so the user's manual
+  // toggle isn't yanked back to default on every render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    setPortalSectionOpen(clientGroups.length <= 3);
+  }, [clientGroups.length]);
+
+  // Trigger pill identity. In portal mode it's "Client of: AgencyName"
+  // with the agency's tint. Falls back to agency identity otherwise.
+  const triggerWorkspaceId = activeClientCtx
+    ? activeClientCtx.workspaceId
+    : activeAgencyCtx?.workspaceId ?? "fallback";
+  const triggerLabel = activeClientCtx
+    ? `Client of: ${activeClientCtx.workspaceName}`
+    : activeAgencyCtx?.workspaceName ?? "Workspace";
 
   const startEdit = (ctx: UserContext) => {
     setEditingId(ctx.workspaceId);
@@ -97,9 +150,6 @@ export function HeaderWorkspaceSwitcher({ contexts, activeSlug, userId }: Props)
     }
     setBusyId(editingId);
     const newName = editValue.trim();
-    // Only updating `name`. Slug stays stable so URLs don't break — same
-    // pattern as Notion/GitHub. If we ever want "rename also changes slug,"
-    // it'd be opt-in via a separate UI affordance.
     const { error } = await supabase
       .from("workspaces")
       .update({ name: newName })
@@ -108,33 +158,14 @@ export function HeaderWorkspaceSwitcher({ contexts, activeSlug, userId }: Props)
     setEditingId(null);
     setEditValue("");
     if (error) {
-      // Surface to the console for now. Toast UX comes in a later phase
-      // (the in-memory app's Toast component lives below the AppShell).
       console.error("Workspace rename failed:", error.message);
       return;
     }
-    // Refresh contexts on next render — easiest way is router.refresh() so
-    // useUserContexts refetches. (Without this, the dropdown shows the
-    // stale name until the user reloads.)
     router.refresh();
   };
 
   const switchTo = (ctx: UserContext) => {
     setOpen(false);
-    // Persist last-active. Use .then() (NOT `void`) — supabase-js's
-    // PostgrestBuilder is lazy: the HTTP request only fires once something
-    // subscribes via await or .then(). `void` evaluates the builder and
-    // discards it without subscribing, so the request never leaves the
-    // browser. Bug originally caused Phase F writes to silently no-op.
-    //
-    // We don't await — last_active is a UX hint, not authoritative — so
-    // the navigation isn't blocked on the write. But we do log on error
-    // so future silent failures are visible in the console.
-    // `.select()` returns the affected rows so we can detect silent denials
-    // (0 rows + no error) — what RLS does when its USING clause excludes a
-    // row. For this specific call path it's theoretically impossible (the
-    // policy is `id = auth.uid()` and we pass our own userId), but the
-    // warning catches future regressions if the policy ever tightens.
     supabase
       .from("profiles")
       .update({ last_active_workspace_id: ctx.workspaceId })
@@ -153,6 +184,13 @@ export function HeaderWorkspaceSwitcher({ contexts, activeSlug, userId }: Props)
         }
       });
     router.push(`/w/${ctx.workspaceSlug}`);
+  };
+
+  const switchToPortal = (ctx: UserContext) => {
+    setOpen(false);
+    // urlForContext returns /portal/[pipelineId] for client contexts —
+    // single source of truth shared with the /select-workspace flow.
+    router.push(urlForContext(ctx));
   };
 
   const deleteWorkspace = async (ctx: UserContext) => {
@@ -174,9 +212,6 @@ export function HeaderWorkspaceSwitcher({ contexts, activeSlug, userId }: Props)
       return;
     }
     setOpen(false);
-    // After deleting, push to /select-workspace so the post-login router
-    // re-resolves where to send the user (probably their other workspace,
-    // or /onboarding/create-workspace if this was their last).
     router.push("/select-workspace");
   };
 
@@ -194,17 +229,17 @@ export function HeaderWorkspaceSwitcher({ contexts, activeSlug, userId }: Props)
           background: "#212124",
           border: "1px solid #36363A",
           borderRadius: "8px",
-          padding: "0 12px",
-          height: "36px",
+          padding: "0 10px 0 4px",
+          height: "40px",
           color: "#E4E4E7",
           cursor: "pointer",
         }}
         onMouseEnter={(e) => (e.currentTarget.style.background = "#28282C")}
         onMouseLeave={(e) => (e.currentTarget.style.background = "#212124")}
       >
-        <WorkspaceIcon size={16} />
-        <span className="text-[13px] font-semibold max-w-[160px] truncate">
-          {labelForButton}
+        <StagesHashTile workspaceId={triggerWorkspaceId} size={28} />
+        <span className="text-[13px] font-semibold max-w-[200px] truncate">
+          {triggerLabel}
         </span>
         <ChevronDown
           size={12}
@@ -218,138 +253,275 @@ export function HeaderWorkspaceSwitcher({ contexts, activeSlug, userId }: Props)
 
       {open && (
         <div
-          className="absolute left-0 mt-2 fade-in z-50"
-          style={{
-            width: "300px",
-            background: "#1A1A1A",
-            border: "1px solid #36363A",
-            borderRadius: "10px",
-            boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
-          }}
+          className="absolute left-0 mt-2 fade-in z-50 space-y-2"
+          style={{ width: "320px" }}
         >
-          <div className="px-3 py-2.5 border-b border-zinc-800">
-            <div className="text-[11px] uppercase tracking-wider text-zinc-500">
-              Your workspaces
-            </div>
-          </div>
-
-          <div className="py-1 max-h-[280px] overflow-y-auto scrollbar-thin">
-            {workspaces.map((ctx) => {
-              const isActive = ctx.workspaceSlug === activeSlug;
-              const isEditing = editingId === ctx.workspaceId;
-              const isBusy = busyId === ctx.workspaceId;
-              return (
-                <div key={ctx.workspaceId} className="px-2 group">
-                  {isEditing ? (
-                    <div className="flex items-center gap-2 px-2 py-2">
-                      <WorkspaceIcon size={18} />
-                      <input
-                        autoFocus
-                        value={editValue}
-                        onChange={(e) => setEditValue(e.target.value)}
-                        onBlur={commitEdit}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") commitEdit();
-                          if (e.key === "Escape") {
-                            setEditingId(null);
-                            setEditValue("");
-                          }
-                        }}
-                        className="flex-1 text-[13px] font-medium"
-                        style={{
-                          background: "#212124",
-                          border: "1px solid #108CE9",
-                          borderRadius: "6px",
-                          padding: "4px 8px",
-                          color: "#E4E4E7",
-                          outline: "none",
-                        }}
-                        disabled={isBusy}
-                      />
-                    </div>
-                  ) : (
-                    <div
-                      className="flex items-center gap-2 px-2 py-2 rounded-md cursor-pointer transition-colors"
-                      style={{ background: isActive ? "#212124" : "transparent" }}
-                      onMouseEnter={(e) => {
-                        if (!isActive) e.currentTarget.style.background = "#1F1F22";
-                      }}
-                      onMouseLeave={(e) => {
-                        if (!isActive) e.currentTarget.style.background = "transparent";
-                      }}
-                      onClick={() => switchTo(ctx)}
-                    >
-                      <WorkspaceIcon size={18} />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-[13px] font-medium truncate">
-                          {ctx.workspaceName}
-                        </div>
-                        <div className="text-[11px] text-zinc-500 capitalize mt-0.5">
-                          {ctx.role}
-                        </div>
-                      </div>
-                      {isActive && (
-                        <Check
-                          size={13}
-                          className="flex-shrink-0"
-                          style={{ color: "#3BA5EE" }}
-                          strokeWidth={3}
+          {/* ── Agency panel ────────────────────────────────────────── */}
+          <div
+            style={{
+              background: "#1A1A1A",
+              border: "1px solid #36363A",
+              borderRadius: "12px",
+              boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
+              overflow: "hidden",
+            }}
+          >
+            <div className="py-1 max-h-[340px] overflow-y-auto scrollbar-thin">
+              {workspaces.map((ctx) => {
+                const isActive =
+                  !activeClientCtx && ctx.workspaceSlug === activeSlug;
+                const isEditing = editingId === ctx.workspaceId;
+                const isBusy = busyId === ctx.workspaceId;
+                return (
+                  <div key={ctx.workspaceId} className="px-2 group">
+                    {isEditing ? (
+                      <div className="flex items-center gap-3 px-2 py-2">
+                        <StagesHashTile
+                          workspaceId={ctx.workspaceId}
+                          size={40}
                         />
-                      )}
-                      <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            startEdit(ctx);
+                        <input
+                          autoFocus
+                          value={editValue}
+                          onChange={(e) => setEditValue(e.target.value)}
+                          onBlur={commitEdit}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") commitEdit();
+                            if (e.key === "Escape") {
+                              setEditingId(null);
+                              setEditValue("");
+                            }
                           }}
-                          className="p-1 rounded hover:bg-zinc-700 text-zinc-500 hover:text-zinc-200"
-                          title="Rename"
+                          className="flex-1 text-[13px] font-medium"
+                          style={{
+                            background: "#212124",
+                            border: "1px solid #108CE9",
+                            borderRadius: "6px",
+                            padding: "6px 10px",
+                            color: "#E4E4E7",
+                            outline: "none",
+                          }}
                           disabled={isBusy}
-                        >
-                          <Pencil size={11} />
-                        </button>
-                        {!onlyOneWorkspace && (
+                        />
+                      </div>
+                    ) : (
+                      <div
+                        className="flex items-center gap-3 px-2 py-2 rounded-lg cursor-pointer transition-colors"
+                        style={{
+                          background: isActive ? "#212939" : "transparent",
+                        }}
+                        onMouseEnter={(e) => {
+                          if (!isActive)
+                            e.currentTarget.style.background = "#1F1F22";
+                        }}
+                        onMouseLeave={(e) => {
+                          if (!isActive)
+                            e.currentTarget.style.background = "transparent";
+                        }}
+                        onClick={() => switchTo(ctx)}
+                      >
+                        <StagesHashTile
+                          workspaceId={ctx.workspaceId}
+                          size={40}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[14px] font-semibold truncate text-white">
+                            {ctx.workspaceName}
+                          </div>
+                          <div className="text-[12px] text-zinc-500 truncate mt-0.5">
+                            {formatAgencyStats(ctx.stats)}
+                          </div>
+                        </div>
+                        {isActive && (
+                          <Check
+                            size={16}
+                            className="flex-shrink-0"
+                            style={{ color: "#15B981" }}
+                            strokeWidth={3}
+                          />
+                        )}
+                        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5">
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              void deleteWorkspace(ctx);
+                              startEdit(ctx);
                             }}
-                            className="p-1 rounded hover:bg-zinc-700 text-zinc-500 hover:text-rose-400"
-                            title="Delete workspace"
+                            className="p-1 rounded hover:bg-zinc-700 text-zinc-500 hover:text-zinc-200"
+                            title="Rename"
                             disabled={isBusy}
                           >
-                            <Trash2 size={11} />
+                            <Pencil size={11} />
                           </button>
-                        )}
+                          {!onlyOneWorkspace && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void deleteWorkspace(ctx);
+                              }}
+                              className="p-1 rounded hover:bg-zinc-700 text-zinc-500 hover:text-rose-400"
+                              title="Delete workspace"
+                              disabled={isBusy}
+                            >
+                              <Trash2 size={11} />
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                    )}
+                  </div>
+                );
+              })}
 
-            {workspaces.length === 0 && (
-              <div className="px-4 py-3 text-[12px] text-zinc-600 text-center">
-                No workspaces yet.
+              {workspaces.length === 0 && (
+                <div className="px-4 py-3 text-[12px] text-zinc-600 text-center">
+                  No workspaces yet.
+                </div>
+              )}
+            </div>
+
+            {hasAnyAgencyContext && (
+              <div className="border-t border-zinc-800 p-1">
+                <button
+                  onClick={createNew}
+                  className="w-full flex items-center gap-3 px-2 py-2 rounded-lg text-[13px] font-medium text-zinc-400 transition-colors"
+                  onMouseEnter={(e) =>
+                    (e.currentTarget.style.background = "#1F1F22")
+                  }
+                  onMouseLeave={(e) =>
+                    (e.currentTarget.style.background = "transparent")
+                  }
+                  style={{ background: "transparent" }}
+                >
+                  <div
+                    style={{
+                      width: 40,
+                      height: 40,
+                      borderRadius: 10,
+                      border: "1px solid #36363A",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Plus size={18} className="text-zinc-500" />
+                  </div>
+                  New workspace
+                </button>
               </div>
             )}
           </div>
 
-          {/* "Create new workspace" — gated on hasAnyAgencyContext as
-              the second layer of the Tier-A boundary fix (2026-05-26).
-              AppShell hides this whole switcher for pure clients (A1);
-              this guard is the defense-in-depth pair (A3). */}
-          {hasAnyAgencyContext && (
-            <div className="border-t border-zinc-800 p-1">
+          {/* ── Client Portal panel (only when user has ≥1 client) ── */}
+          {clientGroups.length > 0 && (
+            <div
+              style={{
+                background: "#1A1A1A",
+                border: "1px solid #36363A",
+                borderRadius: "12px",
+                boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
+                overflow: "hidden",
+              }}
+            >
               <button
-                onClick={createNew}
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-[13px] font-medium text-zinc-300 transition-colors"
-                onMouseEnter={(e) => (e.currentTarget.style.background = "#1F1F22")}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                onClick={() => setPortalSectionOpen((v) => !v)}
+                className="w-full flex items-center gap-3 px-3 py-2.5 transition-colors"
+                onMouseEnter={(e) =>
+                  (e.currentTarget.style.background = "#1F1F22")
+                }
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.background = "transparent")
+                }
                 style={{ background: "transparent" }}
+                aria-expanded={portalSectionOpen}
               >
-                <Plus size={14} strokeWidth={2.5} /> Create new workspace
+                {/* Header tile tints from the FIRST agency, which is a
+                    reasonable identity for the section as a whole. The
+                    row-level tiles below tint from each individual
+                    agency, so this is just a visual anchor. */}
+                <StagesHashTile
+                  workspaceId={clientGroups[0]!.workspaceId}
+                  size={40}
+                />
+                <div className="flex-1 min-w-0 text-left">
+                  <div className="text-[14px] font-semibold text-white truncate">
+                    Client Portal
+                  </div>
+                  <div className="text-[12px] text-zinc-500 truncate mt-0.5">
+                    {clientGroups.length === 1
+                      ? "1 portal"
+                      : `${clientGroups.length} portals`}
+                  </div>
+                </div>
+                <ChevronDown
+                  size={14}
+                  className="text-zinc-500 flex-shrink-0"
+                  style={{
+                    transform: portalSectionOpen ? "rotate(180deg)" : "none",
+                    transition: "transform 0.15s",
+                  }}
+                />
               </button>
+
+              {portalSectionOpen && (
+                <div className="border-t border-zinc-800 py-1">
+                  {clientGroups.map((group) => {
+                    const isActive =
+                      !!activeClientCtx &&
+                      group.contexts.some(
+                        (c) => c.pipelineId === activeClientCtx.pipelineId,
+                      );
+                    // First context in the group is the navigation target
+                    // when there are multiple pipelines under one agency
+                    // (no per-pipeline last-visited tracking today).
+                    const target = group.contexts[0]!;
+                    const showPipelineSubtitle = group.contexts.length === 1;
+                    return (
+                      <div key={group.workspaceId} className="px-2">
+                        <div
+                          className="flex items-center gap-3 px-2 py-2 rounded-lg cursor-pointer transition-colors"
+                          style={{
+                            background: isActive ? "#212939" : "transparent",
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!isActive)
+                              e.currentTarget.style.background = "#1F1F22";
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!isActive)
+                              e.currentTarget.style.background = "transparent";
+                          }}
+                          onClick={() => switchToPortal(target)}
+                        >
+                          <StagesHashTile
+                            workspaceId={group.workspaceId}
+                            size={40}
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="text-[14px] font-semibold truncate text-white">
+                              {group.workspaceName}
+                            </div>
+                            {showPipelineSubtitle &&
+                              target.pipelineName && (
+                                <div className="text-[12px] text-zinc-500 truncate mt-0.5">
+                                  {target.pipelineName}
+                                </div>
+                              )}
+                          </div>
+                          {isActive && (
+                            <Check
+                              size={16}
+                              className="flex-shrink-0"
+                              style={{ color: "#15B981" }}
+                              strokeWidth={3}
+                            />
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -357,6 +529,8 @@ export function HeaderWorkspaceSwitcher({ contexts, activeSlug, userId }: Props)
     </div>
   );
 }
+
+// ─── Helpers ──────────────────────────────────────────────────────────────
 
 /** Deduplicate contexts to one entry per workspace, agency-side only. */
 function dedupeAgencyContexts(contexts: UserContext[]): UserContext[] {
@@ -375,4 +549,59 @@ function dedupeAgencyContexts(contexts: UserContext[]): UserContext[] {
     }
   }
   return Array.from(seen.values());
+}
+
+type ClientGroup = {
+  workspaceId: string;
+  workspaceName: string;
+  contexts: UserContext[];
+};
+
+/** Group client contexts by agency workspace. Same agency, multiple
+ *  pipelines → one row whose label hides the pipeline name (no per-
+ *  pipeline last-visited yet, so we lack a canonical "which one"). */
+function groupClientByAgency(contexts: UserContext[]): ClientGroup[] {
+  const seen = new Map<string, ClientGroup>();
+  for (const ctx of contexts) {
+    if (ctx.type !== "client") continue;
+    let group = seen.get(ctx.workspaceId);
+    if (!group) {
+      group = {
+        workspaceId: ctx.workspaceId,
+        workspaceName: ctx.workspaceName,
+        contexts: [],
+      };
+      seen.set(ctx.workspaceId, group);
+    }
+    group.contexts.push(ctx);
+  }
+  return Array.from(seen.values());
+}
+
+/**
+ * Stat-subtitle text per the Figma. Branching rules:
+ *   teammates 1 (solo)   → "just you"
+ *   teammates N          → "N teammates"
+ *   + clients M > 0      → "... · M clients"
+ *   + projects K > 0 AND clients === 0 → "... · K project(s)"
+ *
+ * The "projects only when no clients" rule matches the Figma's Personal
+ * workspace ("5 teammates · 1 project") vs. Acme agency ("5 teammates ·
+ * 12 clients") — the second appendix is whichever dimension better
+ * captures what the workspace is FOR. If both stats are zero we drop
+ * the suffix entirely and show only the teammate phrase.
+ */
+function formatAgencyStats(stats: UserContext["stats"]): string {
+  if (!stats) return "";
+  const teammatePhrase =
+    stats.teammates === 1 ? "just you" : `${stats.teammates} teammates`;
+  if (stats.clients > 0) {
+    const plural = stats.clients === 1 ? "client" : "clients";
+    return `${teammatePhrase} · ${stats.clients} ${plural}`;
+  }
+  if (stats.projects > 0) {
+    const plural = stats.projects === 1 ? "project" : "projects";
+    return `${teammatePhrase} · ${stats.projects} ${plural}`;
+  }
+  return teammatePhrase;
 }
