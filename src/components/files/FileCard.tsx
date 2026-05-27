@@ -247,45 +247,50 @@ export function FileCard({
           >
             {displayLabel}
           </div>
+          {/* Type label, with the task source appended inline when this
+              row is task-scoped (replaces the earlier standalone pill
+              that took its own row). The "· from <title>" suffix is a
+              smaller, more muted font so the primary type label still
+              reads as the dominant token, and the whole line truncates
+              with ellipsis so a long task title never wraps or grows
+              the card. */}
           <div
+            title={
+              row.task_id && row.task_title
+                ? `${typeText} · from ${row.task_title}`
+                : undefined
+            }
             style={{
+              display: "flex",
+              alignItems: "baseline",
+              gap: 0,
+              minWidth: 0,
               fontSize: 12,
               fontWeight: 500,
               color: "rgba(255,255,255,0.5)",
               lineHeight: 1.2,
+              overflow: "hidden",
+              whiteSpace: "nowrap",
             }}
           >
-            {typeText}
+            <span style={{ flexShrink: 0 }}>{typeText}</span>
+            {row.task_id && row.task_title && (
+              <span
+                style={{
+                  marginLeft: 6,
+                  fontSize: 11,
+                  fontWeight: 400,
+                  color: "rgba(255,255,255,0.35)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  minWidth: 0,
+                }}
+              >
+                · from {row.task_title}
+              </span>
+            )}
           </div>
-          {/* Task-scoped badge — rendered when this row was attached
-              from a task panel (task_id set + the joined title was
-              resolvable). Subtle pill in the brand blue, sized to sit
-              under the type label without dominating the card. Absent
-              on pipeline-scoped rows (task_id null) — those keep the
-              card chrome unchanged. */}
-          {row.task_id && row.task_title && (
-            <div
-              title={`Attached from task: ${row.task_title}`}
-              style={{
-                marginTop: 4,
-                alignSelf: "flex-start",
-                maxWidth: "100%",
-                padding: "2px 8px",
-                background: "rgba(16,140,233,0.12)",
-                color: "#108CE9",
-                border: "1px solid rgba(16,140,233,0.25)",
-                borderRadius: 999,
-                fontSize: 11,
-                fontWeight: 600,
-                lineHeight: 1.2,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              from: {row.task_title}
-            </div>
-          )}
         </div>
 
         {/* Actions cluster — top-right, always visible (per click).
