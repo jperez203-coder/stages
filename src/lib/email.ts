@@ -20,7 +20,7 @@ const FROM_ADDRESS = "Stages <invites@trystages.com>";
 // First-pipeline welcome email comes from the founder personally, not the
 // transactional invites@ address — it's a "hit reply and talk to me" email,
 // so the from-address must be a real, monitored inbox.
-const FIRST_PIPELINE_FROM_ADDRESS = "Jordan <jordan@hello.trystages.com>";
+const FIRST_PIPELINE_FROM_ADDRESS = "Jordan <jordan@trystages.com>";
 
 export type InviteEmailPayload = {
   to: string;
