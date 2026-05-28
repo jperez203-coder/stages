@@ -184,6 +184,7 @@ export async function POST(request: Request) {
     workspaceName: (wsResult.data as { name: string }).name,
     inviterName,
     acceptUrl,
+    logoUrl: `${origin}/stages-logo.png`,
   });
 
   if (!sendResult.ok) {

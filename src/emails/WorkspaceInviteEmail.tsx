@@ -5,6 +5,7 @@ import {
   Head,
   Hr,
   Html,
+  Img,
   Link,
   Preview,
   Section,
@@ -33,6 +34,9 @@ type Props = {
   inviterName: string;
   role: "admin" | "member";
   acceptUrl: string;
+  /** Absolute URL to the PNG logo (built from request origin in the send
+   *  route). PNG, not SVG — Gmail/Outlook strip SVG <img>. */
+  logoUrl: string;
 };
 
 export function WorkspaceInviteEmail({
@@ -40,6 +44,7 @@ export function WorkspaceInviteEmail({
   inviterName,
   role,
   acceptUrl,
+  logoUrl,
 }: Props) {
   const roleLabel = role === "admin" ? "an admin" : "a member";
   const previewText = `${inviterName} invited you to ${workspaceName} on Stages`;
@@ -51,7 +56,15 @@ export function WorkspaceInviteEmail({
       <Body style={body}>
         <Container style={container}>
           <Section style={header}>
-            <Text style={wordmark}>Stages</Text>
+            {/* PNG (not SVG — email clients strip SVG <img>). alt="Stages"
+                keeps the brand name visible in image-blocking clients. */}
+            <Img
+              src={logoUrl}
+              alt="Stages"
+              width={110}
+              height={34}
+              style={{ display: "block" }}
+            />
           </Section>
 
           <Section style={content}>
@@ -114,14 +127,6 @@ const container: React.CSSProperties = {
 const header: React.CSSProperties = {
   padding: "20px 32px",
   borderBottom: "1px solid #e4e4e7",
-};
-
-const wordmark: React.CSSProperties = {
-  fontSize: "18px",
-  fontWeight: 700,
-  color: "#212124",
-  letterSpacing: "-0.01em",
-  margin: 0,
 };
 
 const content: React.CSSProperties = {

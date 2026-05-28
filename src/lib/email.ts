@@ -30,6 +30,8 @@ export type InviteEmailPayload = {
   role: "admin" | "member";
   /** Fully-qualified URL the recipient clicks to land on /accept-invite/[token]. */
   acceptUrl: string;
+  /** Absolute URL to the PNG logo (origin-built in the route). */
+  logoUrl: string;
 };
 
 export type EmailResult = { ok: true } | { ok: false; error: string };
@@ -72,6 +74,7 @@ export async function sendInviteEmail(
         inviterName: payload.inviterName,
         role: payload.role,
         acceptUrl: payload.acceptUrl,
+        logoUrl: payload.logoUrl,
       }),
     });
 
@@ -113,6 +116,8 @@ export type ClientInviteEmailPayload = {
    * this; this function just embeds it in the email body.
    */
   acceptUrl: string;
+  /** Absolute URL to the PNG logo (origin-built in the route). */
+  logoUrl: string;
 };
 
 /**
@@ -152,6 +157,7 @@ export async function sendClientInviteEmail(
         workspaceName: payload.workspaceName,
         inviterName: payload.inviterName,
         acceptUrl: payload.acceptUrl,
+        logoUrl: payload.logoUrl,
       }),
     });
 

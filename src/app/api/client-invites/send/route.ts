@@ -211,6 +211,7 @@ export async function POST(request: Request) {
     workspaceName,
     inviterName,
     acceptUrl: magicLinkUrl,
+    logoUrl: `${origin}/stages-logo.png`,
   });
 
   if (!sendResult.ok) {

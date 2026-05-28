@@ -89,6 +89,7 @@ export async function POST(request: Request) {
     workspaceName: parsed.workspaceName,
     inviterName: parsed.inviterName,
     acceptUrl,
+    logoUrl: `${origin}/stages-logo.png`,
   });
 
   if (!sendResult.ok) {
