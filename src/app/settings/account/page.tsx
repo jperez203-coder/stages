@@ -2,7 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertCircle, Eye, EyeOff, Lock, X, Zap } from "lucide-react";
+import {
+  AlertCircle,
+  Check,
+  Eye,
+  EyeOff,
+  Lock,
+  User,
+  X,
+  Zap,
+} from "lucide-react";
 import { GoogleGLogo } from "@/components/auth/GoogleGLogo";
 import { useSession } from "@/hooks/useSession";
 import {
@@ -161,6 +170,13 @@ export default function AccountSettingsPage() {
           />
         )}
 
+      {/* Profile section — stacked ABOVE Linked accounts per the
+          stacked-section pattern already established by the
+          add-password banner. Linked accounts is scoped to auth
+          methods; profile metadata (the user's name) is orthogonal
+          and deserves its own card. */}
+      <ProfileSection userId={session.user.id} />
+
       <LinkedAccountsSection
         userEmail={session.user.email ?? ""}
         state={linked}
@@ -169,6 +185,163 @@ export default function AccountSettingsPage() {
         passwordCardRef={passwordCardRef}
       />
     </div>
+  );
+}
+
+// ─── Profile section ───────────────────────────────────────────────────────
+
+/**
+ * Display-name editor. Reads + writes profiles.display_name for the
+ * signed-in user. Pre-fills from the current row on mount; Save is
+ * disabled until the trimmed input differs from the current value
+ * (avoids no-op writes + makes "is there something to save?" obvious).
+ *
+ * No DB migration is needed for this surface — profiles.display_name
+ * exists and is already read by every display site. We're just giving
+ * users a way to fill it in (or change it) without touching SQL.
+ */
+function ProfileSection({ userId }: { userId: string }) {
+  const [savedName, setSavedName] = useState<string>("");
+  const [fullName, setFullName] = useState<string>("");
+  const [loadStatus, setLoadStatus] = useState<"loading" | "ready" | "error">(
+    "loading",
+  );
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [justSaved, setJustSaved] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("display_name")
+        .eq("id", userId)
+        .maybeSingle();
+      if (!active) return;
+      if (error) {
+        setLoadError(error.message);
+        setLoadStatus("error");
+        return;
+      }
+      const current = ((data?.display_name as string | null) ?? "").trim();
+      setSavedName(current);
+      setFullName(current);
+      setLoadStatus("ready");
+    })();
+    return () => {
+      active = false;
+    };
+  }, [userId]);
+
+  // Clear the "Saved" indicator on the next keystroke so users get
+  // honest "you have unsaved changes" feedback after editing post-save.
+  useEffect(() => {
+    if (!justSaved) return;
+    if (fullName.trim() !== savedName) setJustSaved(false);
+  }, [fullName, savedName, justSaved]);
+
+  const trimmedName = fullName.trim();
+  const canSave =
+    loadStatus === "ready" &&
+    trimmedName.length > 0 &&
+    trimmedName !== savedName &&
+    !saving;
+
+  const save = async () => {
+    if (!canSave) return;
+    setSaving(true);
+    setSaveError(null);
+    const { error } = await supabase
+      .from("profiles")
+      .update({ display_name: trimmedName })
+      .eq("id", userId);
+    setSaving(false);
+    if (error) {
+      setSaveError(error.message);
+      return;
+    }
+    setSavedName(trimmedName);
+    setJustSaved(true);
+  };
+
+  return (
+    <section className="mb-8">
+      <h2 className="text-[15px] font-semibold mb-1">Profile</h2>
+      <p className="text-[13px] text-zinc-500 mb-4">
+        The name your teammates and clients see across Stages.
+      </p>
+
+      <div className="panel-card p-5">
+        {loadStatus === "loading" && (
+          <div className="text-[13px] text-zinc-500">Loading…</div>
+        )}
+
+        {loadStatus === "error" && (
+          <div className="flex items-start gap-2 text-[13px] text-stages-red">
+            <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
+            <span>Couldn&apos;t load your profile: {loadError}</span>
+          </div>
+        )}
+
+        {loadStatus === "ready" && (
+          <>
+            <label className="block mb-1.5">
+              <span className="text-[13px] text-zinc-400">Full name</span>
+            </label>
+            <div className="relative mb-4">
+              <User
+                size={14}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500"
+              />
+              <input
+                type="text"
+                autoComplete="name"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="Casey Smith"
+                className="field"
+                style={{ paddingLeft: "40px" }}
+                disabled={saving}
+              />
+            </div>
+
+            {saveError && (
+              <div className="mb-3 p-3 rounded-lg border border-stages-red/40 bg-stages-red/10 text-[13px] text-stages-red leading-snug flex items-start gap-2">
+                <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
+                <span>{saveError}</span>
+              </div>
+            )}
+
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={save}
+                disabled={!canSave}
+                className="btn-primary justify-center"
+              >
+                {saving ? "Saving…" : "Save"}
+              </button>
+              {justSaved && (
+                <span
+                  className="inline-flex items-center gap-1 text-[12px] text-stages-green"
+                  // Small fade-in; sits next to the button so the
+                  // success state is local rather than a floating toast.
+                  // Doesn't auto-disappear — clears on the next edit so
+                  // the user sees "saved → unsaved changes" honestly.
+                  role="status"
+                  aria-live="polite"
+                >
+                  <Check size={12} strokeWidth={3} />
+                  Saved
+                </span>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </section>
   );
 }
 

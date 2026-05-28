@@ -10,6 +10,7 @@ import {
   LogIn,
   LogOut,
   Mail,
+  User,
   UserCheck,
   UserPlus,
 } from "lucide-react";
@@ -464,7 +465,13 @@ function PendingAuthenticatedBranch({
     return <AlreadyMemberState preview={preview} />;
   }
 
-  return <ReadyToAcceptState preview={preview} token={token} />;
+  return (
+    <ReadyToAcceptState
+      preview={preview}
+      token={token}
+      currentUserId={currentUserId}
+    />
+  );
 }
 
 // ─── Wrong account ──────────────────────────────────────────────────────────
@@ -570,17 +577,70 @@ function AlreadyMemberState({ preview }: { preview: ClientInvitePreview }) {
 function ReadyToAcceptState({
   preview,
   token,
+  currentUserId,
 }: {
   preview: ClientInvitePreview;
   token: string;
+  currentUserId: string;
 }) {
   const router = useRouter();
   const [accepting, setAccepting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Full name capture. Pre-filled from the user's existing
+  // profiles.display_name if they already had one (e.g., signed up
+  // through agency signup previously, or accepted another client
+  // invite already). Still required — they can edit or accept as-is,
+  // but can't leave it blank.
+  const [fullName, setFullName] = useState("");
+  const [nameLoaded, setNameLoaded] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      const { data } = await supabase
+        .from("profiles")
+        .select("display_name")
+        .eq("id", currentUserId)
+        .maybeSingle();
+      if (!active) return;
+      setFullName(((data?.display_name as string | null) ?? "").trim());
+      setNameLoaded(true);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [currentUserId]);
+
+  const trimmedName = fullName.trim();
+  const canAccept = nameLoaded && trimmedName.length > 0 && !accepting;
 
   const accept = async () => {
+    if (!canAccept) {
+      if (trimmedName.length === 0) {
+        setError("Please enter your full name.");
+      }
+      return;
+    }
     setAccepting(true);
     setError(null);
+    // Write the profile's display_name BEFORE accepting the invite.
+    // The accept_client_invite RPC reads display_name to write the
+    // activity_events.actor_name snapshot ("X joined the project"),
+    // so the name being in place first ensures the activity feed
+    // shows the real name on the very first event — not a fallback
+    // like "unknown" that we'd then have to live with forever in the
+    // append-only activity log.
+    const { error: profileErr } = await supabase
+      .from("profiles")
+      .update({ display_name: trimmedName })
+      .eq("id", currentUserId);
+    if (profileErr) {
+      setError(
+        `Couldn't save your name (${profileErr.message}). Please try again.`,
+      );
+      setAccepting(false);
+      return;
+    }
     const { data, error: rpcError } = await supabase.rpc(
       "accept_client_invite",
       { invite_token: token },
@@ -633,6 +693,32 @@ function ReadyToAcceptState({
           .
         </p>
 
+        {/* Full name — required. Pre-filled from existing display_name
+            when set, so a returning user (second invite) doesn't have
+            to re-type. Disabled until the initial fetch completes so
+            we don't show an empty box that then jumps to the name. */}
+        <div className="text-left mb-4">
+          <label className="block mb-1.5">
+            <span className="text-[13px] text-zinc-400">Your full name</span>
+          </label>
+          <div className="relative">
+            <User
+              size={14}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500"
+            />
+            <input
+              type="text"
+              autoComplete="name"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              placeholder="Casey Smith"
+              className="field"
+              style={{ paddingLeft: "40px" }}
+              disabled={accepting || !nameLoaded}
+            />
+          </div>
+        </div>
+
         {error && (
           <div className="mb-4 p-3 rounded-lg border border-stages-red/40 bg-stages-red/10 text-[13px] text-stages-red leading-snug flex items-start gap-2">
             <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
@@ -642,7 +728,7 @@ function ReadyToAcceptState({
 
         <button
           onClick={accept}
-          disabled={accepting}
+          disabled={!canAccept}
           className="btn-primary w-full justify-center"
         >
           <Check size={14} />

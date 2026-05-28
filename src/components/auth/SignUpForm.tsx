@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
-import { AtSign, Eye, EyeOff, Lock } from "lucide-react";
+import { AtSign, Eye, EyeOff, Lock, User } from "lucide-react";
 import { GoogleGLogo } from "@/components/auth/GoogleGLogo";
 import { supabase } from "@/lib/supabase";
 import { signInWithGoogle } from "@/lib/auth";
@@ -35,6 +35,7 @@ export function SignUpForm({ onSignedUp, lockedEmail }: Props) {
   // When lockedEmail is provided we initialize state from it AND ignore
   // input changes (the input is readOnly, but defensive against React
   // controlled-input gotchas).
+  const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState(lockedEmail ?? "");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -45,12 +46,28 @@ export function SignUpForm({ onSignedUp, lockedEmail }: Props) {
 
   const passwordTooShort = password.length > 0 && password.length < MIN_PASSWORD_LENGTH;
   const isLocked = !!lockedEmail;
+  // Required-name check uses the TRIMMED value so a string of spaces
+  // doesn't pass. The same trim is applied before sending to Supabase
+  // so what lands in raw_user_meta_data matches what gated submission.
+  const trimmedName = fullName.trim();
   const canSubmit =
-    email.includes("@") && password.length >= MIN_PASSWORD_LENGTH && !submitting;
+    trimmedName.length > 0 &&
+    email.includes("@") &&
+    password.length >= MIN_PASSWORD_LENGTH &&
+    !submitting;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canSubmit) return;
+    if (!canSubmit) {
+      // Friendly inline error specifically for the empty-name case so the
+      // user knows WHY the disabled button is disabled — the email +
+      // password fields have their own visible hints, but name needs its
+      // own.
+      if (trimmedName.length === 0) {
+        setError("Please enter your full name.");
+      }
+      return;
+    }
     setSubmitting(true);
     setError(null);
     // emailRedirectTo lands the confirmation-link click on /auth/signin,
@@ -59,11 +76,19 @@ export function SignUpForm({ onSignedUp, lockedEmail }: Props) {
     // swaps the panel to the AuthSuccessState. Without this, Supabase
     // sends the user to the project's default Site URL (/) which renders
     // the old in-memory LoginScreen — confusing.
+    //
+    // `options.data.full_name` lands in auth.users.raw_user_meta_data,
+    // which the existing handle_new_user() trigger (20260510120000)
+    // reads to populate profiles.display_name on insert — same path
+    // Google OAuth signups already use. So this single change closes
+    // the email+password signup hole without any trigger or RPC
+    // changes.
     const { data, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
       options: {
         emailRedirectTo: `${window.location.origin}/auth/signin`,
+        data: { full_name: trimmedName },
       },
     });
     if (signUpError) {
@@ -125,6 +150,32 @@ export function SignUpForm({ onSignedUp, lockedEmail }: Props) {
 
   return (
     <form onSubmit={submit}>
+      {/* Full name — required. Lands in auth.users.raw_user_meta_data via
+          options.data.full_name; the handle_new_user() trigger picks it
+          up and writes profiles.display_name on insert. autoFocus moved
+          here from email since this is now the first field the user
+          types regardless of whether email is locked. */}
+      <label className="block mb-1.5">
+        <span className="text-[13px] text-zinc-400">Full name</span>
+      </label>
+      <div className="relative mb-4">
+        <User
+          size={14}
+          className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500"
+        />
+        <input
+          autoFocus
+          type="text"
+          autoComplete="name"
+          value={fullName}
+          onChange={(e) => setFullName(e.target.value)}
+          placeholder="Casey Smith"
+          className="field"
+          style={{ paddingLeft: "40px" }}
+          disabled={submitting}
+        />
+      </div>
+
       <label className="block mb-1.5">
         <span className="text-[13px] text-zinc-400">Email</span>
       </label>
@@ -134,9 +185,6 @@ export function SignUpForm({ onSignedUp, lockedEmail }: Props) {
           className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500"
         />
         <input
-          // autoFocus shifts to the password field when locked — the email
-          // is fixed so there's nothing to type here.
-          autoFocus={!isLocked}
           type="email"
           autoComplete="email"
           value={email}
@@ -164,9 +212,6 @@ export function SignUpForm({ onSignedUp, lockedEmail }: Props) {
           className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500"
         />
         <input
-          // When email is locked, password is the first thing the user
-          // actually types — give it focus instead.
-          autoFocus={isLocked}
           type={showPassword ? "text" : "password"}
           autoComplete="new-password"
           value={password}

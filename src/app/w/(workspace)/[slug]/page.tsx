@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { DashboardGreeting } from "@/components/dashboard/DashboardGreeting";
+import { MissingNameBanner } from "@/components/dashboard/MissingNameBanner";
 import { MyTasksCard } from "@/components/dashboard/MyTasksCard";
 import { ActivityCard } from "@/components/dashboard/ActivityCard";
 // TeamChatStrip import intentionally removed — see deferred-not-deleted
@@ -571,6 +572,13 @@ export default async function WorkspaceDashboardPage({
     <div className="dotted-grid flex-1 px-6 sm:px-12 py-6">
       <div className="max-w-[1600px] mx-auto">
         <DashboardGreeting firstName={firstName} />
+
+        {/* Missing-name nudge — renders only when display_name is
+            null/empty AND the user hasn't dismissed it in this
+            browser. Client component; the dismissal logic lives
+            there. Passes the server-fetched displayName so the
+            client side doesn't need a second query. */}
+        <MissingNameBanner displayName={displayName} />
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-7">
           <MyTasksCard
