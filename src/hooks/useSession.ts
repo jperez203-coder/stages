@@ -40,12 +40,6 @@ export function useSession(): SessionState {
     });
 
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
-      console.log(
-        "[diag] useSession event:",
-        event,
-        "user:",
-        session?.user?.id ?? null,
-      );
       setState(
         session?.user
           ? { status: "authenticated", user: session.user }

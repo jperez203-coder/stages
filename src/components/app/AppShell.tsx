@@ -36,7 +36,6 @@ type Props = {
  * inside the views, at which point switching will change displayed data.
  */
 export function AppShell({ children }: Props) {
-  console.count("[diag] AppShell render");
   const session = useSession();
   const contexts = useUserContexts();
   const router = useRouter();

@@ -39,7 +39,6 @@ import { supabase } from "@/lib/supabase";
  * their agency dashboard.
  */
 export function WorkspaceSelector() {
-  console.count("[diag] WorkspaceSelector render");
   const router = useRouter();
   const searchParams = useSearchParams();
   const session = useSession();
