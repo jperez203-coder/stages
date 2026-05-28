@@ -17,6 +17,10 @@ import { WorkspaceInviteEmail } from "@/emails/WorkspaceInviteEmail";
  */
 
 const FROM_ADDRESS = "Stages <invites@trystages.com>";
+// First-pipeline welcome email comes from the founder personally, not the
+// transactional invites@ address — it's a "hit reply and talk to me" email,
+// so the from-address must be a real, monitored inbox.
+const FIRST_PIPELINE_FROM_ADDRESS = "Jordan <jordan@hello.trystages.com>";
 
 export type InviteEmailPayload = {
   to: string;
@@ -166,4 +170,86 @@ export async function sendClientInviteEmail(
     console.error("[email] Resend SDK threw (client invite):", message);
     return { ok: false, error: message };
   }
+}
+
+// ─── First-pipeline welcome (founder outreach) ────────────────────────────────
+
+export type FirstPipelineEmailPayload = {
+  to: string;
+  /** display_name snapshot from the queue row. First word is used as the
+   *  greeting name; null/empty falls back to "there". */
+  name: string | null;
+};
+
+/**
+ * Sends the personal "you created your first pipeline" founder email. Sent by
+ * the Vercel-Cron-driven /api/cron/send-pending-emails route, ~30 min after
+ * the queue row was enqueued by the on_first_owner_pipeline DB trigger.
+ *
+ * Differs from the invite emails: plain `text:` body (no React template),
+ * from the founder's monitored address, conversational tone. Same graceful
+ * no-key fallback + structured result so the caller can decide whether to
+ * mark the queue row sent.
+ */
+export async function sendFirstPipelineEmail(
+  payload: FirstPipelineEmailPayload,
+): Promise<EmailResult> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const firstName = firstNameOrThere(payload.name);
+
+  if (!apiKey) {
+    console.warn(
+      [
+        "[email] RESEND_API_KEY missing — first-pipeline email NOT sent.",
+        `  To:   ${payload.to}`,
+        `  Name: ${payload.name ?? "(none)"}`,
+      ].join("\n"),
+    );
+    return { ok: true };
+  }
+
+  const subject = "Hey from Stages, how'd it go?";
+  const text = [
+    `Hey ${firstName},`,
+    "",
+    "This is Jordan from the founding team at Stages.",
+    "",
+    "Just saw you created your first pipeline! how'd it go? Anything feel clunky or confusing?",
+    "",
+    "I read every reply personally, so hit me back with anything anytime.",
+    "",
+    "— Jordan Perez",
+  ].join("\n");
+
+  try {
+    const resend = new Resend(apiKey);
+    const result = await resend.emails.send({
+      from: FIRST_PIPELINE_FROM_ADDRESS,
+      to: payload.to,
+      subject,
+      text,
+    });
+
+    if (result.error) {
+      console.error("[email] Resend first-pipeline send failed:", result.error);
+      return { ok: false, error: result.error.message };
+    }
+
+    console.log(
+      `[email] Sent first-pipeline email to ${payload.to} via Resend ` +
+        `(id: ${result.data?.id ?? "unknown"})`,
+    );
+    return { ok: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[email] Resend SDK threw (first-pipeline):", message);
+    return { ok: false, error: message };
+  }
+}
+
+/** First word of a display name, or "there" when null/blank. */
+function firstNameOrThere(name: string | null): string {
+  if (!name) return "there";
+  const first = name.trim().split(/\s+/)[0];
+  return first.length > 0 ? first : "there";
 }
