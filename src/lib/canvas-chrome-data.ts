@@ -59,6 +59,10 @@ export type CanvasChromeData = {
   overflowMembers: number;
   /** Workspace owner OR pipeline owner/admin → can edit, see +Invite, etc. */
   canEditPipeline: boolean;
+  /** WORKSPACE-level owner/admin specifically (NOT pipeline-level admins).
+   *  Narrower than canEditPipeline — gates the "View as client" rail icon,
+   *  which is a workspace-operator affordance, not a per-pipeline edit. */
+  isWorkspaceOwnerOrAdmin: boolean;
 };
 
 /**
@@ -197,5 +201,6 @@ export async function fetchCanvasChromeData(
     visibleMembers,
     overflowMembers,
     canEditPipeline,
+    isWorkspaceOwnerOrAdmin,
   };
 }

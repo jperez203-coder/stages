@@ -112,6 +112,7 @@ export function PipelineChromeShell({
             pipelineId={chrome.pipeline.id}
             members={chrome.members}
             canEditPipeline={chrome.canEditPipeline}
+            isWorkspaceOwnerOrAdmin={chrome.isWorkspaceOwnerOrAdmin}
           />
           <div className="flex-1 flex flex-col min-w-0 relative">
             {children}

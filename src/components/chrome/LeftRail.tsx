@@ -49,6 +49,10 @@ type Props = {
   members: ChromeMember[];
   /** Workspace owner OR pipeline owner/admin. Gates the +invite icon. */
   canEditPipeline: boolean;
+  /** WORKSPACE-level owner/admin specifically (NOT pipeline-level admins).
+   *  Gates the "View as client" icon — previewing the client portal is a
+   *  workspace-operator affordance, narrower than canEditPipeline. */
+  isWorkspaceOwnerOrAdmin: boolean;
 };
 
 export function LeftRail({
@@ -56,6 +60,7 @@ export function LeftRail({
   pipelineId,
   members,
   canEditPipeline,
+  isWorkspaceOwnerOrAdmin,
 }: Props) {
   const [membersOpen, setMembersOpen] = useState(false);
   const pathname = usePathname();
@@ -143,12 +148,24 @@ export function LeftRail({
           </RailIcon>
         )}
 
-        {/* External link / view-as-client — COMING SOON (4c, client
-            portal). When the portal ships, this becomes the "open in
-            client view" link. */}
-        <RailIcon label="View as client — coming soon" comingSoon>
-          <ExternalLink size={18} />
-        </RailIcon>
+        {/* View as client — LIVE. Workspace owners/admins only (a
+            workspace-operator affordance, NOT pipeline-level admins or
+            members — hence isWorkspaceOwnerOrAdmin, which is narrower
+            than canEditPipeline). Opens the pipeline's client portal in
+            a new tab so the agency's canvas tab stays put; the portal
+            route accepts workspace owner/admin (portal layout gate
+            widened in 20260614120000 / commit 20a6aa1) and shows the
+            "Viewing as client → Switch to agency view" banner there. */}
+        {isWorkspaceOwnerOrAdmin && (
+          <RailIcon
+            label="View as client"
+            onClick={() =>
+              window.open(`/portal/${pipelineId}`, "_blank", "noopener")
+            }
+          >
+            <ExternalLink size={18} />
+          </RailIcon>
+        )}
       </aside>
 
       {membersOpen && (
