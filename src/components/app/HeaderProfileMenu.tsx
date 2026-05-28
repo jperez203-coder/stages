@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
-import { LogOut, Settings } from "lucide-react";
+import { useParams, useRouter } from "next/navigation";
+import { LogOut, Settings, Users } from "lucide-react";
+import { useUserContexts } from "@/hooks/useUserContexts";
 import { supabase } from "@/lib/supabase";
 
 // Trimmed from a 7-color brand subset to the 4 LETTER colors that
@@ -58,9 +59,33 @@ export function HeaderProfileMenu({
   // pattern from the prior hardcoded version.
   const triggerFontSize = Math.round(size * 0.4);
   const router = useRouter();
+  const params = useParams();
+  const contexts = useUserContexts();
   const [open, setOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
+
+  // "Team & members" → the workspace-scoped team-settings page, which is
+  // gated (server + RLS) to workspace owners/admins. Mirror that gate here
+  // so the item only renders for users who can actually use it.
+  //
+  // Slug comes from the URL (useParams). The item is only meaningful
+  // inside a /w/[slug] route, so on portal / account / auth / select-
+  // workspace routes (which have no `slug` param) activeSlug is null and
+  // the item doesn't render. Role check mirrors canCreatePipeline in
+  // AppShell.tsx: a source === "workspace" owner/admin context for the
+  // active slug (a pipeline-level admin does NOT get workspace settings).
+  const activeSlug = typeof params?.slug === "string" ? params.slug : null;
+  const canManageTeam =
+    activeSlug !== null &&
+    contexts.status === "ready" &&
+    contexts.contexts.some(
+      (c) =>
+        c.workspaceSlug === activeSlug &&
+        c.type === "agency" &&
+        c.source === "workspace" &&
+        (c.role === "owner" || c.role === "admin"),
+    );
 
   useEffect(() => {
     if (!open) return;
@@ -152,6 +177,22 @@ export function HeaderProfileMenu({
             </div>
           </div>
           <div className="p-1">
+            {canManageTeam && (
+              <button
+                onClick={() => {
+                  setOpen(false);
+                  router.push(`/w/${activeSlug}/settings/team`);
+                }}
+                disabled={signingOut}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-[13px] font-medium text-zinc-300 transition-colors"
+                onMouseEnter={(e) => (e.currentTarget.style.background = "#1F1F22")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                style={{ background: "transparent" }}
+              >
+                <Users size={14} />
+                Team & members
+              </button>
+            )}
             <button
               onClick={() => {
                 setOpen(false);
