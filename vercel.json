@@ -1,5 +1,0 @@
-{
-  "crons": [
-    { "path": "/api/cron/send-pending-emails", "schedule": "*/5 * * * *" }
-  ]
-}
