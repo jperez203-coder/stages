@@ -70,8 +70,8 @@ export function WorkspaceInviteEmail({
           <Section style={content}>
             <Text style={heading}>You&apos;re invited</Text>
             <Text style={para}>
-              <strong>{inviterName}</strong> invited you to{" "}
-              <strong>{workspaceName}</strong> on Stages as {roleLabel}.
+              <strong>{inviterName}</strong> invited you to collaborate on
+              Stages as {roleLabel}.
             </Text>
 
             <Section style={buttonWrapper}>

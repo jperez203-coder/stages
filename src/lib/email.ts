@@ -154,7 +154,6 @@ export async function sendClientInviteEmail(
       subject,
       react: createElement(ClientInviteEmail, {
         pipelineName: payload.pipelineName,
-        workspaceName: payload.workspaceName,
         inviterName: payload.inviterName,
         acceptUrl: payload.acceptUrl,
         logoUrl: payload.logoUrl,

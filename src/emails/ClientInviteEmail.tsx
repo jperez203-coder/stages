@@ -32,7 +32,6 @@ import {
 
 type Props = {
   pipelineName: string;
-  workspaceName: string;
   inviterName: string;
   acceptUrl: string;
   /** Absolute URL to the PNG logo (built from request origin in the send
@@ -42,7 +41,6 @@ type Props = {
 
 export function ClientInviteEmail({
   pipelineName,
-  workspaceName,
   inviterName,
   acceptUrl,
   logoUrl,
@@ -70,9 +68,8 @@ export function ClientInviteEmail({
           <Section style={content}>
             <Text style={heading}>You&apos;re invited</Text>
             <Text style={para}>
-              <strong>{inviterName}</strong> from{" "}
-              <strong>{workspaceName}</strong> invited you to view your
-              project on Stages:
+              <strong>{inviterName}</strong> invited you to your project on
+              Stages:
             </Text>
             <Text style={pipelineLine}>
               <strong>{pipelineName}</strong>
@@ -98,11 +95,11 @@ export function ClientInviteEmail({
 
           <Section style={footer}>
             <Text style={footerText}>
-              You received this email because {inviterName} at {workspaceName}{" "}
-              gave you access to view {pipelineName} on Stages. Stages is the
-              shared workspace where your project lives — you&apos;ll be able
-              to follow progress, see deliverables, and message the team
-              directly.
+              You received this email because {inviterName} gave you access
+              to{" "}
+              {pipelineName} on Stages. Stages is the shared workspace where
+              your project lives — you&apos;ll be able to follow progress, see
+              deliverables, and message the team directly.
             </Text>
             <Text style={footerText}>
               If you weren&apos;t expecting this, you can safely ignore the
