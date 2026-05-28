@@ -9,6 +9,7 @@ import {
 } from "react";
 import { EyeOff } from "lucide-react";
 import { UserAvatar } from "@/components/UserAvatar";
+import { resolveDisplayName } from "@/lib/display-name";
 import type { ChatChannel, ChatMessage } from "@/lib/chat-data";
 
 /**
@@ -319,7 +320,13 @@ function MessageRow({
    *  true — both required. */
   showInternalBadge: boolean;
 }) {
-  const displayName = resolveAuthorName(message.author);
+  // Two distinct missing cases: author === null means the user record
+  // is gone (FK set null on delete) → "Deleted user"; author present
+  // but unnamed → "Pending member" (handled by the shared util's
+  // whenMissing). Keep that distinction at the call site.
+  const displayName = message.author
+    ? resolveDisplayName(message.author, { whenMissing: "Pending member" })
+    : "Deleted user";
   const avatarUser = message.author ?? {
     // Author was deleted (FK set null) — render a neutral placeholder.
     // Matches the convention used elsewhere when a user record is gone.
@@ -683,26 +690,6 @@ function SendGlyph({ size = 14 }: { size?: number }) {
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────
-
-/**
- * Walk the same fallback chain as the assignee picker + members popover:
- *   display_name → email-prefix → "Pending member"
- * Keeps the chat surface consistent with the rest of the app for users
- * who don't have a display_name set yet.
- */
-function resolveAuthorName(
-  author: { display_name: string | null; email: string | null } | null,
-): string {
-  if (!author) return "Deleted user";
-  const name = author.display_name?.trim();
-  if (name) return name;
-  const email = author.email?.trim();
-  if (email) {
-    const atIdx = email.indexOf("@");
-    return atIdx > 0 ? email.slice(0, atIdx) : email;
-  }
-  return "Pending member";
-}
 
 /**
  * Per-message timestamp. Same-day → "9:42 AM"; older → "Mar 14 · 9:42 AM".

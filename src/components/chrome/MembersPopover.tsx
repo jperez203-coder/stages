@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
 import { UserAvatar } from "@/components/UserAvatar";
+import { resolveDisplayName } from "@/lib/display-name";
 import type { ChromeMember } from "@/lib/canvas-chrome-data";
 
 /**
@@ -212,7 +213,9 @@ export function MembersPopover({
 // ─── Single member row ──────────────────────────────────────────────────
 
 function MemberRow({ member }: { member: ChromeMember }) {
-  const displayName = resolveMemberDisplay(member.user);
+  const displayName = resolveDisplayName(member.user, {
+    whenMissing: "Pending member",
+  });
   // Role label — capitalize the lowercase schema value for display.
   const roleLabel = member.role.charAt(0).toUpperCase() + member.role.slice(1);
 
@@ -255,41 +258,3 @@ function MemberRow({ member }: { member: ChromeMember }) {
   );
 }
 
-// ─── Display-name resolution ────────────────────────────────────────────
-
-/**
- * Resolve the rendered name for a member, walking the same fallback
- * chain that UserAvatar uses for the initial char:
- *
- *   display_name (trimmed, non-empty)
- *     → email PREFIX (the part before '@', e.g. "jane.doe" from
- *       "jane.doe@example.com")
- *     → "Pending member" (truly nothing — defensive case for
- *       missing-profile-row / invited-but-not-onboarded scenarios)
- *
- * Per Jordan 2026-05-22: real invited-but-not-yet-onboarded users
- * have null display_name. Showing "Unknown" there looks broken in a
- * real product. Email prefix is friendly + readable + matches what
- * the avatar initial derives from (so the avatar's "J" lines up with
- * the text "jane.doe" instead of "Unknown").
- *
- * If display_name AND email are both null (schema-illegal since
- * profiles.email is NOT NULL, but defensive against RLS-filtered
- * fetches that return undefined for some user_ids), fall back to
- * "Pending member" — still bad-data signal, but more informative
- * than "Unknown". This case should only fire when something has
- * gone wrong upstream (broken profile fetch, missing profile row).
- */
-function resolveMemberDisplay(user: {
-  display_name: string | null;
-  email: string | null;
-}): string {
-  const name = user.display_name?.trim();
-  if (name) return name;
-  const email = user.email?.trim();
-  if (email) {
-    const atIdx = email.indexOf("@");
-    return atIdx > 0 ? email.slice(0, atIdx) : email;
-  }
-  return "Pending member";
-}

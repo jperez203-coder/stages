@@ -28,6 +28,7 @@ import { DatePickerPopover } from "@/components/my-tasks/DatePickerPopover";
 import { AddLinkModal } from "@/components/files/AddLinkModal";
 import { FilePreview } from "@/components/files/FilePreview";
 import { buildStoragePath } from "@/lib/build-storage-path";
+import { resolveDisplayName } from "@/lib/display-name";
 import { triggerFileDownload } from "@/lib/file-signed-url";
 import { normalizeUrl } from "@/lib/normalize-url";
 import { supabase } from "@/lib/supabase";
@@ -1014,7 +1015,14 @@ function AssigneeField({
     [members],
   );
 
-  const displayName = resolveDisplayName(member);
+  // member === null → no assignee → null → "Unassigned" (handled by
+  // the `?? "Unassigned"` below). A member with neither name nor email
+  // also resolves to "Unassigned" via whenMissing, matching the prior
+  // local helper's null-terminal behavior. (Unreachable in practice —
+  // every member row carries an email.)
+  const displayName = member
+    ? resolveDisplayName(member.user, { whenMissing: "Unassigned" })
+    : null;
 
   return (
     <div ref={wrapperRef} style={{ position: "relative" }}>
@@ -1153,7 +1161,7 @@ function AssigneeField({
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {resolveDisplayName(m) ?? "Pending member"}
+                  {resolveDisplayName(m.user, { whenMissing: "Pending member" })}
                 </div>
                 <div
                   style={{
@@ -1213,18 +1221,6 @@ function PickerRow({
       {children}
     </button>
   );
-}
-
-function resolveDisplayName(m: ChromeMember | null): string | null {
-  if (!m) return null;
-  const name = m.user.display_name?.trim();
-  if (name) return name;
-  const email = m.user.email;
-  if (email) {
-    const prefix = email.split("@")[0];
-    if (prefix) return prefix;
-  }
-  return null;
 }
 
 // ─── Deadline field (reuses DatePickerPopover) ────────────────────────────

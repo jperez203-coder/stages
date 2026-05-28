@@ -562,8 +562,19 @@ export default async function WorkspaceDashboardPage({
   // "Jordan Perez"). Force first-letter capitalization at render time
   // so the greeting is consistent regardless of what's in the DB. No
   // backfill needed; handles all existing rows.
+  //
+  // Null-safe resolution chain (PIECE 5 follow-up):
+  //   1. display_name's first word — the normal case
+  //   2. email local-part — when display_name is null/empty (e.g. an
+  //      email+password user who signed up before the name field
+  //      existed and hasn't filled it in yet)
+  //   3. null → DashboardGreeting renders "Hey there! 👋"
+  // Never produces "Hey ! 👋" — an empty firstWord collapses to null.
   const displayName = profileRes.data?.display_name ?? null;
-  const firstWord = displayName ? displayName.trim().split(/\s+/)[0] : "";
+  const greetingBase =
+    (displayName && displayName.trim() ? displayName.trim() : null) ??
+    (user.email ? user.email.split("@")[0] : null);
+  const firstWord = greetingBase ? greetingBase.split(/\s+/)[0] : "";
   const firstName = firstWord
     ? firstWord[0].toUpperCase() + firstWord.slice(1)
     : null;

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { Download, Eye, EyeOff, Loader2, Trash2 } from "lucide-react";
 import { UserAvatar } from "@/components/UserAvatar";
+import { resolveDisplayName } from "@/lib/display-name";
 import { createPipelineFileSignedUrl } from "@/lib/file-signed-url";
 import { normalizeUrl } from "@/lib/normalize-url";
 import type { FileItem } from "@/lib/pipeline-files-data";
@@ -114,6 +115,17 @@ export function FileCard({
   const isImage = row.kind === "file" && mime.startsWith("image/");
   const isPdf = row.kind === "file" && mime === "application/pdf";
   const isPreviewable = isImage || isPdf;
+
+  // Uploader label. Name-resolution delegated to the shared util
+  // (display_name → email local-part → "Pending member"); the "(You)"
+  // suffix is presentation logic specific to this card, kept here.
+  const uploaderBaseName = resolveDisplayName(row.added_by_profile, {
+    whenMissing: "Pending member",
+  });
+  const uploaderName =
+    row.added_by && row.added_by === viewerId
+      ? `${uploaderBaseName} (You)`
+      : uploaderBaseName;
 
   // ── Lazy thumbnail load via IntersectionObserver ────────────────────
   useEffect(() => {
@@ -531,7 +543,7 @@ export function FileCard({
               minWidth: 0,
             }}
           >
-            {resolveUploaderName(row, viewerId)}
+            {uploaderName}
           </span>
           <span
             style={{
@@ -744,18 +756,6 @@ function resolveLabel(row: FileItem): string {
   if (row.file_name) return row.file_name;
   if (row.kind === "url" && row.url) return row.url;
   return "Untitled";
-}
-
-function resolveUploaderName(row: FileItem, viewerId: string): string {
-  const profile = row.added_by_profile;
-  // "Pending member" fallback when profile unavailable — matches the
-  // chat surface's resolveAuthorName chain.
-  const base = profile?.display_name?.trim()
-    ? profile.display_name
-    : profile?.email?.trim()
-      ? profile.email.split("@")[0]
-      : "Pending member";
-  return row.added_by && row.added_by === viewerId ? `${base} (You)` : base;
 }
 
 function relativeTime(iso: string): string {
