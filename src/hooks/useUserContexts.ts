@@ -100,6 +100,8 @@ export function useUserContexts(): UserContextsState {
   const [state, setState] = useState<UserContextsState>({ status: "loading" });
 
   useEffect(() => {
+    console.count("[diag] useUserContexts effect fired");
+    console.log("[diag] useUserContexts userId:", userId);
     if (!userId) {
       // Not authenticated — keep waiting. SessionState's loading window
       // is short; once it flips to anonymous OR authenticated, this re-runs.
