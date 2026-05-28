@@ -400,7 +400,20 @@ export function ChatBody({
         .single();
 
       if (error || !inserted) {
-        console.error("[chat] send failed:", error);
+        // Log PostgrestError fields explicitly — logging the bare object
+        // serializes to {} because its fields aren't enumerable own-props,
+        // which hid the real RLS-rejection reason during the agency-admin
+        // chat bug (2026-06-15).
+        console.error(
+          "[chat] send failed:",
+          error?.message,
+          "code:",
+          error?.code,
+          "details:",
+          error?.details,
+          "hint:",
+          error?.hint,
+        );
         setMessagesByChannel((prev) => ({
           ...prev,
           [channelId]: (prev[channelId] ?? []).filter(
