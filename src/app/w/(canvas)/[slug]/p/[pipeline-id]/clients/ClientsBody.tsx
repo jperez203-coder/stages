@@ -76,7 +76,7 @@ export function ClientsBody() {
           (c) =>
             (c.source === "workspace" &&
               c.workspaceSlug === slug &&
-              c.role === "owner") ||
+              (c.role === "owner" || c.role === "admin")) ||
             (c.source === "pipeline" &&
               c.pipelineId === pipelineId &&
               (c.role === "owner" || c.role === "admin")),

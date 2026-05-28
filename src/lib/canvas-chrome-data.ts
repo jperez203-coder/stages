@@ -107,11 +107,16 @@ export async function fetchCanvasChromeData(
   if (!pipelineRes.data) return null;
 
   // ── canEditPipeline (mirrors the can_edit_pipeline SQL helper) ────
-  const isWorkspaceOwner = workspaceRole === "owner";
+  // Workspace owners AND admins get blanket edit access to every pipeline
+  // in the workspace (matches the widened can_edit_pipeline SQL helper —
+  // see 20260614120000_admin_pipeline_access_and_create_perms.sql). Plain
+  // members still need an explicit pipeline_memberships owner/admin row.
+  const isWorkspaceOwnerOrAdmin =
+    workspaceRole === "owner" || workspaceRole === "admin";
   const pipelineRole = pipelineMembershipRes.data?.role ?? null;
   const isPipelineOwnerOrAdmin =
     pipelineRole === "owner" || pipelineRole === "admin";
-  const canEditPipeline = isWorkspaceOwner || isPipelineOwnerOrAdmin;
+  const canEditPipeline = isWorkspaceOwnerOrAdmin || isPipelineOwnerOrAdmin;
 
   // ── Batched profiles fetch keyed by member user_ids ───────────────
   const membershipRows = membershipsRes.data ?? [];

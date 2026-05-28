@@ -68,12 +68,14 @@ export default async function PortalLayout({
     .eq("user_id", user.id)
     .maybeSingle();
 
-  // ── Access check: step 2 — fallback to workspace owner ────────────────
-  // Only run when step 1 missed. Workspace owners can preview any of
-  // their workspace's pipelines via the portal even without an explicit
-  // pipeline_memberships row (intent: the eventual "view as client"
-  // affordance from the LeftRail).
-  let workspaceOwnerForPipeline = false;
+  // ── Access check: step 2 — fallback to workspace owner/admin ──────────
+  // Only run when step 1 missed. Workspace owners AND admins can preview
+  // any of their workspace's pipelines via the portal even without an
+  // explicit pipeline_memberships row (intent: the eventual "view as
+  // client" affordance from the LeftRail). Matches the widened
+  // is_pipeline_agency_member SQL helper — see
+  // 20260614120000_admin_pipeline_access_and_create_perms.sql.
+  let workspaceOwnerOrAdminForPipeline = false;
   if (!pipelineMembershipRes.data) {
     const pipelineRes = await supabase
       .from("pipelines")
@@ -86,27 +88,27 @@ export default async function PortalLayout({
         .select("role")
         .eq("workspace_id", pipelineRes.data.workspace_id)
         .eq("user_id", user.id)
-        .eq("role", "owner")
+        .in("role", ["owner", "admin"])
         .maybeSingle();
       if (wsOwnerRes.data) {
-        workspaceOwnerForPipeline = true;
+        workspaceOwnerOrAdminForPipeline = true;
       }
     }
   }
 
-  if (!pipelineMembershipRes.data && !workspaceOwnerForPipeline) {
+  if (!pipelineMembershipRes.data && !workspaceOwnerOrAdminForPipeline) {
     redirect("/");
   }
 
   // ── viewerIsActuallyAgencySide — for the banner only ─────────────────
   // True when the viewer has actual agency-side standing on this
-  // pipeline (workspace_owner OR pipeline_memberships role in
+  // pipeline (workspace owner/admin OR pipeline_memberships role in
   // owner/admin/member). Drives the "Viewing as client" banner in
   // PortalShell. Does NOT cross over to PortalChatBody — the chat
   // surface always renders client-mode regardless of this value.
   const pipelineRole = pipelineMembershipRes.data?.role ?? null;
   const viewerIsActuallyAgencySide =
-    workspaceOwnerForPipeline ||
+    workspaceOwnerOrAdminForPipeline ||
     pipelineRole === "owner" ||
     pipelineRole === "admin" ||
     pipelineRole === "member";
