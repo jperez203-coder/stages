@@ -174,33 +174,46 @@ export function HeaderWorkspaceSwitcher({
     : activeAgencyCtx?.workspaceId ?? "fallback";
 
   // Portal-mode pill: resolve the agency owner's profiles.company_name
-  // for the workspace this client is viewing, falling back to the
-  // workspace name when null. Self-contained (no useUserContexts
-  // contract change) — one small fetch per portal navigation. RLS
-  // already allows a client to read the workspace owner's profile via
-  // the shared-pipeline branch of profiles_select.
+  // for the pipeline this client is viewing, falling back to the
+  // workspace name when null.
+  //
+  // Why an RPC instead of a direct query: workspace_memberships_select
+  // is gated on is_workspace_member(workspace_id), and clients have no
+  // workspace_memberships row → the obvious query returns zero rows for
+  // every client. Widening that policy would leak teammate identities.
+  // pipeline_memberships_select hides other members' rows from clients
+  // for the same reason, so we can't read the owner's pipeline row
+  // either. The SECURITY DEFINER RPC
+  // `get_pipeline_workspace_owner_company` (migration
+  // 20260617120000) is the narrowest fix: it traverses the owner ladder
+  // internally and returns ONLY the owner's company_name, with an
+  // authorization guard that the caller must have a pipeline_memberships
+  // row on the requested pipeline. See the migration header for the full
+  // rationale.
+  //
+  // Keyed on pipelineId (the RPC's required input). Self-contained — no
+  // useUserContexts contract change. One small RPC per portal
+  // navigation.
   const [ownerCompanyName, setOwnerCompanyName] = useState<string | null>(
     null,
   );
   useEffect(() => {
-    const wsId = activeClientCtx?.workspaceId;
-    if (!wsId) {
+    const pipelineId = activeClientCtx?.pipelineId;
+    if (!pipelineId) {
       setOwnerCompanyName(null);
       return;
     }
     let alive = true;
     void (async () => {
-      const { data, error } = await supabase
-        .from("workspace_memberships")
-        .select("profile:profiles(company_name)")
-        .eq("workspace_id", wsId)
-        .eq("role", "owner")
-        .limit(1)
-        .maybeSingle();
+      const { data, error } = await supabase.rpc(
+        "get_pipeline_workspace_owner_company",
+        { p_id: pipelineId },
+      );
       if (!alive) return;
       if (error) {
         // Soft-fail: the pill still renders, just with the workspace
-        // name fallback. Don't block the UI on a lookup failure.
+        // name fallback. Don't block the UI on a lookup failure (e.g.
+        // network blip, migration not yet applied on this project).
         console.error(
           "[switcher] portal owner company_name lookup failed:",
           error?.message,
@@ -214,22 +227,20 @@ export function HeaderWorkspaceSwitcher({
         setOwnerCompanyName(null);
         return;
       }
-      // PostgREST nested-select returns either an object or an array of
-      // objects depending on FK cardinality + supabase-js inference;
-      // handle both defensively.
-      const rel = data?.profile as unknown as
-        | { company_name: string | null }
-        | { company_name: string | null }[]
-        | null;
-      const resolved = Array.isArray(rel)
-        ? rel[0]?.company_name ?? null
-        : rel?.company_name ?? null;
-      setOwnerCompanyName(resolved);
+      // RPC returns `text` (the owner's company_name) or null. The two
+      // null cases — caller has no membership on this pipeline vs. owner
+      // has no company_name yet — are deliberately indistinguishable
+      // (authorization status doesn't leak through the return). Both
+      // collapse to the workspaceName fallback below, which is the
+      // correct UX in either case.
+      setOwnerCompanyName(
+        typeof data === "string" && data.length > 0 ? data : null,
+      );
     })();
     return () => {
       alive = false;
     };
-  }, [activeClientCtx?.workspaceId]);
+  }, [activeClientCtx?.pipelineId]);
 
   const triggerLabel = activeClientCtx
     ? `Client of: ${ownerCompanyName ?? activeClientCtx.workspaceName}`
