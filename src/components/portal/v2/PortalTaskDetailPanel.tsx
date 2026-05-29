@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { Check, X } from "lucide-react";
 import type { VisibleTask } from "@/lib/portal-canvas-data";
 import { PortalChecklistSection } from "./PortalChecklistSection";
+import { PortalTaskAttachmentsSection } from "./PortalTaskAttachmentsSection";
 
 /**
  * Slim, client-mode task detail panel for the portal canvas.
@@ -46,9 +47,12 @@ import { PortalChecklistSection } from "./PortalChecklistSection";
  *   * Deadline — read-only, hidden when null
  *   * Checklist — render items + togglable checkboxes; section
  *     hidden entirely if no items (handled inside ChecklistSection)
+ *   * Attachments — client uploads files + links to their own task and
+ *     deletes their own uploads (PortalTaskAttachmentsSection). RLS
+ *     forces client_visible=true; no visibility toggle is exposed.
  *
  * NOT rendered: assignee picker, client_visible toggle, +Add sibling,
- * Delete task, stage notes / attachments / activity stubs.
+ * Delete task, stage notes / activity stubs.
  */
 
 const PANEL_WIDTH = 500;
@@ -319,6 +323,13 @@ export function PortalTaskDetailPanel({
           {/* Checklist — self-contained: lazy-fetches, renders nothing
               when empty/loading, togglable per-item for the client. */}
           <PortalChecklistSection taskId={task.id} />
+
+          {/* Attachments — client can upload files + add links to their
+              own task, and delete their own uploads. Self-contained:
+              resolves pipelineId (route) + viewerId (session) internally.
+              RLS already permits client inserts (client_visible forced
+              true). No visibility toggle; delete is own-rows-only. */}
+          <PortalTaskAttachmentsSection taskId={task.id} />
         </div>
       </aside>
     </>
