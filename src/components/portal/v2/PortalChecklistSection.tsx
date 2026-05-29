@@ -58,7 +58,16 @@ export function PortalChecklistSection({ taskId }: Props) {
       if (cancelled) return;
 
       if (error) {
-        console.error("[portal panel] checklist fetch failed:", error);
+        console.error(
+          "[portal panel] checklist fetch failed:",
+          error?.message,
+          "code:",
+          error?.code,
+          "details:",
+          error?.details,
+          "hint:",
+          error?.hint,
+        );
         setItems([]);
         setLoaded(true);
         return;
@@ -94,7 +103,16 @@ export function PortalChecklistSection({ taskId }: Props) {
         .eq("id", itemId);
 
       if (error) {
-        console.error("[portal panel] checklist toggle failed:", error);
+        console.error(
+          "[portal panel] checklist toggle failed:",
+          error?.message,
+          "code:",
+          error?.code,
+          "details:",
+          error?.details,
+          "hint:",
+          error?.hint,
+        );
         setItems(snapshot);
       }
     },

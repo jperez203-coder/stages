@@ -110,7 +110,16 @@ export function TemplatePickerModal({
 
       if (cancelled) return;
       if (error) {
-        console.error("[template-picker] fetch failed:", error);
+        console.error(
+          "[template-picker] fetch failed:",
+          error?.message,
+          "code:",
+          error?.code,
+          "details:",
+          error?.details,
+          "hint:",
+          error?.hint,
+        );
         setFetchError(error.message);
         setStatus("error");
         return;

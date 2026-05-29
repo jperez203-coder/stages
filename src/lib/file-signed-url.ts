@@ -69,7 +69,10 @@ export async function createPipelineFileSignedUrl(
     .createSignedUrl(storagePath, expiresInSeconds, options);
 
   if (error) {
-    console.error("[file-signed-url] createSignedUrl failed:", error);
+    console.error(
+      "[file-signed-url] createSignedUrl failed:",
+      error?.message,
+    );
     return { signedUrl: null, error };
   }
 

@@ -163,7 +163,16 @@ export function AppShell({ children }: Props) {
         .order("last_edited_at", { ascending: false });
       if (cancelled) return;
       if (error) {
-        console.error("[app-shell] header-search pipelines fetch failed:", error);
+        console.error(
+          "[app-shell] header-search pipelines fetch failed:",
+          error?.message,
+          "code:",
+          error?.code,
+          "details:",
+          error?.details,
+          "hint:",
+          error?.hint,
+        );
         setSearchPipelines([]);
         setSearchStatus("error");
         return;

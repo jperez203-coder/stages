@@ -115,7 +115,16 @@ export async function fetchPipelineFiles(
     .order("added_at", { ascending: false });
 
   if (filesErr) {
-    console.error("[pipeline-files] files fetch failed:", filesErr);
+    console.error(
+      "[pipeline-files] files fetch failed:",
+      filesErr?.message,
+      "code:",
+      filesErr?.code,
+      "details:",
+      filesErr?.details,
+      "hint:",
+      filesErr?.hint,
+    );
     return [];
   }
 
@@ -144,7 +153,13 @@ export async function fetchPipelineFiles(
   if (profilesRes.error) {
     console.error(
       "[pipeline-files] profile fetch failed (will fall back to null profiles):",
-      profilesRes.error,
+      profilesRes.error?.message,
+      "code:",
+      profilesRes.error?.code,
+      "details:",
+      profilesRes.error?.details,
+      "hint:",
+      profilesRes.error?.hint,
     );
   }
 
@@ -176,7 +191,13 @@ export async function fetchPipelineFiles(
   if (tasksRes.error) {
     console.error(
       "[pipeline-files] task fetch failed (badges will not render):",
-      tasksRes.error,
+      tasksRes.error?.message,
+      "code:",
+      tasksRes.error?.code,
+      "details:",
+      tasksRes.error?.details,
+      "hint:",
+      tasksRes.error?.hint,
     );
   }
 

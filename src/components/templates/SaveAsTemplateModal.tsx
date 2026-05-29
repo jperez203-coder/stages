@@ -127,7 +127,16 @@ export function SaveAsTemplateModal({
     );
 
     if (rpcError) {
-      console.error("[save-as-template] save failed:", rpcError);
+      console.error(
+        "[save-as-template] save failed:",
+        rpcError?.message,
+        "code:",
+        rpcError?.code,
+        "details:",
+        rpcError?.details,
+        "hint:",
+        rpcError?.hint,
+      );
       setError(rpcError.message);
       setSaving(false);
       return;

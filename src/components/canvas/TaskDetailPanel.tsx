@@ -1507,7 +1507,16 @@ function TaskAttachmentsSection({
 
       if (cancelled) return;
       if (fetchErr) {
-        console.error("[task-attachments] fetch failed:", fetchErr);
+        console.error(
+          "[task-attachments] fetch failed:",
+          fetchErr?.message,
+          "code:",
+          fetchErr?.code,
+          "details:",
+          fetchErr?.details,
+          "hint:",
+          fetchErr?.hint,
+        );
         setFetchError("Couldn't load attachments.");
         setLoading(false);
         return;
@@ -1537,7 +1546,13 @@ function TaskAttachmentsSection({
       if (profilesRes.error) {
         console.error(
           "[task-attachments] profile fetch failed (uploader avatars will fall back):",
-          profilesRes.error,
+          profilesRes.error?.message,
+          "code:",
+          profilesRes.error?.code,
+          "details:",
+          profilesRes.error?.details,
+          "hint:",
+          profilesRes.error?.hint,
         );
       }
       const profileById = new Map<string, UploaderProfile>();
@@ -1596,7 +1611,10 @@ function TaskAttachmentsSection({
         });
 
       if (uploadErr) {
-        console.error("[task-attachments] storage upload failed:", uploadErr);
+        console.error(
+          "[task-attachments] storage upload failed:",
+          uploadErr?.message,
+        );
         setFiles((prev) => prev.filter((f) => f.id !== tempId));
         setInlineError("Upload failed. Try again.");
         return;
@@ -1620,7 +1638,16 @@ function TaskAttachmentsSection({
         .single();
 
       if (insertErr || !row) {
-        console.error("[task-attachments] metadata insert failed:", insertErr);
+        console.error(
+          "[task-attachments] metadata insert failed:",
+          insertErr?.message,
+          "code:",
+          insertErr?.code,
+          "details:",
+          insertErr?.details,
+          "hint:",
+          insertErr?.hint,
+        );
         const { error: cleanupErr } = await supabase
           .storage
           .from("pipeline_files")
@@ -1628,7 +1655,7 @@ function TaskAttachmentsSection({
         if (cleanupErr) {
           console.error(
             "[task-attachments] orphan cleanup ALSO failed — invisible bytes left in bucket:",
-            cleanupErr,
+            cleanupErr?.message,
           );
         }
         setFiles((prev) => prev.filter((f) => f.id !== tempId));
@@ -1723,7 +1750,16 @@ function TaskAttachmentsSection({
         .single();
 
       if (error || !row) {
-        console.error("[task-attachments] add link failed:", error);
+        console.error(
+          "[task-attachments] add link failed:",
+          error?.message,
+          "code:",
+          error?.code,
+          "details:",
+          error?.details,
+          "hint:",
+          error?.hint,
+        );
         throw new Error(error?.message ?? "Insert failed");
       }
 
@@ -1750,7 +1786,16 @@ function TaskAttachmentsSection({
         .update({ client_visible: next })
         .eq("id", id);
       if (error) {
-        console.error("[task-attachments] toggle visibility failed:", error);
+        console.error(
+          "[task-attachments] toggle visibility failed:",
+          error?.message,
+          "code:",
+          error?.code,
+          "details:",
+          error?.details,
+          "hint:",
+          error?.hint,
+        );
         setFiles(snapshot);
         setInlineError("Couldn't change visibility. Try again.");
       }
@@ -1777,7 +1822,16 @@ function TaskAttachmentsSection({
         .delete()
         .eq("id", id);
       if (metaErr) {
-        console.error("[task-attachments] metadata delete failed:", metaErr);
+        console.error(
+          "[task-attachments] metadata delete failed:",
+          metaErr?.message,
+          "code:",
+          metaErr?.code,
+          "details:",
+          metaErr?.details,
+          "hint:",
+          metaErr?.hint,
+        );
         setFiles(snapshot);
         setInlineError("Couldn't delete. Try again.");
         return;
@@ -1791,7 +1845,7 @@ function TaskAttachmentsSection({
         if (storageErr) {
           console.error(
             "[task-attachments] storage delete failed — orphan left in bucket:",
-            storageErr,
+            storageErr?.message,
           );
         }
       }

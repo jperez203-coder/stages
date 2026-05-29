@@ -291,7 +291,16 @@ export function PortalCanvas({ data, pipelineName }: Props) {
         .eq("id", taskId);
 
       if (error) {
-        console.error("[portal canvas] toggle done failed:", error);
+        console.error(
+          "[portal canvas] toggle done failed:",
+          error?.message,
+          "code:",
+          error?.code,
+          "details:",
+          error?.details,
+          "hint:",
+          error?.hint,
+        );
         setTasksState(snapshot);
       }
     },

@@ -144,7 +144,10 @@ export function FileCard({
               row.storage_path!,
             );
             if (error || !signedUrl) {
-              console.error("[file-card] thumb fetch failed:", error);
+              console.error(
+                "[file-card] thumb fetch failed:",
+                error?.message,
+              );
               setThumbStatus("error");
               return;
             }

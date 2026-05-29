@@ -192,7 +192,10 @@ export function PortalFilesBody({
         });
 
       if (uploadErr) {
-        console.error("[portal-files] storage upload failed:", uploadErr);
+        console.error(
+          "[portal-files] storage upload failed:",
+          uploadErr?.message,
+        );
         setFiles((prev) => prev.filter((f) => f.id !== tempId));
         setInlineError("Upload failed. Try again.");
         return;
@@ -222,7 +225,16 @@ export function PortalFilesBody({
 
       // 3. INSERT failure → orphan cleanup (best-effort).
       if (insertErr || !row) {
-        console.error("[portal-files] metadata insert failed:", insertErr);
+        console.error(
+          "[portal-files] metadata insert failed:",
+          insertErr?.message,
+          "code:",
+          insertErr?.code,
+          "details:",
+          insertErr?.details,
+          "hint:",
+          insertErr?.hint,
+        );
         const { error: cleanupErr } = await supabase
           .storage
           .from("pipeline_files")
@@ -232,7 +244,7 @@ export function PortalFilesBody({
           // Same posture as the agency upload helper.
           console.error(
             "[portal-files] orphan cleanup ALSO failed — invisible bytes left in bucket:",
-            cleanupErr,
+            cleanupErr?.message,
           );
         }
         setFiles((prev) => prev.filter((f) => f.id !== tempId));
@@ -333,7 +345,16 @@ export function PortalFilesBody({
         .single();
 
       if (error || !row) {
-        console.error("[portal-files] add link failed:", error);
+        console.error(
+          "[portal-files] add link failed:",
+          error?.message,
+          "code:",
+          error?.code,
+          "details:",
+          error?.details,
+          "hint:",
+          error?.hint,
+        );
         // Re-throw so the modal surfaces an inline error and stays open
         // for the user to retry / correct the URL.
         throw new Error(error?.message ?? "Insert failed");
@@ -386,7 +407,16 @@ export function PortalFilesBody({
         .eq("id", id);
 
       if (metaErr) {
-        console.error("[portal-files] metadata delete failed:", metaErr);
+        console.error(
+          "[portal-files] metadata delete failed:",
+          metaErr?.message,
+          "code:",
+          metaErr?.code,
+          "details:",
+          metaErr?.details,
+          "hint:",
+          metaErr?.hint,
+        );
         setFiles(snapshot);
         setInlineError("Couldn't delete. Try again.");
         return;
@@ -400,7 +430,7 @@ export function PortalFilesBody({
         if (storageErr) {
           console.error(
             "[portal-files] storage delete failed — orphan left in bucket:",
-            storageErr,
+            storageErr?.message,
           );
         }
       }

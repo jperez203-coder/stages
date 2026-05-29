@@ -90,7 +90,16 @@ export function DeletePipelineModal({
     });
 
     if (rpcError) {
-      console.error("[delete-pipeline] RPC failed:", rpcError);
+      console.error(
+        "[delete-pipeline] RPC failed:",
+        rpcError?.message,
+        "code:",
+        rpcError?.code,
+        "details:",
+        rpcError?.details,
+        "hint:",
+        rpcError?.hint,
+      );
       setError(rpcError.message);
       setDeleting(false);
       return;
