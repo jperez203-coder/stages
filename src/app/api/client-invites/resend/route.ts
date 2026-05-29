@@ -127,17 +127,21 @@ export async function POST(request: Request) {
     );
   }
 
-  // Pipeline + workspace + inviter for the email body.
+  // Pipeline + inviter for the email body. Workspace name lookup dropped
+  // 2026-05-29 (template stopped using it on 2026-05-28); company_name on
+  // the inviter's profile is what surfaces in the header now. When
+  // invite.invited_by is null (pre-2026-05-29 invites), profile is null
+  // and companyName falls back to null cleanly.
   const [pipelineResult, profileResult] = await Promise.all([
     supaAsUser
       .from("pipelines")
-      .select("name, workspace:workspaces(name)")
+      .select("name")
       .eq("id", invite.pipeline_id)
       .maybeSingle(),
     invite.invited_by
       ? supaAsUser
           .from("profiles")
-          .select("display_name, email")
+          .select("display_name, email, company_name")
           .eq("id", invite.invited_by)
           .maybeSingle()
       : Promise.resolve({ data: null, error: null }),
@@ -151,18 +155,11 @@ export async function POST(request: Request) {
   }
 
   const pipelineName = pipelineResult.data.name as string;
-  // Same array-vs-object PostgREST nested-select quirk as the send route.
-  const workspaceRel = pipelineResult.data.workspace as unknown as
-    | { name: string }
-    | { name: string }[]
-    | null;
-  const workspaceName = Array.isArray(workspaceRel)
-    ? workspaceRel[0]?.name ?? "your workspace"
-    : workspaceRel?.name ?? "your workspace";
   const profile = profileResult.data as
-    | { display_name: string | null; email: string }
+    | { display_name: string | null; email: string; company_name: string | null }
     | null;
   const inviterName = profile?.display_name || profile?.email || "Someone";
+  const companyName = profile?.company_name ?? null;
 
   // Generate a fresh magic link. The redirect target is the SAME
   // /portal/accept/[token] URL since the invite token is unchanged.
@@ -196,8 +193,8 @@ export async function POST(request: Request) {
   const sendResult = await sendClientInviteEmail({
     to: invite.email,
     pipelineName,
-    workspaceName,
     inviterName,
+    companyName,
     acceptUrl: magicLinkUrl,
     logoUrl: `${origin}/stages-logo.png`,
   });

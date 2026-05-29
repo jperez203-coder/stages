@@ -106,9 +106,16 @@ export async function sendInviteEmail(
 export type ClientInviteEmailPayload = {
   to: string;
   pipelineName: string;
-  workspaceName: string;
   /** Display name preferred; falls back to email; "Someone" as last resort. */
   inviterName: string;
+  /** Workspace owner's company name from profiles.company_name. The
+   *  send/resend routes fetch this via user-scoped supabase; the
+   *  template prefixes the header with "from {companyName}" when
+   *  present, falling back to today's "{inviter} invited you …" when
+   *  null. workspaceName was previously here but the template stopped
+   *  rendering it on 2026-05-28; dropped 2026-05-29 as part of the
+   *  company_name slice for coherence. */
+  companyName: string | null;
   /**
    * Magic-link URL from `auth.admin.generateLink` — clicking it signs the
    * recipient in AND lands them on /portal/accept/[token] in one click.
@@ -136,7 +143,7 @@ export async function sendClientInviteEmail(
         "[email] RESEND_API_KEY missing — client invite email NOT sent.",
         `  To:        ${payload.to}`,
         `  Pipeline:  ${payload.pipelineName}`,
-        `  Workspace: ${payload.workspaceName}`,
+        `  Company:   ${payload.companyName ?? "(null)"}`,
         `  Inviter:   ${payload.inviterName}`,
         `  Accept URL: ${payload.acceptUrl}`,
       ].join("\n"),
@@ -155,6 +162,7 @@ export async function sendClientInviteEmail(
       react: createElement(ClientInviteEmail, {
         pipelineName: payload.pipelineName,
         inviterName: payload.inviterName,
+        companyName: payload.companyName,
         acceptUrl: payload.acceptUrl,
         logoUrl: payload.logoUrl,
       }),

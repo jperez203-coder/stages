@@ -2,13 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertCircle, LogOut, Plus } from "lucide-react";
+import { AlertCircle, Building2, LogOut, Plus } from "lucide-react";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { useSession } from "@/hooks/useSession";
 import { useUserContexts } from "@/hooks/useUserContexts";
 import { supabase } from "@/lib/supabase";
 
 const MAX_NAME_LENGTH = 80;
+const MAX_COMPANY_LENGTH = 80;
 
 /**
  * Shape of `create_workspace_with_owner` RPC's return value. See migration
@@ -46,7 +47,15 @@ type CreateResult = {
  * Slug generation + collision suffixing is handled by the
  * workspaces_auto_slug trigger — clients don't pre-check.
  */
-export function CreateWorkspaceForm() {
+type Props = {
+  /** Server-computed signal — true when this is the caller's first
+   *  workspace creation (no `workspace_memberships` rows with role='owner'
+   *  exist yet). Drives whether the Company name input renders. Asked
+   *  exactly once; editable later in /settings/account. */
+  showCompanyNameField?: boolean;
+};
+
+export function CreateWorkspaceForm({ showCompanyNameField = false }: Props) {
   const router = useRouter();
   const session = useSession();
   // Reused for the client-side duplicate-name pre-check. Already fetched
@@ -54,6 +63,7 @@ export function CreateWorkspaceForm() {
   // header dropdown, so no extra round-trip.
   const contexts = useUserContexts();
   const [name, setName] = useState("");
+  const [companyName, setCompanyName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -144,6 +154,32 @@ export function CreateWorkspaceForm() {
       );
     }
 
+    // First-workspace company_name capture. Same non-fatal post-RPC
+    // pattern as last_active_workspace_id above — if this fails the
+    // user still gets to their new workspace, and they can fill it in
+    // later from /settings/account. Asked at most once (gated on the
+    // server-side first-workspace check); written only when the field
+    // is shown AND the user entered a non-empty value.
+    const trimmedCompany = companyName.trim();
+    if (showCompanyNameField && trimmedCompany !== "") {
+      const { error: companyError } = await supabase
+        .from("profiles")
+        .update({ company_name: trimmedCompany })
+        .eq("id", session.user.id);
+      if (companyError) {
+        console.error(
+          "[onboarding] company_name save failed:",
+          companyError?.message,
+          "code:",
+          companyError?.code,
+          "details:",
+          companyError?.details,
+          "hint:",
+          companyError?.hint,
+        );
+      }
+    }
+
     router.push(`/w/${result.slug}`);
   };
 
@@ -186,6 +222,39 @@ export function CreateWorkspaceForm() {
         <p className="text-[12px] text-zinc-600 mb-5 leading-relaxed">
           Up to {MAX_NAME_LENGTH} characters.
         </p>
+
+        {/* Company name — asked exactly once, on the user's first
+            workspace creation (server-gated via showCompanyNameField).
+            Optional; clients see it in invite emails and the portal
+            pill. Editable later in /settings/account. */}
+        {showCompanyNameField && (
+          <>
+            <label className="block mb-1.5">
+              <span className="text-[13px] text-zinc-400">
+                Company name <span className="text-zinc-600">(optional)</span>
+              </span>
+            </label>
+            <div className="relative mb-2">
+              <Building2
+                size={14}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500"
+              />
+              <input
+                type="text"
+                value={companyName}
+                onChange={(e) => setCompanyName(e.target.value)}
+                placeholder="Acme Inc"
+                maxLength={MAX_COMPANY_LENGTH}
+                className="field"
+                style={{ paddingLeft: "40px" }}
+                disabled={submitting}
+              />
+            </div>
+            <p className="text-[12px] text-zinc-600 mb-5 leading-relaxed">
+              Your clients will see this in invites.
+            </p>
+          </>
+        )}
 
         {tooLong && (
           <div className="mb-4 p-3 rounded-lg border border-stages-red/40 bg-stages-red/10 text-[13px] text-stages-red leading-snug flex items-start gap-2">

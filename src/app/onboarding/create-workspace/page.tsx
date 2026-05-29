@@ -77,5 +77,28 @@ export default async function CreateWorkspacePage() {
     redirect(blockedClientDestination(summary));
   }
 
-  return <CreateWorkspaceForm />;
+  // First-workspace check — is this the caller's very first workspace
+  // creation, or are they making a second/third one? Drives whether
+  // the form asks for an agency Company name (asked once, saved to
+  // profiles.company_name; editable later in /settings/account).
+  //
+  // Auth.getUser() is RLS-cheap and React.cache'd within the request,
+  // so the cost is one auth round-trip we'd be doing anyway. The count
+  // query uses `head: true` so no rows come back over the wire — just
+  // the integer. RLS scopes workspace_memberships to the caller's own
+  // rows, so this is exactly the "owner memberships I hold" count.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  let isFirstWorkspace = false;
+  if (user) {
+    const { count } = await supabase
+      .from("workspace_memberships")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .eq("role", "owner");
+    isFirstWorkspace = (count ?? 0) === 0;
+  }
+
+  return <CreateWorkspaceForm showCompanyNameField={isFirstWorkspace} />;
 }

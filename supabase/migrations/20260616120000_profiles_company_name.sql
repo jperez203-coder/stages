@@ -1,0 +1,48 @@
+-- ============================================================================
+-- profiles.company_name — agency/company name on the workspace owner's profile
+-- ============================================================================
+--
+-- PURPOSE
+--   Add an optional `company_name` to `public.profiles`. Captured on the
+--   user's FIRST workspace creation (onboarding form), editable later in
+--   /settings/account. Surfaced in:
+--     * Client invite emails — "{inviter} from {company} invited you …"
+--     * Portal "Client of: {company}" pill (falls back to the workspace
+--       name when null)
+--   This is workspace-owner identity, distinct from `pipelines.company`
+--   (which is the client/project's company — orthogonal data).
+--
+-- WHAT CHANGED
+--   Single ALTER TABLE adding a nullable text column. No default; existing
+--   rows stay NULL until the owner fills it in (the onboarding form does
+--   so non-fatally for new users; existing owners can set it from
+--   settings/account).
+--
+-- RLS
+--   No policy change required. The existing policies on `public.profiles`
+--   (20260509120000_rls_policies.sql:510-538) already cover this column:
+--     * profiles_update — caller can update their own profile row
+--       (id = auth.uid()) with check on the same. New column inherits.
+--     * profiles_select — caller reads own profile OR profiles of users
+--       they share a workspace/pipeline with. Clients reading the
+--       inviter's `company_name` works via the shared-pipeline branch.
+--
+-- DOWN PLAN
+--   alter table public.profiles drop column company_name;
+--
+-- APPLY VIA: Supabase Dashboard SQL editor (do NOT db push). Run the
+-- verification query at the bottom afterward.
+-- ============================================================================
+
+alter table public.profiles add column company_name text null;
+
+-- ============================================================================
+-- VERIFY (run after applying):
+--   select column_name, data_type, is_nullable
+--   from information_schema.columns
+--   where table_schema = 'public'
+--     and table_name   = 'profiles'
+--     and column_name  = 'company_name';
+--
+-- Expected: one row, text, YES.
+-- ============================================================================

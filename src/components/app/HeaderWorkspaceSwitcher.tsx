@@ -167,13 +167,72 @@ export function HeaderWorkspaceSwitcher({
     setPortalSectionOpen(clientGroups.length <= 3);
   }, [clientGroups.length]);
 
-  // Trigger pill identity. In portal mode it's "Client of: AgencyName"
+  // Trigger pill identity. In portal mode it's "Client of: <Agency>"
   // with the agency's tint. Falls back to agency identity otherwise.
   const triggerWorkspaceId = activeClientCtx
     ? activeClientCtx.workspaceId
     : activeAgencyCtx?.workspaceId ?? "fallback";
+
+  // Portal-mode pill: resolve the agency owner's profiles.company_name
+  // for the workspace this client is viewing, falling back to the
+  // workspace name when null. Self-contained (no useUserContexts
+  // contract change) — one small fetch per portal navigation. RLS
+  // already allows a client to read the workspace owner's profile via
+  // the shared-pipeline branch of profiles_select.
+  const [ownerCompanyName, setOwnerCompanyName] = useState<string | null>(
+    null,
+  );
+  useEffect(() => {
+    const wsId = activeClientCtx?.workspaceId;
+    if (!wsId) {
+      setOwnerCompanyName(null);
+      return;
+    }
+    let alive = true;
+    void (async () => {
+      const { data, error } = await supabase
+        .from("workspace_memberships")
+        .select("profile:profiles(company_name)")
+        .eq("workspace_id", wsId)
+        .eq("role", "owner")
+        .limit(1)
+        .maybeSingle();
+      if (!alive) return;
+      if (error) {
+        // Soft-fail: the pill still renders, just with the workspace
+        // name fallback. Don't block the UI on a lookup failure.
+        console.error(
+          "[switcher] portal owner company_name lookup failed:",
+          error?.message,
+          "code:",
+          error?.code,
+          "details:",
+          error?.details,
+          "hint:",
+          error?.hint,
+        );
+        setOwnerCompanyName(null);
+        return;
+      }
+      // PostgREST nested-select returns either an object or an array of
+      // objects depending on FK cardinality + supabase-js inference;
+      // handle both defensively.
+      const rel = data?.profile as unknown as
+        | { company_name: string | null }
+        | { company_name: string | null }[]
+        | null;
+      const resolved = Array.isArray(rel)
+        ? rel[0]?.company_name ?? null
+        : rel?.company_name ?? null;
+      setOwnerCompanyName(resolved);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [activeClientCtx?.workspaceId]);
+
   const triggerLabel = activeClientCtx
-    ? `Client of: ${activeClientCtx.workspaceName}`
+    ? `Client of: ${ownerCompanyName ?? activeClientCtx.workspaceName}`
     : activeAgencyCtx?.workspaceName ?? "Workspace";
 
   const startEdit = (ctx: UserContext) => {

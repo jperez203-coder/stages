@@ -33,6 +33,13 @@ import {
 type Props = {
   pipelineName: string;
   inviterName: string;
+  /** Workspace owner's company name (profiles.company_name). Optional —
+   *  when present, the header reads "{inviter} from {company} invited
+   *  you to your project on Stages:"; when null, the header reads
+   *  "{inviter} invited you to your project on Stages:" (today's
+   *  behavior). The send route fetches this off the inviter's profile
+   *  via the user-scoped supaAsUser client. */
+  companyName: string | null;
   acceptUrl: string;
   /** Absolute URL to the PNG logo (built from request origin in the send
    *  route). PNG, not SVG — Gmail/Outlook strip SVG <img>. */
@@ -42,6 +49,7 @@ type Props = {
 export function ClientInviteEmail({
   pipelineName,
   inviterName,
+  companyName,
   acceptUrl,
   logoUrl,
 }: Props) {
@@ -67,9 +75,20 @@ export function ClientInviteEmail({
 
           <Section style={content}>
             <Text style={heading}>You&apos;re invited</Text>
+            {/* Header reads "{inviter} from {company} invited you …"
+                when companyName is provided, falling back to today's
+                "{inviter} invited you …" when null. Conditional
+                rendered with leading + trailing spaces so the sentence
+                reads naturally either way. */}
             <Text style={para}>
-              <strong>{inviterName}</strong> invited you to your project on
-              Stages:
+              <strong>{inviterName}</strong>
+              {companyName ? (
+                <>
+                  {" "}
+                  from <strong>{companyName}</strong>
+                </>
+              ) : null}{" "}
+              invited you to your project on Stages:
             </Text>
             <Text style={pipelineLine}>
               <strong>{pipelineName}</strong>

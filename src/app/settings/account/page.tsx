@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertCircle,
+  Building2,
   Check,
   Eye,
   EyeOff,
@@ -203,6 +204,11 @@ export default function AccountSettingsPage() {
 function ProfileSection({ userId }: { userId: string }) {
   const [savedName, setSavedName] = useState<string>("");
   const [fullName, setFullName] = useState<string>("");
+  // Company name lives on the same profiles row (added by migration
+  // 20260616120000). Asked once in onboarding for new agencies; this
+  // surface is the long-term editor for everyone else.
+  const [savedCompanyName, setSavedCompanyName] = useState<string>("");
+  const [companyName, setCompanyName] = useState<string>("");
   const [loadStatus, setLoadStatus] = useState<"loading" | "ready" | "error">(
     "loading",
   );
@@ -216,7 +222,7 @@ function ProfileSection({ userId }: { userId: string }) {
     void (async () => {
       const { data, error } = await supabase
         .from("profiles")
-        .select("display_name")
+        .select("display_name, company_name")
         .eq("id", userId)
         .maybeSingle();
       if (!active) return;
@@ -226,8 +232,13 @@ function ProfileSection({ userId }: { userId: string }) {
         return;
       }
       const current = ((data?.display_name as string | null) ?? "").trim();
+      const currentCompany = (
+        (data?.company_name as string | null) ?? ""
+      ).trim();
       setSavedName(current);
       setFullName(current);
+      setSavedCompanyName(currentCompany);
+      setCompanyName(currentCompany);
       setLoadStatus("ready");
     })();
     return () => {
@@ -239,30 +250,59 @@ function ProfileSection({ userId }: { userId: string }) {
   // honest "you have unsaved changes" feedback after editing post-save.
   useEffect(() => {
     if (!justSaved) return;
-    if (fullName.trim() !== savedName) setJustSaved(false);
-  }, [fullName, savedName, justSaved]);
+    if (
+      fullName.trim() !== savedName ||
+      companyName.trim() !== savedCompanyName
+    ) {
+      setJustSaved(false);
+    }
+  }, [fullName, savedName, companyName, savedCompanyName, justSaved]);
 
   const trimmedName = fullName.trim();
+  const trimmedCompany = companyName.trim();
+  const nameDirty = trimmedName !== savedName;
+  const companyDirty = trimmedCompany !== savedCompanyName;
   const canSave =
     loadStatus === "ready" &&
+    // Full name remains required to leave non-empty (display sites
+    // depend on it); company name may be cleared back to null.
     trimmedName.length > 0 &&
-    trimmedName !== savedName &&
+    (nameDirty || companyDirty) &&
     !saving;
 
   const save = async () => {
     if (!canSave) return;
     setSaving(true);
     setSaveError(null);
+    // Empty-string company collapses back to NULL — keeps the DB clean
+    // and the email/portal fallback logic ("if company is null, fall
+    // back to workspace name") simple.
     const { error } = await supabase
       .from("profiles")
-      .update({ display_name: trimmedName })
+      .update({
+        display_name: trimmedName,
+        company_name: trimmedCompany === "" ? null : trimmedCompany,
+      })
       .eq("id", userId);
     setSaving(false);
     if (error) {
+      // Explicit-fields logging — matches the codebase-wide pattern
+      // applied in yesterday's logging sweep.
+      console.error(
+        "[settings/account] profile save failed:",
+        error?.message,
+        "code:",
+        error?.code,
+        "details:",
+        error?.details,
+        "hint:",
+        error?.hint,
+      );
       setSaveError(error.message);
       return;
     }
     setSavedName(trimmedName);
+    setSavedCompanyName(trimmedCompany);
     setJustSaved(true);
   };
 
@@ -306,6 +346,33 @@ function ProfileSection({ userId }: { userId: string }) {
                 disabled={saving}
               />
             </div>
+
+            <label className="block mb-1.5">
+              <span className="text-[13px] text-zinc-400">
+                Company name{" "}
+                <span className="text-zinc-600">(optional)</span>
+              </span>
+            </label>
+            <div className="relative mb-1.5">
+              <Building2
+                size={14}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500"
+              />
+              <input
+                type="text"
+                autoComplete="organization"
+                value={companyName}
+                onChange={(e) => setCompanyName(e.target.value)}
+                placeholder="Acme Inc"
+                maxLength={80}
+                className="field"
+                style={{ paddingLeft: "40px" }}
+                disabled={saving}
+              />
+            </div>
+            <p className="text-[12px] text-zinc-600 mb-4 leading-relaxed">
+              Shown in your client invite emails and the portal pill.
+            </p>
 
             {saveError && (
               <div className="mb-3 p-3 rounded-lg border border-stages-red/40 bg-stages-red/10 text-[13px] text-stages-red leading-snug flex items-start gap-2">

@@ -132,17 +132,20 @@ export async function POST(request: Request) {
 
   const token = inserted.data.token as string;
 
-  // ─── Fetch pipeline + workspace + inviter for the email body ─────────────
+  // ─── Fetch pipeline + inviter for the email body ─────────────────────────
   // All RLS-gated. The caller passed insert authz; reads should succeed too.
+  // The workspace name lookup was dropped 2026-05-29 (the template stopped
+  // using it on 2026-05-28); the new `company_name` on profiles is what
+  // surfaces in the email header now.
   const [pipelineResult, profileResult] = await Promise.all([
     supaAsUser
       .from("pipelines")
-      .select("name, workspace:workspaces(name)")
+      .select("name")
       .eq("id", pipelineId)
       .maybeSingle(),
     supaAsUser
       .from("profiles")
-      .select("display_name, email")
+      .select("display_name, email, company_name")
       .eq("id", callerId)
       .maybeSingle(),
   ]);
@@ -155,26 +158,15 @@ export async function POST(request: Request) {
   }
 
   const pipelineName = pipelineResult.data.name as string;
-  // PostgREST returns the nested join as either an object or an array of
-  // objects depending on the FK cardinality + supabase-js's type inference.
-  // pipelines.workspace_id → workspaces.id is many-to-one, so at runtime
-  // we get a single object — but the inferred type is the array shape. Cast
-  // through `unknown` and handle both shapes defensively.
-  const workspaceRel = pipelineResult.data.workspace as unknown as
-    | { name: string }
-    | { name: string }[]
-    | null;
-  const workspaceName = Array.isArray(workspaceRel)
-    ? workspaceRel[0]?.name ?? "your workspace"
-    : workspaceRel?.name ?? "your workspace";
   const profile = profileResult.data as
-    | { display_name: string | null; email: string }
+    | { display_name: string | null; email: string; company_name: string | null }
     | null;
   const inviterName =
     profile?.display_name ||
     profile?.email ||
     userResult.user.email ||
     "Someone";
+  const companyName = profile?.company_name ?? null;
 
   // ─── Generate magic link (admin-only, secret key required) ───────────────
   const origin = new URL(request.url).origin;
@@ -208,8 +200,8 @@ export async function POST(request: Request) {
   const sendResult = await sendClientInviteEmail({
     to: trimmedEmail,
     pipelineName,
-    workspaceName,
     inviterName,
+    companyName,
     acceptUrl: magicLinkUrl,
     logoUrl: `${origin}/stages-logo.png`,
   });
