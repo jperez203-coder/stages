@@ -5,6 +5,7 @@ import Image from "next/image";
 import { useParams, useRouter } from "next/navigation";
 import { LogOut, Settings, Users } from "lucide-react";
 import { useUserContexts } from "@/hooks/useUserContexts";
+import { resolveInitial } from "@/lib/display-name";
 import { supabase } from "@/lib/supabase";
 
 // Trimmed from a 7-color brand subset to the 4 LETTER colors that
@@ -129,6 +130,7 @@ export function HeaderProfileMenu({
       >
         <Avatar
           email={email}
+          displayName={displayName}
           avatarUrl={avatarUrl}
           size={size}
           fontSize={triggerFontSize}
@@ -160,7 +162,13 @@ export function HeaderProfileMenu({
           }}
         >
           <div className="p-4 border-b border-zinc-800 flex items-center gap-3">
-            <Avatar email={email} avatarUrl={avatarUrl} size={44} fontSize={16} />
+            <Avatar
+              email={email}
+              displayName={displayName}
+              avatarUrl={avatarUrl}
+              size={44}
+              fontSize={16}
+            />
             <div className="flex-1 min-w-0">
               {displayName && (
                 <div className="text-[13px] font-semibold truncate">
@@ -241,11 +249,13 @@ export function HeaderProfileMenu({
  */
 function Avatar({
   email,
+  displayName,
   avatarUrl,
   size,
   fontSize,
 }: {
   email: string;
+  displayName: string | null;
   avatarUrl: string | null;
   size: number;
   fontSize: number;
@@ -254,13 +264,19 @@ function Avatar({
 
   // Deterministic colour from email hash so the same user always gets the
   // same colour. Same algorithm as the legacy ProfileMenu so users who saw
-  // a particular colour before keep seeing it.
+  // a particular colour before keep seeing it. Note: color hashes from
+  // EMAIL (stable identifier) while the initial letter comes from
+  // display_name (human-readable) — intentional split so a user renaming
+  // themselves doesn't change their avatar color.
   let hash = 0;
   for (let i = 0; i < email.length; i++) {
     hash = email.charCodeAt(i) + ((hash << 5) - hash);
   }
   const color = COLORS[Math.abs(hash) % COLORS.length];
-  const initial = email.charAt(0).toUpperCase();
+  // Initial: display_name's first letter, falling back to email's first
+  // letter, then "?". Matches UserAvatar's chain — see resolveInitial in
+  // src/lib/display-name.ts for the canonical contract.
+  const initial = resolveInitial({ display_name: displayName, email });
 
   // Rendering shape rules (apply to both image and initials branches):
   //   * borderRadius: 6px ACROSS ALL SIZES (2026-05-22 polish round —

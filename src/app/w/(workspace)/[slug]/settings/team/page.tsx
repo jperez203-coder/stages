@@ -24,6 +24,7 @@ import {
   type TeamInvite,
   type TeamMember,
 } from "@/hooks/useTeamData";
+import { resolveInitial } from "@/lib/display-name";
 import { supabase } from "@/lib/supabase";
 
 /**
@@ -858,6 +859,7 @@ function MemberRow({ member, isLast }: { member: TeamMember; isLast: boolean }) 
       <td className="px-4 py-3" style={{ width: "44px" }}>
         <MemberAvatar
           email={member.email}
+          displayName={member.displayName}
           avatarUrl={member.avatarUrl}
           size={32}
         />
@@ -889,20 +891,26 @@ const AVATAR_COLORS = [
 
 function MemberAvatar({
   email,
+  displayName,
   avatarUrl,
   size,
 }: {
   email: string;
+  displayName: string | null;
   avatarUrl: string | null;
   size: number;
 }) {
   const [imgFailed, setImgFailed] = useState(false);
+  // Color hashes from email (stable identifier — renaming yourself
+  // doesn't change your avatar color). Initial letter comes from
+  // display_name (human-readable) with email-first-letter fallback.
+  // See resolveInitial in src/lib/display-name.ts for the contract.
   let hash = 0;
   for (let i = 0; i < email.length; i++) {
     hash = email.charCodeAt(i) + ((hash << 5) - hash);
   }
   const color = AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
-  const initial = (email.charAt(0) || "?").toUpperCase();
+  const initial = resolveInitial({ display_name: displayName, email });
 
   if (avatarUrl && !imgFailed) {
     return (
