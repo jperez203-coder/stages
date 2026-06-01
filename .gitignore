@@ -53,4 +53,5 @@ scripts/test-client-upload-rls.mjs
 scripts/verify-storage-path-conformance.mjs
 scripts/probe-casey-profile-read.mjs
 scripts/test-templates-rls.mjs
+scripts/seed-ridgeline-chat.mjs
 pipeline-snapshot.png
