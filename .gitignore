@@ -54,4 +54,6 @@ scripts/verify-storage-path-conformance.mjs
 scripts/probe-casey-profile-read.mjs
 scripts/test-templates-rls.mjs
 scripts/seed-ridgeline-chat.mjs
+scripts/stripe-setup-products-and-prices.mjs
+scripts/test-stripe-billing-rls.mjs
 pipeline-snapshot.png
