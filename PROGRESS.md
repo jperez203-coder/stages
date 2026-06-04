@@ -4,6 +4,216 @@ A running log of what shipped in each session. Newest first.
 
 ---
 
+## Stripe Track B — slices 1 + 2 shipped (2026-06-04)
+
+**Status:** SHIPPED. Billing foundation + end-to-end trial-start flow live on prod (test mode). Workspace owner/admin clicks "Choose a plan" on the dashboard → Stripe-hosted Checkout (Solo $29 or Team $39 monthly, 14-day trial, card required) → webhook flips `workspace_billing.subscription_status` to `'trialing'`. Cancel path verified end-to-end (`customer.subscription.deleted` → `'canceled'`, banner re-appears).
+
+### Slice 1 — billing tables + Stripe products (`acaf219`)
+
+Pure infrastructure. NO signup-flow changes, NO checkout, NO webhooks — those are slice 2.
+
+- **Migration `20260618120000_stripe_billing_tables.sql`** — two new tables:
+  - `user_billing(user_id PK → profiles, stripe_customer_id UNIQUE, …)` — RLS: self-SELECT + self-UPDATE only. INSERT/DELETE service-role.
+  - `workspace_billing(workspace_id PK → workspaces, stripe_subscription_id UNIQUE, subscription_status NOT NULL no-default, plan, trial_ends_at, current_period_end, …)` — RLS: SELECT only when caller is owner OR admin via workspace_memberships; members + clients get zero rows. INSERT/UPDATE/DELETE service-role.
+  - Shared `touch_updated_at()` trigger function defined here (first use). subscription_status allowlist tracks Stripe's enum exactly: incomplete, trialing, active, past_due, canceled, unpaid, paused.
+- **`npm install stripe` (v22.2.0)** + `src/lib/stripe.ts` server-only singleton with API version pinned to `2026-05-27.dahlia` (matches what the installed SDK was tested against). Lazy-init pattern; `sk_` prefix guard.
+- **`scripts/stripe-setup-products-and-prices.mjs`** (gitignored) — one-time idempotent setup. Created Stripe Test-mode Products + Prices:
+  - Solo → `prod_Ue0jU42Pbw2EMO` / `price_1TeihdIBJ4o7njGPqEk4lzGr`
+  - Team → `prod_Ue0jdjRsJ1j5Ix` / `price_1TeiheIBJ4o7njGPlyT85V6h`
+  - Idempotency key: `metadata.stages_plan_key` → re-running reuses, never duplicates.
+- **`scripts/test-stripe-billing-rls.mjs`** (gitignored, 10 tests) — real-JWT harness verifying user_billing self-only SELECT + UPDATE; workspace_billing owner/admin-only SELECT (members + clients + outsiders all see zero rows); admin-positive branch (after seeding workspace_memberships role='admin' for Sarah on Casey's workspace). 10/10 PASS. Service-role used ONLY for seeding the billing rows (simulating what slice 2's webhook will write) + cleanup.
+
+**Locked decisions** (folded in before write):
+- **Separate `user_billing` + `workspace_billing` tables**, not added columns on profiles/workspaces — Postgres RLS can't filter columns, so column-level protection on existing tables would have required GRANT trickery. Separate tables → row-only RLS that's trivially correct.
+- **subscription_status NOT NULL with no DEFAULT** — every INSERT must supply a Stripe-aligned status. Eliminates silent 'none' rows from missed webhook mappings.
+- **No Stripe Customer creation at signup** (Option C) — defer to first paid action (slice 2 checkout). No ghost customers from bouncing signups; Stripe Customer count = real billing intent.
+
+### Slice 2 — checkout + webhook + Start Trial banner (`4ef414a`)
+
+End-to-end Track B billing flow. Adds 5 files + modifies the workspace dashboard page.
+
+- **Migration `20260619120000_stripe_events_dedup.sql`** — `stripe_events(event_id PK, event_type, received_at, payload jsonb, processed_successfully)` for webhook idempotency + audit. RLS enabled with **no policies** (authenticated + anon roles get zero rows; service-role bypasses). Partial index on `processed_successfully = false` rows for support / monitoring queries (steady-state empty).
+- **`src/lib/supabase-admin.ts`** — service-role Supabase singleton with strict warning block ("ONLY for system writes from trusted server contexts: Stripe webhook handler. NEVER import from any /app/* route that serves user requests…"). Sole authorized caller across the codebase: the webhook route.
+- **`POST /api/billing/checkout`** — SSR-auth gated. Owner/admin role check + 409 dup-block when status already in trialing/active/past_due. Stripe Customer created lazily here via `stripe.customers.create({…}, { idempotencyKey: \`stages-customer-${userId}\` })` (24h Stripe-side race protection). NO DB writes — `user_billing` UPSERT is the webhook's job per the strict service-role boundary (architectural refactor mid-slice; original draft had checkout writing user_billing via admin client, removed after founder pushback on diluting the supabase-admin boundary). Returns Stripe Checkout URL; client redirects via `window.location.href`.
+- **`POST /api/billing/webhook`** — raw-body signature verification via `stripe.webhooks.constructEvent`. UPSERT into `stripe_events` with retry-aware semantics (re-deliveries that succeeded short-circuit 200 with `{dedup: 'already_processed'}`; re-deliveries of prior failures re-run the handler — Stripe-retry-after-our-5xx pattern). Five event handlers:
+  - `checkout.session.completed` — the **sole INSERT writer** for both billing tables. Retrieves subscription, UPSERTs both rows.
+  - `customer.subscription.updated` — UPDATE status / trial_ends_at / current_period_end.
+  - `customer.subscription.deleted` — UPDATE status='canceled'.
+  - `invoice.payment_succeeded` — UPDATE current_period_end (roll-forward).
+  - `invoice.payment_failed` — UPDATE status='past_due'.
+  - **Important Stripe API quirk in v2026-05-27.dahlia**: `current_period_end` was removed from `Subscription` and now lives on `SubscriptionItem` (`subscription.items.data[0].current_period_end`). All handlers read from there. Caught at type-check time from the SDK definitions before writing.
+  - Defensive `extractSubscriptionId(invoice)` helper for Invoice events — Stripe has been gradually moving `invoice.subscription` → `invoice.parent.subscription_details.subscription` across API versions. Helper tries newer shape first, falls back to legacy, then to `lines.data[].subscription`.
+- **`src/components/billing/StartTrialBanner.tsx`** — client component. Dashboard banner (stages-blue palette mirroring MissingNameBanner shape) + plan-picker modal with Solo / Team tiles. Backdrop + Escape close. Status-coded error messages (401 → "Please sign in again"; 403 → "Only workspace owners or admins…"; 409 → "Already has an active subscription"; 502 → "Stripe is unreachable…"). No localStorage dismissal — billing is a hard nudge until provisioned.
+- **`src/app/w/(workspace)/[slug]/page.tsx`** — adds `workspace_billing` query to the existing parallel `Promise.all` batch (8 → 9 queries). Two-layer visibility gate computed server-side: `isOwnerOrAdmin && (status === null || status === 'canceled')`. Defense in depth — even if RLS on workspace_billing ever widened, the role check still hides the banner from non-privileged callers.
+
+**Verified by:**
+- `tsc --noEmit` clean, `npm run build` green (20 routes, +2 from slice 1).
+- **End-to-end smoke test as Casey** (owner of `acme-client-test`) with Stripe test card 4242: all 8 checkpoints PASS. Trial creation (`status='trialing'`, `trial_ends_at` ~14 days out, banner hides), cancel path (`customer.subscription.deleted` → `status='canceled'`, banner re-appears). 11 stripe_events rows, all `processed_successfully=true`. Webhook stream returned `[200]` on every event.
+
+**Prod state after Slice 2:**
+- Vercel Production env (5 vars): `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_PRICE_SOLO_MONTHLY`, `STRIPE_PRICE_TEAM_MONTHLY`, `STRIPE_WEBHOOK_SECRET`. All test-mode for now; live-mode flip is Slice 4.
+- Prod webhook endpoint `we_1Tek4lIBJ4o7njGP4cFFvkpT` — test mode, API version pinned to `2026-05-27.dahlia`, 5 events subscribed. Signature verification probed via curl: `HTTP 400 {"error":"Invalid signature"}` on bogus sig — endpoint live + signed correctly.
+
+**Not in this slice (intentional):**
+- Per-seat quantity sync (`quantity: 1` at Checkout; Slice 3 reconciles).
+- Cancel-from-app UI (Slice 4).
+- `/settings/billing` page (Slice 4).
+- Live-mode env flip + live Stripe prices (Slice 4).
+- Track A founding member flow (separate slice).
+
+---
+
+## Workspace switcher — 3-section redesign + avatar initials fix (2026-05-30)
+
+**Status:** SHIPPED in two commits.
+
+- **`8e9514d`** — `HeaderWorkspaceSwitcher` refactored from two stacked cards (Agency + Client Portal) into one card with three labeled sections: **MY AGENCY** → **CLIENT PORTALS** → **PERSONAL**. Section classification uses `useUserContexts` stats:
+  - **MY AGENCY**: agency workspaces with co-workers OR clients (`(stats.teammates ?? 2) > 1 || (stats.clients ?? 0) > 0`).
+  - **PERSONAL**: agency workspaces that are solo (`teammates === 1 && clients === 0`).
+  - **CLIENT PORTALS**: existing `groupClientByAgency` (one row per agency, multi-pipeline collapses).
+  - Defensive `?? 2` default on teammates is load-bearing — workspaces whose stats batch hasn't returned yet land in MY AGENCY (the safer bucket; a real agency briefly appearing under PERSONAL during a re-fetch would read as a bug). Cost: a genuinely-personal workspace briefly flickers under MY AGENCY on first paint, which corrects itself once stats land.
+  - Empty section headers hidden. Pure-client users (no agency contexts) see the existing "Create your own workspace" CTA at the top of the dropdown; "+ New workspace" footer hidden for them. Owners with at least one agency context see the global "+ New workspace" footer at the bottom.
+  - Rename / delete affordances preserved on **both** MY AGENCY and PERSONAL rows (Personal workspaces are still real agency contexts). Delete-guard hides when total agency workspace count is 1. CLIENT PORTALS chevron collapse preserved (default-open ≤3 portals, default-collapsed >3).
+  - Renders identically in AppShell (40px trigger pill) and PortalShell (32px trigger pill); portal-mode detection unchanged.
+
+- **`8d99ccf`** — avatar initials bug fix. Three inline avatar components hardcoded `email.charAt(0)`, so a user named "Test Founder" with email `jordan+test@…` showed "J" instead of "T". Fix: new `resolveInitial(user)` helper in `src/lib/display-name.ts` mirroring the central `UserAvatar` chain (`display_name → email → "?"`). Threaded into the three inline sites. Any new avatar component MUST call this util or accept `user.display_name` and use this chain inline — do NOT reintroduce email-first precedence.
+
+---
+
+## Company name capture — end-to-end + portal "Client of:" pill RPC (2026-05-29)
+
+**Status:** SHIPPED across two commits.
+
+- **`2be606c`** — `profiles.company_name` (nullable text) captured at first-workspace creation, editable in `/settings/account`. Threaded into invite email templates as the agency identity. Six pieces:
+  1. Migration `20260616120000_profiles_company_name.sql` — add column.
+  2. Onboarding flow — server pre-flight count gates whether the company-name field renders (first workspace = mandatory; subsequent workspaces = the column is already populated so the field is suppressed). Post-RPC save.
+  3. `/settings/account` — new "Company name" field above the existing display_name editor.
+  4. Email template — `companyName` in payload, `workspaceName` removed from rendered template.
+  5. `/api/invites/send` + `/api/invites/resend` — extended SELECT to fetch `company_name`, payload updated.
+  6. Portal "Client of:" pill — `useEffect` fetches owner `company_name` for the active pipeline with `workspaceName` fallback.
+
+- **`3640197`** — portal pill always falling back to `workspaceName`. Root cause: `workspace_memberships_select` policy gates on `is_workspace_member(workspace_id)`, and clients have no `workspace_memberships` row → the direct query returned zero rows for every client. `pipeline_memberships_select` similarly hides other members' rows from clients. Widening either policy would leak teammate identities. Fix: SECURITY DEFINER RPC `get_pipeline_workspace_owner_company(p_id uuid) returns text` (migration `20260617120000`) — traverses the owner ladder internally, returns ONLY the owner's `company_name`, with an authorization guard that the caller must have a `pipeline_memberships` row on the requested pipeline. Two null cases (caller has no membership vs. owner has no company_name yet) are deliberately indistinguishable — both collapse to the `workspaceName` fallback.
+
+---
+
+## PostgrestError logging sweep (2026-05-29)
+
+**Status:** SHIPPED in `d6e1217`. 34 call sites updated.
+
+`PostgrestError` fields are non-enumerable, so `console.error("X failed:", error)` logs the literal `{}` — useless for debugging. Audit grep found 34 sites across the client codebase using the bare pattern. Fix: each updated to explicitly log `error?.message, "code:", error?.code, "details:", error?.details, "hint:", error?.hint`. Chat surfaces, member popovers, FilePicker, TaskDetailPanel, portal Body components, switcher, AppShell — all swept. New error-handling code MUST use the explicit pattern; bare `error` interpolation is a debugging dead end.
+
+---
+
+## Portal task attachments — agency parity fork (2026-05-29)
+
+**Status:** SHIPPED in `ead121e`. Continues the 4b client-portal write-surface buildout.
+
+`PortalTaskDetailPanel` now has the same per-task file + URL attachment section as the agency `TaskDetailPanel`. Forked from `TaskAttachmentsSection.tsx` (agency) into `PortalTaskAttachmentsSection.tsx` (portal) per the "fork, don't refactor" directive — same RLS forks already in place for client uploads (`client_visible: true` hardcoded, `added_by: viewerId`, no edit affordances). Files surface on the pipeline-level Files tab via the existing `task_id` column + the `from: <task>` badge shipped 5-27.
+
+`pipeline-files-data.ts` joins `tasks(id, title)` so the badge resolves without N+1. Storage path convention unchanged (`task_id` is metadata only, no RLS or storage policy change). Companion migration was already applied at the 5-27 task panel slice; this commit is purely the portal fork.
+
+**Refactor trigger** (same posture as the earlier fork notes): if either upload-helper acquires a non-trivial bug, extract `useTaskAttachments(taskId, { forceClientVisible })` as a shared hook. Until then, duplication is the lesser risk vs. destabilizing prod-verified agency upload.
+
+---
+
+## Auth — forgot-password + reset-password flow (2026-05-28)
+
+**Status:** SHIPPED in `1733b04`. Fixes the `/auth/forgot-password` 404 logged in the pre-launch hardening list.
+
+Both pages mirror `/auth/signin` chrome (dotted-grid + panel-card). Three states on `/auth/reset-password`: token-being-verified, ready-to-set-new, error-with-retry-link. `supabase.auth.resetPasswordForEmail` + `supabase.auth.updateUser` are the primitives. Magic-link redirect points at `/auth/reset-password` (was the broken `/auth/signin#access_token=...` path). Test password flow no longer requires the `scripts/set-test-password.mjs` workaround.
+
+---
+
+## Workspace admin parity — RLS + UI sweep (2026-05-28)
+
+**Status:** SHIPPED across five commits — `a31e79e`, `20a6aa1`, `90d4196`, `8ec00fe`, `86a115f`.
+
+- **`a31e79e`** — migration giving workspace admins blanket pipeline access (owner-parity at the RLS layer). Previously workspace admins had to be added per-pipeline; now any `workspace_memberships.role IN ('owner','admin')` row implicitly grants edit access across all pipelines in the workspace.
+- **`20a6aa1`** — three stale `can_edit` / agency-member TS mirrors widened to match the RLS reality (PipelineHeader, canvas chrome data, files surface). Pure client-side string-list fixes; no behavior change for owners.
+- **`90d4196`** — chat agency-access fix. `channel_messages_insert` policy was gated on `is_channel_member`, so admins (who don't have channel_memberships rows on every pipeline channel) couldn't post. Widened to `is_channel_member OR is_pipeline_agency_member`. Three-layer is_internal privacy defense **untouched** (RLS filter, server-side write enforcement, render-side filter all still in place).
+- **`8ec00fe`** — "View as client" rail icon now live + gated to workspace owners/admins, window.opens `/portal/<pipelineId>` in a new tab. Was stubbed since the canvas left rail shipped.
+- **`86a115f`** — new "Team & members" entry in the `HeaderProfileMenu`. Front door to `/w/<slug>/settings/team` from anywhere in the app; uses `useUserContexts` + `useParams` to resolve the active workspace slug.
+
+---
+
+## Email pipeline — first-pipeline welcome + invite-email cleanup (2026-05-28)
+
+**Status:** SHIPPED across five commits — `64cd6da`, `8f96d2a`, `5514962`, `ac23cca`, `2c7d91f`.
+
+- **`64cd6da`** — automated first-pipeline welcome email. Migration adds `pending_emails(id, recipient_email, subject, body_html, send_after, attempt_count, last_error)` + enqueue trigger on pipeline INSERT. `sendFirstPipelineEmail` helper in `src/lib/email.ts` (Resend). Cron route `/api/cron/send-pending-emails` drains the queue (idempotent — marks `sent_at` after success). No `pg_cron` dependency.
+- **`8f96d2a`** — fix from-address to verified `trystages.com` domain (Resend rejects sends from unverified domains).
+- **`5514962`** — removed Vercel cron config from `vercel.json`. Hobby plan only allows daily cron with 1 slot; using external scheduler (cron-job.org or similar) hitting the cron route with `CRON_SECRET` header guard instead.
+- **`ac23cca`** — Stages logo (PNG, light-mode wordmark) embedded in both invite email templates. `logoUrl` threaded through `email.ts` payloads + 4 routes (send + resend, agency + client variants).
+- **`2c7d91f`** — copy fixes: invite-email header drops workspaceName (it was always the agency's company name, redundant after company_name capture); footer's missing space before "on Stages" fixed.
+
+---
+
+## Names slice — display_name capture + util consolidation (2026-05-27)
+
+**Status:** SHIPPED across two commits — `b8aa6f6` + `a07e550`.
+
+- **`b8aa6f6`** — display_name captured at all signup entry points:
+  - **Signup form** — required Full name field (writes to `auth.user.options.data.display_name` so the `handle_new_user` trigger picks it up).
+  - **Client invite accept** — name field on `/portal/accept/[token]`; writes to `profiles.display_name` in the same transaction as the membership insert.
+  - **/settings/account** — new Profile section above Linked accounts with display_name + (later) company_name editor.
+  - **Dashboard banner** — `MissingNameBanner` nudges existing users whose display_name is null/empty. localStorage dismissal; auto-hides once name is set.
+
+- **`a07e550`** — `src/lib/display-name.ts` util — `resolveDisplayName(user, {whenMissing})` consolidates four near-identical resolver helpers that had drifted across the app (FileCard's `resolveUploaderName`, MessageThread's `resolveAuthorName`, MembersPopover's `resolveMemberDisplay`, TaskDetailPanel's `resolveDisplayName`). Resolution chain: `display_name → email-local-part → whenMissing | "Unknown user"`. Dashboard greeting got null-safe resolution (fall through to email-local-part, then to "Hey there! 👋" — never "Hey ! 👋"). The 5-30 avatar initials fix added `resolveInitial(user)` to the same file using the same chain.
+
+---
+
+## /upgrade waitlist + pure-client CTA + C1 destination swap (2026-05-27)
+
+**Status:** SHIPPED in `5c5d4f0`.
+
+Four pieces:
+- **Migration `20260612120000_upgrade_interest.sql`** — `upgrade_interest(id, user_id, source, created_at)` table; RLS lets authenticated users INSERT their own row only.
+- **`/upgrade` page** — server component. Joins waitlist via INSERT; idempotent (the same user clicking again no-ops). Marketing-style copy + chrome.
+- **Switcher empty-state CTA card** — pure clients (no agency contexts) see "Create your own workspace" CTA at the top of the workspace switcher dropdown, routing to `/upgrade?source=switcher_empty`.
+- **C1 swap point** — `blockedClientDestination` in `src/app/onboarding/create-workspace/page.tsx` now routes blocked clients to `/upgrade?source=c1_block` instead of bouncing to their portal. Mirror swap in the `create_workspace_with_owner` RPC error message (migration `20260605120000`).
+
+The 2026-05-26 "blocked-pure-client" routing decision is now self-serve through the upgrade page.
+
+---
+
+## HeaderWorkspaceSwitcher v2 — Client Portal panel + stats subtitles (2026-05-27)
+
+**Status:** SHIPPED in `5e6af1d` + companion commits `67d3ac7`, `27ead59`, `9c32d3c`.
+
+**SUPERSEDED 2026-05-30 by the 3-section refactor (`8e9514d`)**. Logged here for context.
+
+The v2 slice:
+- Two stacked panels: Agency (one row per workspace with the Stages "#" hash tile + stat subtitle "5 teammates · 12 clients" / "just you · 3 clients" / etc.) and Client Portal (collapsible, one row per agency the user is a client of, grouped via `groupClientByAgency`).
+- `useUserContexts` extended to fetch teammates / clients / projects counts per agency workspace (batched, fails gracefully).
+- `StagesHashTile` reusable component (per-workspace-id deterministic tint).
+- Portal-mode trigger pill — agency name prefixed with "Client of: ", tile tinted by agency workspace id (NOT pipeline id — the spec calls for hashing on the agency since that's the identity the client recognizes).
+- Portal-mode trigger sized 32px (matches PortalShell's avatar); right-aligned dropdown so it doesn't overflow.
+
+The 5-30 refactor took this further by splitting agency contexts into MY AGENCY vs PERSONAL sections based on the same stats.
+
+---
+
+## /portal/signin + intent=portal routing fork (2026-05-27)
+
+**Status:** SHIPPED across two commits — `775ff68` + `bfeb405`.
+
+- **`775ff68`** — `/portal/signin` page. Self-service magic-link request for returning clients. Mirrors `/auth/signin` chrome; only difference is the email's `emailRedirectTo` carries `?intent=portal`.
+- **`bfeb405`** — `/select-workspace` branches on `?intent=portal`. Mixed-context users (own a workspace AND are a client elsewhere) signing in via the portal route get routed to their portal, not the chooser. Agency users signing in via `/auth/signin` continue to land in their agency workspace. Resolves the "client signs in via their bookmark, lands in the wrong UI" complaint.
+
+---
+
+## UI polish bundle — dashboard + files tab + my-tasks + task panel attachments (2026-05-27)
+
+**Status:** SHIPPED across many small commits.
+
+- **`548d29f`** — dashboard color cleanup. `MyTasksCard` uses bucket colors (overdue / today / soon / later) for dot + pill; `PipelineCard` drops the stage color from the progress bar (was reading as "this pipeline is in a particular stage" which it wasn't).
+- **`9d2fff5`** — dashboard pipelines grid capped at 3 cols until 2xl (was 4 at xl, 5 at 2xl). Reduces card visual density and removes the "lonely pipeline at the end of row 2" empty-state.
+- **`2acc2c5`** — my-tasks date-picker fix. Picker was clipped by the bucket card's `overflow:hidden`. Fix: render the popover into a portal so it escapes the parent overflow context. Same pattern used for any future popover inside a bucket card.
+- **`11d2921`** + **`0704003`** + **`a5f77f1`** — agency `TaskDetailPanel` gets task-scoped attachments. New `TaskAttachmentsSection` (click + drag-drop upload, AddLinkModal, lazy-fetch with uploader profile batch, optimistic insert/delete/visibility-toggle, FilePreview dispatch). Every insert sets `task_id` so the row is task-scoped while still surfacing on the Files tab via the `from: <task>` badge. `0704003` fixes the non-scrolling panel + compact attachment rows. `a5f77f1` stops the canvas wheel-listener from eating the panel's overflow scroll.
+- **`21cf2c6` + 7 follow-ups (5-27)** — Files tab card layout polish: inline task source next to type label, horizontal alignment of icon + filename, bullet separator sizing, image-icon nudge. End state: files tab rows read cleanly across kind (file, url) and source (pipeline, task-scoped).
+
+---
+
 ## Pipeline templates — full feature shipped (2026-05-26)
 
 **Status:** SHIPPED end-to-end across four slices. Save → store → instantiate flow live. Built-ins seeded. Cross-workspace isolation verified by the 13-test RLS harness against real Jordan + Casey JWTs.
