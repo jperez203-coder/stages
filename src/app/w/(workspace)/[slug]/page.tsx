@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { DashboardGreeting } from "@/components/dashboard/DashboardGreeting";
 import { MissingNameBanner } from "@/components/dashboard/MissingNameBanner";
+import { StartTrialBanner } from "@/components/billing/StartTrialBanner";
 import { MyTasksCard } from "@/components/dashboard/MyTasksCard";
 import { ActivityCard } from "@/components/dashboard/ActivityCard";
 // TeamChatStrip import intentionally removed — see deferred-not-deleted
@@ -142,6 +143,7 @@ export default async function WorkspaceDashboardPage({
     membershipsRes,
     activityRes,
     recentActivityRes,
+    billingRes,
   ] = await Promise.all([
     supabase
       .from("profiles")
@@ -236,6 +238,17 @@ export default async function WorkspaceDashboardPage({
       .eq("pipeline.workspace_id", ws.id)
       .neq("actor_id", user.id)
       .gte("created_at", sevenDaysAgoIso),
+
+    // Workspace billing status — drives the StartTrialBanner mount
+    // decision below. RLS lets owner + admin SELECT this row; members
+    // + clients get 0 rows (which our null-coalesce treats as "no
+    // subscription provisioned"). For members the banner is gated
+    // separately by role, so the null result is a no-op for them.
+    supabase
+      .from("workspace_billing")
+      .select("subscription_status")
+      .eq("workspace_id", ws.id)
+      .maybeSingle(),
   ]);
 
   // ── Resolve secondary profiles (members + activity actors) ────────────
@@ -590,6 +603,30 @@ export default async function WorkspaceDashboardPage({
             there. Passes the server-fetched displayName so the
             client side doesn't need a second query. */}
         <MissingNameBanner displayName={displayName} />
+
+        {/* Start-trial banner — owner/admin only; visible when this
+            workspace has no provisioned subscription (status is null
+            or 'canceled'). Trialing / active / past_due all hide it.
+            Decision is computed server-side here so the client
+            component just mounts when present. RLS on
+            workspace_billing already restricts SELECT to owner/admin,
+            but we also gate on role explicitly so members can't
+            stumble into the banner even if a future RLS relaxation
+            ever widens that policy. Two layers of defense, neither
+            redundant. */}
+        {(() => {
+          const role = wsMembershipResult.data?.role;
+          const isOwnerOrAdmin = role === "owner" || role === "admin";
+          const status = billingRes.data?.subscription_status ?? null;
+          const shouldShow =
+            isOwnerOrAdmin && (status === null || status === "canceled");
+          return shouldShow ? (
+            <StartTrialBanner
+              workspaceId={ws.id}
+              workspaceSlug={ws.slug}
+            />
+          ) : null;
+        })()}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-7">
           <MyTasksCard
