@@ -1,7 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Sparkles, X, Check } from "lucide-react";
+import {
+  Sparkles,
+  X,
+  Check,
+  BarChart3,
+  Building2,
+  Home,
+  type LucideIcon,
+} from "lucide-react";
 
 /**
  * Dashboard banner inviting workspace owners/admins to start their
@@ -42,35 +50,54 @@ type CheckoutResponse = {
   status?: string;
 };
 
+// Plan tile content. Copy + icons aligned to the marketing-site pricing
+// section so the in-app conversion surface doesn't introduce visual
+// drift at the moment of card capture. Subtitle and bullets are
+// verbatim from trystages.com's pricing tiles; modal title + 14-day
+// subtitle + CTA copy stay in-app-specific (transactional context the
+// marketing site doesn't have).
 const PLAN_DEFS: Array<{
   key: Plan;
   name: string;
   price: string;
-  tagline: string;
+  /** Short audience descriptor — rendered with a Home icon prefix to
+   *  match the marketing site treatment. */
+  subtitle: string;
+  /** Plan icon, rendered inside the 48×48 tile-header block. Lucide
+   *  monochrome — Solo's "colored bars" on the marketing site is
+   *  aesthetic detail, not functional info; the icon CONCEPT is the
+   *  recognition signal. */
+  Icon: LucideIcon;
   bullets: string[];
 }> = [
   {
     key: "solo",
     name: "Solo",
     price: "$29",
-    tagline: "For solo founders and freelancers",
+    subtitle: "Freelancers / solopreneurs",
+    Icon: BarChart3,
     bullets: [
-      "One agency seat (you)",
-      "Unlimited client portals",
       "Unlimited pipelines",
-      "Custom templates",
+      "Unlimited client seats",
+      "Unlimited channels",
+      "Pre-built pipeline snapshots",
+      "File uploads & stage notes",
+      "Deadlines and status tracking",
     ],
   },
   {
     key: "team",
     name: "Team",
     price: "$39",
-    tagline: "For agencies with multiple teammates",
+    subtitle: "Agencies / consultancies",
+    Icon: Building2,
     bullets: [
-      "Multiple agency seats",
       "Everything in Solo",
+      "Multiple members",
+      "Role permission (admin/member)",
+      "Per-pipeline access controls",
+      "Shared workspace history",
       "Priority support",
-      "Workspace-level team chat (soon)",
     ],
   },
 ];
@@ -206,7 +233,7 @@ function PlanPickerModal({
       }}
     >
       <div
-        className="panel-card w-full max-w-[640px] p-6"
+        className="panel-card w-[calc(100vw-2rem)] max-w-[760px] p-6"
         style={{
           maxHeight: "calc(100vh - 32px)",
           overflowY: "auto",
@@ -272,37 +299,77 @@ function PlanTile({
   disabled: boolean;
   onSelect: () => void;
 }) {
+  const Icon = def.Icon;
   return (
     <div
-      className="p-4 rounded-lg flex flex-col"
+      className="p-6 rounded-lg flex flex-col"
       style={{
         background: "#1F1F22",
         border: "1px solid #36363A",
       }}
     >
-      <div className="text-[15px] font-semibold text-white">{def.name}</div>
-      <div className="text-[12.5px] text-zinc-500 mt-0.5">{def.tagline}</div>
-      <div className="mt-3 mb-3">
-        <span className="text-[28px] font-semibold text-white">
+      {/* Header row — 48×48 icon block + plan name. The icon-block
+          treatment + the larger plan-name typography are the two
+          biggest visual shifts vs. the pre-polish tile. Plan name at
+          28px gives it second-loudest-on-the-tile weight (price is
+          first); matches the marketing-site visual rhythm. */}
+      <div className="flex items-center gap-3 mb-2">
+        <div
+          className="flex-shrink-0 w-12 h-12 rounded-lg flex items-center justify-center"
+          style={{
+            background: "#1F1F22",
+            border: "1px solid #36363A",
+          }}
+        >
+          <Icon size={24} className="text-zinc-100" />
+        </div>
+        <div className="text-[28px] font-bold text-zinc-100 leading-none">
+          {def.name}
+        </div>
+      </div>
+
+      {/* Subtitle with Home icon prefix — matches marketing site's
+          "🏠 Freelancers / solopreneurs" pattern. */}
+      <div className="flex items-center gap-1.5 text-[13px] text-zinc-500 mb-4">
+        <Home size={13} className="flex-shrink-0" />
+        <span>{def.subtitle}</span>
+      </div>
+
+      {/* Price block — 40px bold for the dollar amount, 13px zinc-400
+          for "per seat / month". The two strings sit on the same
+          baseline; ml-2 on the suffix keeps it visually attached to
+          the price without crowding. */}
+      <div className="mb-5 flex items-baseline">
+        <span className="text-[40px] font-bold text-zinc-100 leading-none">
           {def.price}
         </span>
-        <span className="text-[13px] text-zinc-400 ml-1">/ seat / month</span>
+        <span className="text-[13px] text-zinc-400 ml-2">
+          per seat / month
+        </span>
       </div>
-      <ul className="space-y-1.5 mb-4 flex-1">
+
+      {/* Feature list — 6 bullets per plan. flex-1 pushes the CTA to
+          the bottom of the tile so both tiles' CTAs align even if
+          their bullet copy lengths differ. Filled green checkmark
+          square is the new visual replacement for the plain Check
+          icon — matches the marketing site treatment. */}
+      <ul className="space-y-2.5 mb-6 flex-1">
         {def.bullets.map((b) => (
           <li
             key={b}
-            className="flex items-start gap-2 text-[12.5px] text-zinc-300"
+            className="flex items-start gap-2 text-[13.5px] text-zinc-300"
           >
-            <Check
-              size={12}
-              className="flex-shrink-0 mt-1 text-stages-green"
-              strokeWidth={3}
-            />
+            <span
+              className="flex-shrink-0 mt-0.5 w-4 h-4 rounded-sm flex items-center justify-center"
+              style={{ background: "#15B981" }}
+            >
+              <Check size={11} className="text-white" strokeWidth={3.5} />
+            </span>
             <span>{b}</span>
           </li>
         ))}
       </ul>
+
       <button
         type="button"
         onClick={onSelect}

@@ -84,6 +84,30 @@ The `is_founding_member` flag is eternal so any of these can ship as a Slice 5.5
 
 ---
 
+### StartTrialModal pre-flight Stripe config check
+
+Currently relies on the generic "Couldn't start checkout — please try
+again." message when Stripe price env vars are missing or misconfigured
+(via the existing `mapCheckoutError` fallback). A pre-flight could
+surface "Pricing isn't configured — contact support" more clearly:
+
+* Modal mount fires `GET /api/billing/config-check` that returns
+  `{ ok: true }` or `{ error: "pricing_not_configured" }`.
+* On error, render a banner above the tiles and disable both CTAs.
+
+**Low priority** — only triggers if Vercel env vars get out of sync
+(`STRIPE_PRICE_SOLO_MONTHLY` / `STRIPE_PRICE_TEAM_MONTHLY` removed or
+misnamed). The current generic error path is functional for everyone
+but the on-call debugger.
+
+**Estimated cost**: ~30 min. New route + 6-line modal useEffect +
+banner JSX. No DB changes.
+
+**Trigger**: first time "Couldn't start checkout — please try again."
+shows up in Vercel logs without a corresponding Stripe API failure.
+
+---
+
 ### Workspace settings refactor: client → server components (after Slice 4)
 
 `src/app/w/[slug]/settings/team/page.tsx` is `"use client"` — legacy from
