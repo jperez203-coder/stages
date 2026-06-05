@@ -1,15 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  Sparkles,
-  X,
-  Check,
-  BarChart3,
-  Building2,
-  Home,
-  type LucideIcon,
-} from "lucide-react";
+import Image from "next/image";
+import { Sparkles, X, Check, Home } from "lucide-react";
 
 /**
  * Dashboard banner inviting workspace owners/admins to start their
@@ -63,11 +56,11 @@ const PLAN_DEFS: Array<{
   /** Short audience descriptor — rendered with a Home icon prefix to
    *  match the marketing site treatment. */
   subtitle: string;
-  /** Plan icon, rendered inside the 48×48 tile-header block. Lucide
-   *  monochrome — Solo's "colored bars" on the marketing site is
-   *  aesthetic detail, not functional info; the icon CONCEPT is the
-   *  recognition signal. */
-  Icon: LucideIcon;
+  /** Plan icon — public path to the actual marketing-site PNG. Using
+   *  the same asset trystages.com renders so brand visual consistency
+   *  carries across marketing → app at the conversion moment. Files
+   *  live in public/ and are served at their root path. */
+  iconSrc: string;
   bullets: string[];
 }> = [
   {
@@ -75,7 +68,7 @@ const PLAN_DEFS: Array<{
     name: "Solo",
     price: "$29",
     subtitle: "Freelancers / solopreneurs",
-    Icon: BarChart3,
+    iconSrc: "/solo-icon.png",
     bullets: [
       "Unlimited pipelines",
       "Unlimited client seats",
@@ -90,7 +83,7 @@ const PLAN_DEFS: Array<{
     name: "Team",
     price: "$39",
     subtitle: "Agencies / consultancies",
-    Icon: Building2,
+    iconSrc: "/team-icon.png",
     bullets: [
       "Everything in Solo",
       "Multiple members",
@@ -299,7 +292,6 @@ function PlanTile({
   disabled: boolean;
   onSelect: () => void;
 }) {
-  const Icon = def.Icon;
   return (
     <div
       className="p-6 rounded-lg flex flex-col"
@@ -312,7 +304,10 @@ function PlanTile({
           treatment + the larger plan-name typography are the two
           biggest visual shifts vs. the pre-polish tile. Plan name at
           28px gives it second-loudest-on-the-tile weight (price is
-          first); matches the marketing-site visual rhythm. */}
+          first); matches the marketing-site visual rhythm. Inner icon
+          is the actual marketing-site PNG (Apple-emoji-styled),
+          loaded from /public via next/image for automatic
+          optimization + lazy loading. */}
       <div className="flex items-center gap-3 mb-2">
         <div
           className="flex-shrink-0 w-12 h-12 rounded-lg flex items-center justify-center"
@@ -321,7 +316,12 @@ function PlanTile({
             border: "1px solid #36363A",
           }}
         >
-          <Icon size={24} className="text-zinc-100" />
+          <Image
+            src={def.iconSrc}
+            width={32}
+            height={32}
+            alt={`${def.name} icon`}
+          />
         </div>
         <div className="text-[28px] font-bold text-zinc-100 leading-none">
           {def.name}
