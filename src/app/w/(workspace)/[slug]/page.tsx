@@ -3,6 +3,8 @@ import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { DashboardGreeting } from "@/components/dashboard/DashboardGreeting";
 import { MissingNameBanner } from "@/components/dashboard/MissingNameBanner";
 import { StartTrialBanner } from "@/components/billing/StartTrialBanner";
+import { FoundingTrialEndingBanner } from "@/components/billing/FoundingTrialEndingBanner";
+import { formatTrialRemaining } from "@/lib/email";
 import { MyTasksCard } from "@/components/dashboard/MyTasksCard";
 import { ActivityCard } from "@/components/dashboard/ActivityCard";
 // TeamChatStrip import intentionally removed — see deferred-not-deleted
@@ -147,7 +149,7 @@ export default async function WorkspaceDashboardPage({
   ] = await Promise.all([
     supabase
       .from("profiles")
-      .select("id, display_name, avatar_url")
+      .select("id, display_name, avatar_url, is_founding_member")
       .eq("id", user.id)
       .single(),
 
@@ -239,14 +241,21 @@ export default async function WorkspaceDashboardPage({
       .neq("actor_id", user.id)
       .gte("created_at", sevenDaysAgoIso),
 
-    // Workspace billing status — drives the StartTrialBanner mount
-    // decision below. RLS lets owner + admin SELECT this row; members
-    // + clients get 0 rows (which our null-coalesce treats as "no
-    // subscription provisioned"). For members the banner is gated
-    // separately by role, so the null result is a no-op for them.
+    // Workspace billing status — drives the StartTrialBanner AND
+    // FoundingTrialEndingBanner mount decisions below. RLS lets owner +
+    // admin SELECT this row; members + clients get 0 rows (which our
+    // null-coalesce treats as "no subscription provisioned"). For
+    // members the banner is gated separately by role, so the null
+    // result is a no-op for them.
+    //
+    // stripe_subscription_id distinguishes Track A founders (NULL —
+    // no Stripe sub yet during the no-card trial) from Track B
+    // subscribers (sub_id set). trial_ends_at feeds the founding
+    // banner's pre-expiry 72h window check + drives the dynamic
+    // remaining-time copy via formatTrialRemaining.
     supabase
       .from("workspace_billing")
-      .select("subscription_status")
+      .select("subscription_status, stripe_subscription_id, trial_ends_at")
       .eq("workspace_id", ws.id)
       .maybeSingle(),
   ]);
@@ -604,28 +613,89 @@ export default async function WorkspaceDashboardPage({
             client side doesn't need a second query. */}
         <MissingNameBanner displayName={displayName} />
 
-        {/* Start-trial banner — owner/admin only; visible when this
-            workspace has no provisioned subscription (status is null
-            or 'canceled'). Trialing / active / past_due all hide it.
-            Decision is computed server-side here so the client
-            component just mounts when present. RLS on
-            workspace_billing already restricts SELECT to owner/admin,
-            but we also gate on role explicitly so members can't
-            stumble into the banner even if a future RLS relaxation
-            ever widens that policy. Two layers of defense, neither
-            redundant. */}
+        {/* Billing banner — at most one of StartTrialBanner (Track B)
+            or FoundingTrialEndingBanner (Track A) renders, per the
+            precedence below. Owner/admin only; RLS already gates
+            workspace_billing SELECT to owner/admin but the explicit
+            role check is defense in depth (two layers, both
+            independently sufficient — see Slice 5 plan thread 1).
+
+            PRECEDENCE
+              1. Founders (profiles.is_founding_member=true) get the
+                 FoundingTrialEndingBanner:
+                   - pre_expiry: status='trialing' + sub_id=null +
+                     trial_ends_at within 72h
+                   - post_expiry: status='canceled' + sub_id=null
+                 Founders OUTSIDE those windows (e.g. trialing but
+                 >72h away, or already upgraded with sub_id set) see
+                 no banner.
+              2. Non-founders get the existing Slice 2 StartTrialBanner:
+                 shown when status is null or 'canceled'.
+              3. Founders with null billing or 'past_due' / 'active' /
+                 'incomplete' see nothing — the eternal founding
+                 policy is honored by the founding-upgrade ROUTE if
+                 they ever need to upgrade, but the banner doesn't
+                 nudge from those states (rare edge cases). */}
         {(() => {
           const role = wsMembershipResult.data?.role;
           const isOwnerOrAdmin = role === "owner" || role === "admin";
+          if (!isOwnerOrAdmin) return null;
+
+          const isFounder =
+            profileRes.data?.is_founding_member === true;
           const status = billingRes.data?.subscription_status ?? null;
-          const shouldShow =
-            isOwnerOrAdmin && (status === null || status === "canceled");
-          return shouldShow ? (
-            <StartTrialBanner
-              workspaceId={ws.id}
-              workspaceSlug={ws.slug}
-            />
-          ) : null;
+          const subId = billingRes.data?.stripe_subscription_id ?? null;
+          const trialEndsAt = billingRes.data?.trial_ends_at ?? null;
+
+          if (isFounder) {
+            // pre_expiry — Track A trial within 72h of deadline.
+            if (
+              status === "trialing" &&
+              subId === null &&
+              trialEndsAt
+            ) {
+              const trialEnd = new Date(trialEndsAt);
+              // eslint-disable-next-line react-hooks/purity
+              const remainingMs = trialEnd.getTime() - Date.now();
+              if (remainingMs > 0 && remainingMs <= 72 * 60 * 60 * 1000) {
+                return (
+                  <FoundingTrialEndingBanner
+                    workspaceId={ws.id}
+                    workspaceSlug={ws.slug}
+                    variant="pre_expiry"
+                    remainingPhrase={formatTrialRemaining(trialEnd)}
+                  />
+                );
+              }
+              return null;
+            }
+            // post_expiry — Track A trial has been canceled by the
+            // day-30 cron.
+            if (status === "canceled" && subId === null) {
+              return (
+                <FoundingTrialEndingBanner
+                  workspaceId={ws.id}
+                  workspaceSlug={ws.slug}
+                  variant="post_expiry"
+                  remainingPhrase={null}
+                />
+              );
+            }
+            // All other founder states (active sub, past_due, null
+            // row, trialing >72h out, etc.) → no banner.
+            return null;
+          }
+
+          // Non-founder: existing Slice 2 StartTrialBanner logic.
+          if (status === null || status === "canceled") {
+            return (
+              <StartTrialBanner
+                workspaceId={ws.id}
+                workspaceSlug={ws.slug}
+              />
+            );
+          }
+          return null;
         })()}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-7">

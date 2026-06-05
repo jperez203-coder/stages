@@ -1,0 +1,52 @@
+-- ============================================================================
+-- Slice 5 follow-up: missed column in the GRANT allowlist
+--
+-- The previous migration (20260621120000_founding_member.sql) revoked broad
+-- UPDATE on public.profiles and re-granted on a 4-column allowlist:
+--   display_name, company_name, last_active_workspace_id, last_active_pipeline_id
+--
+-- I missed `canvas_hint_dismissed`. It's UPDATEd by
+--   src/components/canvas/CanvasCoachmark.tsx:60
+-- as a one-time fire-and-forget when the user dismisses the canvas coachmark.
+-- The previous migration silently broke that update with 42501 (the column
+-- privilege check rejects before RLS evaluates).
+--
+-- This migration adds JUST that one column to the authenticated GRANT.
+-- No other change. Runs cleanly even if applied after multiple sessions
+-- have already 42501'd — GRANT is idempotent.
+--
+-- Lesson for future column-GRANT migrations: grep for ALL .update({…})
+-- payloads that name profile columns, not just .from("profiles").update.
+-- Multi-line / variable-rebound patterns slip through narrow regexes.
+-- ============================================================================
+
+grant update (canvas_hint_dismissed) on public.profiles to authenticated;
+
+-- The authenticated allowlist is now:
+--   canvas_hint_dismissed
+--   company_name
+--   display_name
+--   last_active_pipeline_id
+--   last_active_workspace_id
+
+
+-- ============================================================================
+-- POST-APPLY VERIFICATION — re-run VERIFY 5 from the prior migration.
+-- ============================================================================
+--
+-- select grantee, array_agg(column_name order by column_name) as columns
+-- from information_schema.column_privileges
+-- where table_schema = 'public' and table_name = 'profiles'
+--   and privilege_type = 'UPDATE'
+-- group by grantee
+-- order by grantee;
+--
+-- Expected:
+--   authenticated → {canvas_hint_dismissed, company_name, display_name,
+--                    last_active_pipeline_id, last_active_workspace_id}  (5 cols)
+--   postgres       → all 10 cols  (unchanged)
+--   service_role   → all 10 cols  (unchanged)
+--
+-- is_founding_member must STILL be absent from the authenticated row —
+-- this amendment only adds canvas_hint_dismissed.
+-- ============================================================================

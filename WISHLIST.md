@@ -42,6 +42,68 @@ Also extend `sync_profile_email` (or add a sibling trigger) to keep `avatar_url`
 
 - **"ROLE" column in the members table feels cramped.** Header text width is narrower than the badge content below it, causing visual cramping. Easiest fix: bump the header column to align with the badge's visual width (likely `min-w-[64px]` or set explicit `width` on the `<th>`). Surfaced during 6c-ii verification; non-blocking. Same issue probably applies to the pending-invites table's ROLE column — audit both when polishing.
 
+---
+
+### Slice 5 follow-up: founding-member edge-case banners
+
+**Status**: founders in non-standard billing states currently see no banner. Specifically — Track A founders with any of:
+- `subscription_status='past_due'`
+- `subscription_status='incomplete'`
+- `subscription_status='paused'`
+- billing row missing (`workspace_billing` has zero rows for this workspace_id)
+
+All four cases fall through the precedence tree in `src/app/w/(workspace)/[slug]/page.tsx` without rendering a banner. Acceptable for Slice 5 because:
+- `past_due` / `incomplete` / `paused` only happen AFTER a founding member has already upgraded (so there's an active Stripe subscription) — they're rare downstream states, not initial-funnel cases.
+- `null` billing row is a manual-grant-failure case; the SQL template creates a row from day 1 of founding-member status.
+
+**Worth revisiting when post-launch data shows incidence.** Possible solutions:
+1. Generic "Founding member — billing needs attention, contact support" fallback for the 4 edge states. Hooks into `?founding=upgrade` modal but with a different starting copy.
+2. Specific banner per state (e.g. `past_due` → "Update your payment method" with a Stripe Customer Portal link).
+3. Just emit a console.warn from the page so the workspace owner notices in DevTools (lowest-cost solution; not user-friendly).
+
+The `is_founding_member` flag is eternal so any of these can ship as a Slice 5.5 / Slice 6 polish.
+
+---
+
+### Slice 5 follow-up: client-side billing prop threading (within Slice 5, deferred to next session)
+
+**Status:** Slice 5 ships with the server-side billing gate covering only API routes today. The locked Bucket 1 enumeration had ~47 sites total: 4 API routes (✅ instrumented), 1 server-side flow that turned out to be `"use client"` (moves to this entry), and ~42 direct-PostgREST + client-RPC write sites that need the `subscription_status` prop threaded down from server-rendered parent pages.
+
+**Per-locked decision (this slice):** server gate is the law; client gate is UX optimization. Tonight's instrumentation already meets the "law" bar — invite-send + invite-resend routes (both teammate and client variants) all honor `assertSubscriptionWritable` against the right `workspace_id`. A canceled workspace cannot mint new invite emails.
+
+**What's not yet gated:** in-app writes from the canvas surface (task done toggles, stage rename, file uploads, chat message sends, etc.). Until the prop threading lands, an expired-trial user can still mutate workspace content from the UI without seeing the read-only banner trigger. Per the locked decision this is bounded — the determined-bypass exposure already documented in `src/lib/billing-guard.ts`'s "KNOWN GAP" block covers the same class of issue from a different angle.
+
+**Estimated cost.** ~3–4 hours:
+- Add `subscription_status` to the data bundle passed to each server-rendered parent page that hosts a client write (`/w/[slug]`, `/w/[slug]/my-tasks`, `/w/[slug]/p/[id]`, `/w/[slug]/p/[id]/chat|files|clients`, `/w/[slug]/p/new`, `/w/[slug]/settings/team`, `/portal/[id]/canvas|files`, `/portal/[id]` for task-detail panels). 8-10 pages.
+- Thread the prop down to each client component's TS props interface (~12 components).
+- Add `if (subscriptionStatus !== 'trialing' && subscriptionStatus !== 'active') { router.refresh(); return; }` to each write handler (~42 sites).
+- tsc + build green check.
+- Browser smoke test: trigger expired state via SQL on a test workspace, confirm UI write actions are gated, banner appears.
+
+**Distinct from the RLS-layer hardening below.** That's an entirely separate slice that hardens against direct-PostgREST DevTools bypass — fundamentally different threat model. This entry is about UI-layer enforcement; the RLS entry below is about belt-and-suspenders DB-layer enforcement. Both should ship before live-mode Stripe flip.
+
+---
+
+### Hardening: RLS-layer billing-state write enforcement (after Stripe Slice 5)
+
+**The gap.** Slice 5 ships an app-layer billing guard (`src/lib/billing-guard.ts`) that protects API route + server action writes when `workspace_billing.subscription_status NOT IN ('trialing','active')`. But the ~25 direct-PostgREST write sites in the agency canvas and client portal (task done toggles, file uploads, chat message inserts, stage rename, etc.) talk directly from the browser to Supabase. The server gate never runs for them. Their only gate is a client-side check on a `subscription_status` prop passed down from the server-rendered parent page.
+
+**The exposure.** A user with technical skill + hostile intent can open DevTools and run `supabase.from("tasks").update({ done: true }).eq("id", "…")` against a canceled workspace. The write succeeds because (a) the client-side gate never gets called, (b) the table's RLS policy gates on workspace membership and column-specific rules — not on the workspace's billing status. Honest users get the read-only experience the locked spec calls for; determined users bypass it.
+
+**The fix.** Extend every workspace-table write policy with an EXISTS clause requiring billing-active state. Touches at minimum: `tasks_update`, `tasks_insert`, `tasks_delete`, `stages_*`, `pipelines_update`, `pipelines_delete`, `stage_notes_*`, `pipeline_links_*`, `stage_attachments_*`, `channel_messages_insert`, `channel_memberships_*`, `pipeline_memberships_insert` (member adds), `workspace_invites_insert`, `client_invites_insert`, plus the corresponding storage bucket policies for path-derived workspace_id. SECURITY DEFINER helper `is_workspace_billing_active(workspace_id uuid)` keeps each policy one line of additional logic.
+
+**Estimated cost.** ~6–8 hours including:
+- 1 SECURITY DEFINER helper function
+- ~15 policy migrations (one per affected table)
+- Privacy harness extension (re-run all RLS tests with billing-canceled state to confirm gating)
+- Perf check (the helper runs on every write — should be a single PK lookup on `workspace_billing`, cached per-statement)
+
+**Why deferred.** Risk/reward math at Slice 5 ship time: cost of the gap is bounded (only sophisticated users; minimal revenue impact pre-launch). Cost of doing it now is meaningful (RLS migrations are high-stakes, need careful per-policy testing). Slice 5 ships with the gap; hardening is tracked here.
+
+**Trigger to do this work.** Either:
+1. Real-customer signal (a customer asks "can I lock teammates out after I cancel?"), or
+2. Pre-launch hardening sweep before flipping live-mode Stripe.
+
 ## v1.1 wishlist
 
 Items intentionally **deferred from MVP** to v1.1. The discipline is to ship the prototype's feature set unchanged, then let real customer signal shape v1.1. Don't act on anything in this list without explicit go-ahead from the founder.

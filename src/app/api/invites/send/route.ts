@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { sendInviteEmail } from "@/lib/email";
+import { assertSubscriptionWritable } from "@/lib/billing-guard";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
@@ -77,6 +78,42 @@ export async function POST(request: Request) {
       { status: 401 },
     );
   }
+
+  // ── Billing gate ─────────────────────────────────────────────────────
+  // Look up the invite row to resolve workspace_id (the request body
+  // carries only the token; the client-side INSERT into workspace_invites
+  // already happened before this email-only route was called). RLS on
+  // workspace_invites_select restricts visibility to workspace owner /
+  // admin, so the same RLS that controls who can invite gates who can
+  // resolve workspace_id here. A 404 below masks both "not found" and
+  // "not permitted" identically.
+  const inviteRes = await supa
+    .from("workspace_invites")
+    .select("workspace_id")
+    .eq("token", parsed.token)
+    .maybeSingle();
+  if (inviteRes.error) {
+    console.error(
+      "[invites/send] workspace_invites lookup failed:",
+      inviteRes.error?.message,
+      "code:", inviteRes.error?.code,
+    );
+    return NextResponse.json(
+      { error: "Invite lookup failed" },
+      { status: 500 },
+    );
+  }
+  if (!inviteRes.data) {
+    return NextResponse.json(
+      { error: "Invite not found or no permission" },
+      { status: 404 },
+    );
+  }
+  const block = await assertSubscriptionWritable(
+    inviteRes.data.workspace_id,
+    supa,
+  );
+  if (block) return block;
 
   // Compose the accept URL server-side from the request's origin. A
   // malicious client passing a fake URL in the body would be ignored.

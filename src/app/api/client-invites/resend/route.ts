@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { sendClientInviteEmail } from "@/lib/email";
+import { assertSubscriptionWritable } from "@/lib/billing-guard";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
@@ -132,10 +133,13 @@ export async function POST(request: Request) {
   // the inviter's profile is what surfaces in the header now. When
   // invite.invited_by is null (pre-2026-05-29 invites), profile is null
   // and companyName falls back to null cleanly.
+  //
+  // The pipeline SELECT also returns workspace_id so the billing gate
+  // below can run without a second pipeline read.
   const [pipelineResult, profileResult] = await Promise.all([
     supaAsUser
       .from("pipelines")
-      .select("name")
+      .select("name, workspace_id")
       .eq("id", invite.pipeline_id)
       .maybeSingle(),
     invite.invited_by
@@ -153,6 +157,15 @@ export async function POST(request: Request) {
       { status: 404 },
     );
   }
+
+  // Billing gate: same rationale as /api/client-invites/send. A canceled
+  // workspace shouldn't be sending new portal invites — the client would
+  // land in a read-only workspace and be confused.
+  const block = await assertSubscriptionWritable(
+    pipelineResult.data.workspace_id as string,
+    supaAsUser,
+  );
+  if (block) return block;
 
   const pipelineName = pipelineResult.data.name as string;
   const profile = profileResult.data as

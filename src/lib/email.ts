@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { Resend } from "resend";
 import { ClientInviteEmail } from "@/emails/ClientInviteEmail";
+import { FoundingDay28Email } from "@/emails/FoundingDay28Email";
 import { WorkspaceInviteEmail } from "@/emails/WorkspaceInviteEmail";
 
 /**
@@ -265,4 +266,145 @@ function firstNameOrThere(name: string | null): string {
   if (!name) return "there";
   const first = name.trim().split(/\s+/)[0];
   return first.length > 0 ? first : "there";
+}
+
+// ─── Founding day-28 reminder ────────────────────────────────────────────────
+
+/**
+ * The prod app origin used to build the upgrade CTA URL. Cron-driven
+ * emails have no incoming request to derive an origin from, so this
+ * stays hardcoded. Local dev emails would link to the prod app, which
+ * is fine — cron isn't normally exercised against localhost.
+ */
+const STAGES_APP_BASE_URL = "https://app.trystages.com";
+
+/**
+ * Same `Jordan <jordan@trystages.com>` address used by sendFirstPipelineEmail.
+ * Founding-day-28 is a billing-adjacent transactional, but the founding offer
+ * is a personal program (FB-DM converts, manual SQL grants), so coming from
+ * the founder reads more like the personal nudge it actually is than a
+ * `billing@` would.
+ */
+const FOUNDING_FROM_ADDRESS = FIRST_PIPELINE_FROM_ADDRESS;
+
+export type FoundingDay28PayloadJson = {
+  workspace_id: string;
+  workspace_slug: string;
+  workspace_name: string;
+  /** ISO 8601 string. Used at send time to compute the remaining-time copy. */
+  trial_ends_at: string;
+};
+
+export type FoundingDay28EmailPayload = {
+  to: string;
+  /** display_name snapshot from the queue row. */
+  name: string | null;
+  payload: FoundingDay28PayloadJson;
+  /** Absolute URL to the PNG logo. Cron passes the prod URL. */
+  logoUrl: string;
+};
+
+/**
+ * Sends the Track A founding day-28 nudge email. Invoked by the
+ * send-pending-emails cron when it drains a pending_emails row with
+ * email_type='founding_day28'. The pending_emails row is enqueued by
+ * /api/cron/enqueue-founding-day28.
+ *
+ * Remaining-time copy ("in 3 days" / "in 2 days" / "tomorrow" / "in 6
+ * hours" / "shortly") is computed HERE at send time, not at enqueue
+ * time. That way a row that sits in the queue for ~5 min still renders
+ * accurate copy. The single template handles all phrases.
+ *
+ * Subject and CTA URL are also built here, both threaded through to the
+ * React Email template. CTA points to the workspace dashboard with
+ * `?founding=upgrade` so the banner there can auto-open the upgrade
+ * modal (Step 6 banner work; the email link is safe to ship before that
+ * banner handling lands — until then, the user simply lands on the
+ * dashboard, sees the standing founding-expiry banner, and clicks
+ * through manually).
+ */
+export async function sendFoundingDay28Reminder(
+  args: FoundingDay28EmailPayload,
+): Promise<EmailResult> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const firstName = firstNameOrThere(args.name);
+  const remainingPhrase = formatTrialRemaining(
+    new Date(args.payload.trial_ends_at),
+  );
+
+  const upgradeUrl =
+    `${STAGES_APP_BASE_URL}/w/${encodeURIComponent(args.payload.workspace_slug)}` +
+    `?founding=upgrade`;
+
+  if (!apiKey) {
+    console.warn(
+      [
+        "[email] RESEND_API_KEY missing — founding-day28 email NOT sent.",
+        `  To:          ${args.to}`,
+        `  Workspace:   ${args.payload.workspace_name}`,
+        `  Remaining:   ${remainingPhrase}`,
+        `  Upgrade URL: ${upgradeUrl}`,
+      ].join("\n"),
+    );
+    return { ok: true };
+  }
+
+  const subject = `Your Stages founding trial ends ${remainingPhrase}`;
+
+  try {
+    const resend = new Resend(apiKey);
+    const result = await resend.emails.send({
+      from: FOUNDING_FROM_ADDRESS,
+      to: args.to,
+      subject,
+      react: createElement(FoundingDay28Email, {
+        firstName,
+        remainingPhrase,
+        workspaceName: args.payload.workspace_name,
+        upgradeUrl,
+        logoUrl: args.logoUrl,
+      }),
+    });
+
+    if (result.error) {
+      console.error("[email] Resend founding-day28 send failed:", result.error);
+      return { ok: false, error: result.error.message };
+    }
+
+    console.log(
+      `[email] Sent founding-day28 to ${args.to} via Resend ` +
+        `(id: ${result.data?.id ?? "unknown"}; remaining=${remainingPhrase})`,
+    );
+    return { ok: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[email] Resend SDK threw (founding-day28):", message);
+    return { ok: false, error: message };
+  }
+}
+
+/**
+ * Renders the time-until-trial-ends phrase used in both the email
+ * subject and body. Computed against now() at the moment of send.
+ *
+ *   ≥ 48 hours  → "in N days" (floor)
+ *   24-48 hours → "tomorrow"
+ *   1-24 hours  → "in X hours"
+ *   < 1 hour    → "shortly"
+ *   already past → "very soon" (defensive; the cron filter excludes
+ *                  expired rows but a queue lag could land here)
+ *
+ * Exported for reuse by the privacy harness + future test scaffolding.
+ */
+export function formatTrialRemaining(trialEndsAt: Date): string {
+  const diffMs = trialEndsAt.getTime() - Date.now();
+  if (diffMs <= 0) return "very soon";
+  const totalHours = Math.floor(diffMs / (60 * 60 * 1000));
+  if (totalHours >= 48) {
+    const days = Math.floor(totalHours / 24);
+    return `in ${days} days`;
+  }
+  if (totalHours >= 24) return "tomorrow";
+  if (totalHours >= 1) return `in ${totalHours} hour${totalHours === 1 ? "" : "s"}`;
+  return "shortly";
 }

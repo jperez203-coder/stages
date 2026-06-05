@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { sendClientInviteEmail } from "@/lib/email";
+import { assertSubscriptionWritable } from "@/lib/billing-guard";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
@@ -97,6 +98,41 @@ export async function POST(request: Request) {
     );
   }
   const callerId = userResult.user.id;
+
+  // ─── Billing gate ────────────────────────────────────────────────────────
+  // Resolve workspace_id from pipeline_id and check the workspace's
+  // subscription_status BEFORE inserting the invite. Gating after the
+  // insert would leave orphan client_invites rows; gating here keeps the
+  // DB clean. The pipelines SELECT is RLS-gated to caller having read
+  // access — same gate that workspace_billing_select uses (owner / admin
+  // / membership). A 404 below covers both not-found and not-permitted.
+  const pipelineWsRes = await supaAsUser
+    .from("pipelines")
+    .select("workspace_id")
+    .eq("id", pipelineId)
+    .maybeSingle();
+  if (pipelineWsRes.error) {
+    console.error(
+      "[client-invites/send] pipeline workspace_id lookup failed:",
+      pipelineWsRes.error?.message,
+      "code:", pipelineWsRes.error?.code,
+    );
+    return NextResponse.json(
+      { error: "Pipeline lookup failed" },
+      { status: 500 },
+    );
+  }
+  if (!pipelineWsRes.data) {
+    return NextResponse.json(
+      { error: "Pipeline not found or no permission" },
+      { status: 404 },
+    );
+  }
+  const block = await assertSubscriptionWritable(
+    pipelineWsRes.data.workspace_id,
+    supaAsUser,
+  );
+  if (block) return block;
 
   // ─── Insert invite (RLS gates owner/admin via can_edit_pipeline) ─────────
   const inserted = await supaAsUser

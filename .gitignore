@@ -55,6 +55,8 @@ scripts/probe-casey-profile-read.mjs
 scripts/test-templates-rls.mjs
 scripts/seed-ridgeline-chat.mjs
 scripts/stripe-setup-products-and-prices.mjs
+scripts/stripe-setup-founding-coupon.mjs
 scripts/test-stripe-billing-rls.mjs
+scripts/test-founding-rls.mjs
 scripts/test-seat-sync.mjs
 pipeline-snapshot.png

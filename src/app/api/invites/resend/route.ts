@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { sendInviteEmail } from "@/lib/email";
+import { assertSubscriptionWritable } from "@/lib/billing-guard";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
@@ -129,6 +130,14 @@ export async function POST(request: Request) {
       { status: 410 },
     );
   }
+
+  // Billing gate: gate the resend on the workspace's billing state. If
+  // the workspace's subscription is canceled, sending the email would
+  // bring a teammate into a workspace they can't write to — confusing
+  // UX + bandwidth waste. RLS already filtered the invite row to caller
+  // = owner/admin, so workspace_billing read below is authorized.
+  const block = await assertSubscriptionWritable(invite.workspace_id, supa);
+  if (block) return block;
 
   // Locked decision: resending an expired invite is blocked. To "extend"
   // the clock the user revokes and creates a new one — that's a clearer

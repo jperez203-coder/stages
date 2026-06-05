@@ -1,6 +1,16 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { sendFirstPipelineEmail } from "@/lib/email";
+import {
+  sendFirstPipelineEmail,
+  sendFoundingDay28Reminder,
+  type FoundingDay28PayloadJson,
+} from "@/lib/email";
+
+// Hardcoded prod app URL for cron-context logo refs and CTA URL composition.
+// Local-dev cron exercises aren't normal; emails generated there will link
+// to the prod app, which is the correct behavior in practice.
+const STAGES_APP_BASE_URL = "https://app.trystages.com";
+const STAGES_LOGO_URL = `${STAGES_APP_BASE_URL}/stages-logo.png`;
 
 /**
  * GET /api/cron/send-pending-emails
@@ -57,7 +67,7 @@ export async function GET(request: Request) {
     // pending_emails_due_idx covers the sent_at-null + send_after ordering.
     const { data: due, error: fetchErr } = await supaAdmin
       .from("pending_emails")
-      .select("id, email_type, recipient, recipient_name")
+      .select("id, email_type, recipient, recipient_name, payload")
       .is("sent_at", null)
       .lte("send_after", new Date().toISOString())
       .order("send_after", { ascending: true })
@@ -80,6 +90,30 @@ export async function GET(request: Request) {
         result = await sendFirstPipelineEmail({
           to: row.recipient,
           name: row.recipient_name,
+        });
+      } else if (row.email_type === "founding_day28") {
+        // Type-narrow the payload jsonb. The enqueue route (Step 5)
+        // guarantees this shape; defensive-shape-check would over-engineer
+        // for a server-controlled producer.
+        const payload = row.payload as FoundingDay28PayloadJson | null;
+        if (
+          !payload ||
+          typeof payload.workspace_id !== "string" ||
+          typeof payload.workspace_slug !== "string" ||
+          typeof payload.workspace_name !== "string" ||
+          typeof payload.trial_ends_at !== "string"
+        ) {
+          console.warn(
+            `[cron] founding_day28 row ${row.id} has malformed payload; ` +
+              `leaving un-sent. payload=${JSON.stringify(payload)}`,
+          );
+          continue;
+        }
+        result = await sendFoundingDay28Reminder({
+          to: row.recipient,
+          name: row.recipient_name,
+          payload,
+          logoUrl: STAGES_LOGO_URL,
         });
       } else {
         console.warn(
