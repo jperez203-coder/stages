@@ -84,6 +84,42 @@ The `is_founding_member` flag is eternal so any of these can ship as a Slice 5.5
 
 ---
 
+### Workspace settings refactor: client → server components (after Slice 4)
+
+`src/app/w/[slug]/settings/team/page.tsx` is `"use client"` — legacy from
+phase 3.4 (heavy useEffect-driven data flow via useTeamData / useSession /
+useUserContexts hooks). The Slice 4 billing page is a server component;
+the shared `<WorkspaceSettingsTabs />` chrome was forced to be `"use
+client"` purely so the existing team page can import it without
+restructuring.
+
+**The refactor**: convert `team/page.tsx` to a server component. Push the
+auth gate + initial data fetches up to the server (mirroring
+`billing/page.tsx`'s pattern); keep only the interactive bits (invite
+form, role change menus, kick/leave confirms) as client subcomponents
+mounted as children.
+
+**Net wins**:
+- Initial paint faster (no client-side hook waterfall before team list
+  renders)
+- `<WorkspaceSettingsTabs />` can drop the `"use client"` tag
+- Reduces direct-PostgREST surface on the client side (aligns with the
+  separate RLS-hardening wishlist item)
+- Brings team page in line with the broader app's server-component-first
+  posture
+
+**Estimated cost**: 4–6 hours. Touches useTeamData → server fetch
+conversion, all `supabase.from(...)` calls in the page → server client,
+form submission → server action OR API route, role-change handlers →
+same. Privacy harness extension to verify SSR auth path. Smoke test of
+all team page interactions post-refactor.
+
+**Trigger**: pre-launch hardening sweep alongside the RLS-layer billing
+gate. Both share the "server-side enforcement matters" theme; doing them
+together compresses the surface area being touched.
+
+---
+
 ### Hardening: RLS-layer billing-state write enforcement (after Stripe Slice 5)
 
 **The gap.** Slice 5 ships an app-layer billing guard (`src/lib/billing-guard.ts`) that protects API route + server action writes when `workspace_billing.subscription_status NOT IN ('trialing','active')`. But the ~25 direct-PostgREST write sites in the agency canvas and client portal (task done toggles, file uploads, chat message inserts, stage rename, etc.) talk directly from the browser to Supabase. The server gate never runs for them. Their only gate is a client-side check on a `subscription_status` prop passed down from the server-rendered parent page.

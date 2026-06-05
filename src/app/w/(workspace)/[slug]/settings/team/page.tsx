@@ -26,6 +26,7 @@ import {
 } from "@/hooks/useTeamData";
 import { resolveInitial } from "@/lib/display-name";
 import { supabase } from "@/lib/supabase";
+import { WorkspaceSettingsTabs } from "@/components/settings/WorkspaceSettingsTabs";
 
 /**
  * Team settings page at /w/[slug]/settings/team.
@@ -105,9 +106,8 @@ export default function TeamSettingsPage() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8">
+    <WorkspaceSettingsTabs activeTab="team" slug={slug!}>
       <header className="mb-8">
-        <h1 className="text-[24px] font-semibold mb-1">Team</h1>
         <p className="text-[14px] text-zinc-500">
           Manage who has access to{" "}
           <span className="text-zinc-300">{myContext.workspaceName}</span>.
@@ -163,7 +163,7 @@ export default function TeamSettingsPage() {
         </div>
         <MembersSection teamData={teamData} />
       </section>
-    </div>
+    </WorkspaceSettingsTabs>
   );
 }
 
