@@ -2,37 +2,53 @@
 
 import { useEffect, useState } from "react";
 import Image from "next/image";
-import { Sparkles, X, Check, Home } from "lucide-react";
+import { Sparkles, X, Check, Home, AlertCircle } from "lucide-react";
 
 /**
- * Dashboard banner inviting workspace owners/admins to start their
- * 14-day Stages free trial. Mounts only when the dashboard page's
- * server-side gate determines:
- *   * caller is workspace owner OR admin (RLS-aligned check), AND
- *   * workspace_billing.subscription_status is NULL (no row) or
- *     'canceled' (NOT in trialing / active / past_due — those mean
- *     billing is already provisioned).
+ * Dashboard banner for Track B (non-founder) trial states. Two
+ * variants share the same modal but render different banner cards:
  *
- * The page does the visibility check; this component just renders
- * when mounted. That keeps the banner stateless about "should I show?"
- * and lets the page batch the billing-status query alongside the rest
- * of its parallel data fetch.
+ *   pre_expiry: workspace_billing.subscription_status='trialing' AND
+ *     stripe_subscription_id IS NULL AND trial_ends_at > now() AND
+ *     NOT is_founding_member. Stages-blue Sparkles treatment with
+ *     remaining-time copy "Your free trial ends in X days /
+ *     tomorrow / in X hours" via the formatTrialRemaining helper.
  *
- * Clicking "Choose a plan" opens a modal with Solo / Team tiles. Each
- * tile's "Start 14-day trial" button POSTs to /api/billing/checkout
- * with { workspace_id, plan } and redirects (via window.location.href)
- * to the Stripe-hosted Checkout URL returned in the response.
+ *   expired (Slice 6 NEW): same as above except trial_ends_at <=
+ *     now(). Stages-red AlertCircle treatment, urgent copy "Your
+ *     trial has ended" + "Add a card to restore your workspace and
+ *     continue working." When this variant shows, billing-guard.ts
+ *     enforces read-only writes for the same workspace via gate 5
+ *     in evaluateWritability — banner promise is truthful.
+ *
+ * The dashboard page does the visibility check + variant selection
+ * server-side; this component just renders. Page passes:
+ *   workspaceId, workspaceSlug, variant, remainingPhrase (pre_expiry only)
+ *
+ * Clicking the CTA opens a shared plan picker modal. Each tile's
+ * "Continue with Solo $29/mo" / "Continue with Team $39/mo" button
+ * POSTs to /api/billing/checkout with { workspace_id, plan } and
+ * redirects (via window.location.href) to the Stripe-hosted Checkout
+ * URL returned in the response.
+ *
+ * BANNER PRECEDENCE (computed by the dashboard page IIFE):
+ *   Founders → FoundingTrialEndingBanner (Slice 5, separate component)
+ *   Track B + has Stripe sub → no banner (Stripe is managing)
+ *   Track B + trialing + pre-deadline → THIS, variant="pre_expiry"
+ *   Track B + trialing + post-deadline → THIS, variant="expired"
+ *   Track B + canceled/past_due/etc → no banner (rare; guard blocks)
  *
  * Visual treatment mirrors MissingNameBanner (rounded card, icon tile,
- * text + button) but uses the stages-blue token (#108CE9) — primary
- * actions / feature CTAs — rather than stages-amber (the "needs
- * attention / incomplete" token used by MissingNameBanner).
+ * text + button) but in two distinct palettes — stages-blue (#108CE9)
+ * for pre_expiry; stages-red (#F43F5E) for expired.
  *
  * No localStorage dismissal. Billing is a hard nudge until provisioned;
  * a dismissed banner that re-appears the next session would be more
  * confusing than informative. The user can simply not click; the
  * banner disappears the moment the trial is provisioned (status →
- * 'trialing' after the webhook fires).
+ * 'trialing' after the webhook fires) — at which point stripe_
+ * subscription_id is non-null and the precedence tree hides the
+ * banner.
  */
 
 type Plan = "solo" | "team";
@@ -95,9 +111,13 @@ const PLAN_DEFS: Array<{
   },
 ];
 
+export type StartTrialBannerVariant = "pre_expiry" | "expired";
+
 export function StartTrialBanner({
   workspaceId,
   workspaceSlug: _workspaceSlug,
+  variant,
+  remainingPhrase,
 }: {
   workspaceId: string;
   /** Reserved for future use (e.g. linking to a workspace-specific
@@ -106,6 +126,17 @@ export function StartTrialBanner({
    *  page mounts this banner with both pieces of context already in
    *  hand, and we'd rather not change the prop contract later. */
   workspaceSlug: string;
+  /** Required as of Slice 6. The dashboard page determines which
+   *  variant applies based on workspace_billing.trial_ends_at and
+   *  passes it explicitly. No default — forces the caller to be
+   *  conscious about which state they're rendering. */
+  variant: StartTrialBannerVariant;
+  /** Required when variant === "pre_expiry"; ignored otherwise. The
+   *  dashboard page computes this via formatTrialRemaining(trial_ends_at)
+   *  so the subtitle reads "Your free trial ends in 3 days" / "tomorrow"
+   *  / "in 5 hours" etc. Null on expired variant (we don't render time
+   *  in the past). */
+  remainingPhrase: string | null;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -120,35 +151,59 @@ export function StartTrialBanner({
     return () => window.removeEventListener("keydown", handler);
   }, [open]);
 
+  // Variant-specific visual treatment. Both variants share the same
+  // card shape (rounded-lg + p-4 + icon tile + text stack + CTA) but
+  // use distinct palettes — blue for pre_expiry, red for expired.
+  // CTA button is btn-primary blue in BOTH cases (locked decision —
+  // red CTA on red banner reads as 'destructive action'; blue CTA on
+  // red banner reads as 'fix this').
+  const isExpired = variant === "expired";
+  const cardBg = isExpired
+    ? "rgba(244, 63, 94, 0.08)"
+    : "rgba(16, 140, 233, 0.08)";
+  const cardBorder = isExpired
+    ? "1px solid rgba(244, 63, 94, 0.40)"
+    : "1px solid rgba(16, 140, 233, 0.35)";
+  const iconBg = isExpired
+    ? "rgba(244, 63, 94, 0.18)"
+    : "rgba(16, 140, 233, 0.18)";
+  const iconColor = isExpired ? "text-stages-red" : "text-stages-blue";
+  const heading = isExpired
+    ? "Your trial has ended"
+    : "Add your card to keep your workspace active";
+  const subtitle = isExpired
+    ? "Add a card to restore your workspace and continue working."
+    : `Your free trial ends ${remainingPhrase ?? "soon"}`;
+  const Icon = isExpired ? AlertCircle : Sparkles;
+
   return (
     <>
       <div
         className="mt-6 mb-2 p-4 rounded-lg flex items-start gap-3"
         style={{
-          background: "rgba(16, 140, 233, 0.08)",
-          border: "1px solid rgba(16, 140, 233, 0.35)",
+          background: cardBg,
+          border: cardBorder,
         }}
       >
         <div
           className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center"
-          style={{ background: "rgba(16, 140, 233, 0.18)" }}
+          style={{ background: iconBg }}
         >
-          <Sparkles size={16} className="text-stages-blue" />
+          <Icon size={16} className={iconColor} />
         </div>
         <div className="flex-1 min-w-0">
           <div className="text-[14px] font-semibold text-zinc-100 mb-0.5">
-            Start your 14-day free trial
+            {heading}
           </div>
           <p className="text-[12.5px] text-zinc-400 leading-snug mb-3">
-            Try Stages free for 14 days on any plan. Card required to
-            start — you can change or cancel anytime before day 14.
+            {subtitle}
           </p>
           <button
             type="button"
             onClick={() => setOpen(true)}
             className="btn-primary inline-flex"
           >
-            Choose a plan
+            Add card
           </button>
         </div>
       </div>
@@ -239,7 +294,7 @@ function PlanPickerModal({
               Choose your plan
             </div>
             <div className="text-[12.5px] text-zinc-400 mt-0.5">
-              14-day free trial. Card on file. Cancel anytime before day 14.
+              Add a card to keep your workspace active. Cancel anytime.
             </div>
           </div>
           <button
@@ -380,7 +435,7 @@ function PlanTile({
           cursor: loading ? "wait" : disabled ? "not-allowed" : "pointer",
         }}
       >
-        {loading ? "Starting…" : "Start 14-day trial"}
+        {loading ? "Starting…" : `Continue with ${def.name} ${def.price}/mo`}
       </button>
     </div>
   );

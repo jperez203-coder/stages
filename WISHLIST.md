@@ -144,6 +144,44 @@ together compresses the surface area being touched.
 
 ---
 
+### Track B canceled / past_due banner UX (after Slice 6)
+
+Post-Slice-6, the dashboard banner IIFE shows nothing for Track B users
+whose `workspace_billing.subscription_status` is `'canceled'` or
+`'past_due'` (defensive fallthrough — see
+`src/app/w/(workspace)/[slug]/page.tsx` IIFE for the precedence tree).
+
+The result: a user in either state has zero on-page signal of WHY their
+writes are blocked. billing-guard.ts returns 403 on every write attempt
+(correct), but the UX is: click a button, nothing happens, no visible
+explanation. Same for the Stripe Customer Portal — they have a path to
+fix it, but no in-app pointer to that path.
+
+**The fix**: explicit Track B banners for both states.
+
+* `'canceled'`: red AlertCircle banner. "Your subscription was canceled."
+  Subtitle suggests re-subscribing via `/settings/billing` → "Manage
+  billing" portal flow. Same red palette as the expired-trial variant
+  already in StartTrialBanner.tsx.
+
+* `'past_due'`: amber banner (stages-amber for "needs attention").
+  "Payment failed — your subscription is past due." Subtitle points to
+  the Stripe Customer Portal "Update payment method" flow.
+
+**Why low priority**: these states are rare for Track B users post-
+launch (`'canceled'` requires the user to explicitly cancel in the
+portal; `'past_due'` requires Stripe-side payment failure). Both
+trigger Stripe-side email notifications already, so users aren't
+totally in the dark. The in-app gap is real but not silent.
+
+**Estimated cost**: ~30 min. Add 2 new variants to `StartTrialBanner.tsx`
+(or fork a `BillingIssueBanner.tsx` if the visual treatment diverges).
+Extend the IIFE precedence tree to mount them.
+
+**Trigger**: first time a real customer asks "why can't I edit anything?"
+
+---
+
 ### Hardening: RLS-layer billing-state write enforcement (after Stripe Slice 5)
 
 **The gap.** Slice 5 ships an app-layer billing guard (`src/lib/billing-guard.ts`) that protects API route + server action writes when `workspace_billing.subscription_status NOT IN ('trialing','active')`. But the ~25 direct-PostgREST write sites in the agency canvas and client portal (task done toggles, file uploads, chat message inserts, stage rename, etc.) talk directly from the browser to Supabase. The server gate never runs for them. Their only gate is a client-side check on a `subscription_status` prop passed down from the server-rendered parent page.

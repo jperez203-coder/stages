@@ -620,22 +620,28 @@ export default async function WorkspaceDashboardPage({
             role check is defense in depth (two layers, both
             independently sufficient — see Slice 5 plan thread 1).
 
-            PRECEDENCE
-              1. Founders (profiles.is_founding_member=true) get the
-                 FoundingTrialEndingBanner:
-                   - pre_expiry: status='trialing' + sub_id=null +
-                     trial_ends_at within 72h
-                   - post_expiry: status='canceled' + sub_id=null
-                 Founders OUTSIDE those windows (e.g. trialing but
-                 >72h away, or already upgraded with sub_id set) see
-                 no banner.
-              2. Non-founders get the existing Slice 2 StartTrialBanner:
-                 shown when status is null or 'canceled'.
-              3. Founders with null billing or 'past_due' / 'active' /
-                 'incomplete' see nothing — the eternal founding
-                 policy is honored by the founding-upgrade ROUTE if
-                 they ever need to upgrade, but the banner doesn't
-                 nudge from those states (rare edge cases). */}
+            PRECEDENCE (updated for Slice 6)
+              1. Non-owner/admin → no banner.
+              2. Founders (profiles.is_founding_member=true) →
+                 FoundingTrialEndingBanner with its own pre/post
+                 expiry variants based on status + trial_ends_at.
+                 Same Slice 5 logic, unchanged by Slice 6.
+              3. Track B (non-founders):
+                 a. stripe_subscription_id IS NOT NULL → no banner
+                    (Stripe-managed sub or trial; webhook handles
+                    state transitions).
+                 b. status='trialing' + sub_id IS NULL +
+                    trial_ends_at > now() → StartTrialBanner
+                    variant="pre_expiry" with formatTrialRemaining
+                    subtitle.
+                 c. status='trialing' + sub_id IS NULL +
+                    trial_ends_at <= now() → StartTrialBanner
+                    variant="expired" (Slice 6 NEW — red urgent
+                    treatment; billing-guard enforces read-only
+                    at the API surface for this same condition).
+                 d. canceled / past_due / etc. → no banner. Rare in
+                    practice; billing-guard will block any writes
+                    these users attempt anyway. */}
         {(() => {
           const role = wsMembershipResult.data?.role;
           const isOwnerOrAdmin = role === "owner" || role === "admin";
@@ -686,15 +692,51 @@ export default async function WorkspaceDashboardPage({
             return null;
           }
 
-          // Non-founder: existing Slice 2 StartTrialBanner logic.
-          if (status === null || status === "canceled") {
+          // Track B (non-founder) — Slice 6 logic.
+          if (subId !== null) {
+            // Stripe-managed sub or post-checkout trial: no banner.
+            // If billing state goes bad (past_due, canceled), the
+            // Stripe webhook updates workspace_billing and the
+            // billing-guard takes over enforcement.
+            return null;
+          }
+
+          if (status === "trialing" && trialEndsAt) {
+            const trialEnd = new Date(trialEndsAt);
+            // eslint-disable-next-line react-hooks/purity
+            const remainingMs = trialEnd.getTime() - Date.now();
+            if (remainingMs > 0) {
+              // pre_expiry — Track B in-flight 14-day trial.
+              return (
+                <StartTrialBanner
+                  workspaceId={ws.id}
+                  workspaceSlug={ws.slug}
+                  variant="pre_expiry"
+                  remainingPhrase={formatTrialRemaining(trialEnd)}
+                />
+              );
+            }
+            // expired — trial deadline has passed and the day-12
+            // cron hasn't flipped status to 'canceled' yet (or it
+            // never will because there's no Stripe sub to manage).
+            // billing-guard.ts gate 5 returns 403 for write attempts
+            // on this state, so the banner's "read-only" promise is
+            // truthful.
             return (
               <StartTrialBanner
                 workspaceId={ws.id}
                 workspaceSlug={ws.slug}
+                variant="expired"
+                remainingPhrase={null}
               />
             );
           }
+
+          // Defensive fallthrough — canceled, past_due, null row.
+          // Shouldn't happen post-Slice-6 (the trigger + backfill
+          // guarantee every workspace has a 'trialing' row), but
+          // covers the case where a future state slips through.
+          // billing-guard handles writes; no banner for now.
           return null;
         })()}
 
