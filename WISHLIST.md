@@ -252,6 +252,74 @@ Extend the IIFE precedence tree to mount them.
 1. Real-customer signal (a customer asks "can I lock teammates out after I cancel?"), or
 2. Pre-launch hardening sweep before flipping live-mode Stripe.
 
+---
+
+### 🚨 CRITICAL: POST /api/invites/send returns 404 from browser (Slice 5 pre-existing, ALL invites broken in prod)
+
+**Surfaced**: 2026-06-25 during Slice 6 Part F Phase 7 smoke test.
+
+**Symptom**: invite email never gets sent. POST `/api/invites/send` returns **HTTP 404 from the browser** (via the team-settings invite form). Direct `curl` against the same endpoint returns HTTP 400 with `"Invalid email"` — proving the route file exists and registers.
+
+**Where it lives**: `src/app/api/invites/send/route.ts` (committed in `3679a5c`, Slice 5). Route is registered in `npm run build` output. Probed live via Slice 5/6 build verification — confirmed deployed.
+
+**Likely causes** (ranked):
+1. Client code path mismatch — the form submits to a wrong URL (e.g., trailing slash, lowercase variation, or a typo in `fetch(...)` URL).
+2. Request header difference — browser sends a header the route handler rejects with a 404-like response before reaching the actual route logic.
+3. Middleware redirect — Next.js middleware intercepts the request shape from the browser specifically.
+
+**Diagnostic next steps** (when picked up):
+1. Open DevTools Network tab on team-settings invite submit → copy the exact request URL + headers.
+2. Reproduce that exact request via `curl -H "..." -H "..." ...` → if curl ALSO 404s → route resolution issue. If curl 200/400s → header-specific rejection.
+3. Check `src/middleware.ts` (if it exists) for any redirect on `/api/...` paths.
+4. Grep for `fetch("/api/invites/send"` and `fetch('/api/invites/send'` — confirm casing + slashes match the route file's path.
+
+**Real impact**: PRE-EXISTING Slice 5 bug, NOT a Slice 6 regression — but Slice 6 confirmed it via Phase 7 smoke. **Invite emails currently failing in production for ALL users.** Founders can't onboard teammates via the invite form path; they'd have to manually share workspace URLs and have the recipient sign up + be added.
+
+**Estimated cost**: ~30 min to diagnose by comparing browser vs. curl headers. Fix is likely a 1-line URL correction in the client form code or a middleware bypass.
+
+**Trigger**: pre-launch — invites broken is a launch-blocker for any agency with >1 teammate. Worth fixing before flipping live-mode Stripe.
+
+---
+
+### Hardening: workspace_invites INSERT bypasses billing-guard (architectural gap matching RLS-billing item above)
+
+**Re-confirmed**: 2026-06-25 during Slice 6 Part F Phase 7 smoke test.
+
+**The gap**: the `workspace_invites` row INSERT happens **client-side via direct PostgREST**, bypassing the app-layer billing-guard at `src/lib/billing-guard.ts`. A user whose workspace is in `subscription_status='trialing'` + `stripe_subscription_id IS NULL` + `trial_ends_at <= now()` (Slice 6 Track B expired state) can still create invite rows via direct `supabase.from("workspace_invites").insert(...)` calls from a client component. The InviteForm code path doesn't traverse any API route that would call `assertSubscriptionWritable`.
+
+The downstream email send (which IS gated via `/api/invites/send`) doesn't matter — the row exists, the workspace_invites table has data the user shouldn't have been able to create in read-only state, and a future "manual resend" UX could still email it without re-checking billing state.
+
+**Matches the existing entry** "Hardening: RLS-layer billing-state write enforcement (after Stripe Slice 5)" above. This is one specific instance of the broader pattern; the fix is the same SECURITY DEFINER helper `is_workspace_billing_active(workspace_id uuid)` extended to the `workspace_invites_insert` RLS policy.
+
+**Two paths to fix** (pick one when picking up):
+1. **RLS-layer** (aligned with broader hardening item) — extend `workspace_invites_insert` policy with `AND public.is_workspace_billing_active(workspace_id)`. ~30 min if `is_workspace_billing_active` already exists from the broader hardening sweep.
+2. **Refactor to API route** — move the workspace_invites INSERT into a new POST route (e.g., `/api/invites/create`) that calls `assertSubscriptionWritable` before INSERT. ~2 hours; preserves the existing direct-PostgREST → API split pattern that other slices use.
+
+**Estimated cost**: ~3-4 hours including either approach + privacy harness re-run + smoke verification across canceled/trialing/expired states.
+
+**Trigger**: same as the broader RLS-billing hardening item — pre-launch hardening sweep before live-mode Stripe flip. Suggest doing both items in the same migration touch.
+
+---
+
+### Cosmetic: send-pending-emails cron response shape under-reports `sent` count
+
+**Surfaced**: 2026-06-25 during Slice 6 Part F Phase 10 smoke test.
+
+**Symptom**: `GET /api/cron/send-pending-emails` returned `{"processed":3,"sent":3}` even though 10 queued emails (1 smoke workspace + 9 grace-cohort) were ACTUALLY sent successfully — verified via `sent_at` timestamps on all 10 `pending_emails` rows post-cron.
+
+**Likely cause**: the route's batching loop counts only the most recent batch in its response body, not the cumulative sent across all batches. The work is correct (all rows actually got drained and marked sent); the response is just inaccurate.
+
+**Where it lives**: `src/app/api/cron/send-pending-emails/route.ts`. The `sent` accumulator likely resets between batches in the for-loop, or the response builder reads only the last loop iteration's value.
+
+**Impact**: cosmetic only. Real behavior is correct — emails were sent. The response shape is what's wrong.
+- Monitoring / alerting impact: minimal. cron-job.org dashboard only checks HTTP status, not response body.
+- Audit-trail impact: `sent_at` timestamps in `pending_emails` are the source of truth, not the cron response.
+- Developer-confusion impact: future debugging of the cron will second-guess the count — "did 10 send or 3?" — which adds 5-15 min of `pending_emails` lookup to figure out.
+
+**Estimated cost**: ~10 min. Likely a single-line fix where the loop accumulator was scoped to the inner block instead of the outer function.
+
+**Trigger**: low-priority. Fix opportunistically next time the file is touched for a related reason.
+
 ## v1.1 wishlist
 
 Items intentionally **deferred from MVP** to v1.1. The discipline is to ship the prototype's feature set unchanged, then let real customer signal shape v1.1. Don't act on anything in this list without explicit go-ahead from the founder.
