@@ -148,11 +148,30 @@ export async function POST(request: Request) {
     );
   }
 
-  // ── 4. Dup-block ─────────────────────────────────────────────────────
+  // ── 4. Dup-block + Slice 6 trial-state read ──────────────────────────
   // RLS lets owners/admins SELECT this row (slice 1 policy).
+  //
+  // Slice 6 (commit fcea5d3) added an AFTER INSERT trigger on
+  // public.workspaces that auto-creates workspace_billing with
+  // subscription_status='trialing', stripe_subscription_id=NULL,
+  // trial_ends_at = created_at + 14 days. EVERY workspace now has a
+  // 'trialing' row from day 1 — so the pre-Slice-6 dup-block (which
+  // 409'd any status IN ('trialing','active','past_due')) would 409
+  // every legitimate Track B checkout attempt.
+  //
+  // The Slice 6 fix: 409 only when there's actually a Stripe sub
+  // already managing things (stripe_subscription_id IS NOT NULL).
+  // status='trialing' WITHOUT a Stripe sub is the normal entry state.
+  //
+  // Three columns now needed: subscription_status (for the dup-block
+  // branch), stripe_subscription_id (the "is there already a Stripe
+  // sub?" signal), and trial_ends_at (Slice 6 Bug 2 fix at step 9 below
+  // aligns Stripe's trial_end to this existing deadline so the user
+  // doesn't get a fresh 14-day extension on top of their already-
+  // running trial).
   const { data: existingBilling, error: billErr } = await supa
     .from("workspace_billing")
-    .select("subscription_status")
+    .select("subscription_status, stripe_subscription_id, trial_ends_at")
     .eq("workspace_id", workspace_id)
     .maybeSingle();
   if (billErr) {
@@ -163,10 +182,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Billing lookup failed" }, { status: 500 });
   }
   const currentStatus = existingBilling?.subscription_status ?? null;
+  const existingSubId = existingBilling?.stripe_subscription_id ?? null;
+  const existingTrialEndsAt = existingBilling?.trial_ends_at ?? null;
+
+  // Genuine dup signal: a Stripe subscription already exists for this
+  // workspace. Slice 6 'trialing' rows with sub_id=NULL are NOT dups —
+  // they're the legitimate starting state for the checkout flow. The
+  // asymmetric check on 'trialing' matches Slice 5's
+  // /api/billing/founding-upgrade dup-block at gate 6 — same canonical
+  // marker for "Stripe-managed sub already in flight."
   if (
-    currentStatus === "trialing" ||
     currentStatus === "active" ||
-    currentStatus === "past_due"
+    currentStatus === "past_due" ||
+    (currentStatus === "trialing" && existingSubId !== null)
   ) {
     return NextResponse.json(
       {
@@ -299,14 +327,61 @@ export async function POST(request: Request) {
           quantity: 1,
         },
       ],
-      subscription_data: {
-        trial_period_days: 14,
-        metadata: {
-          workspace_id,
-          plan,
-          supabase_user_id: userId,
-        },
-      },
+      // Slice 6 Bug 2 fix: align Stripe's trial_end to the workspace's
+      // existing trial deadline (set by the Slice 6 trigger at workspace
+      // creation), NOT a fresh trial_period_days: 14 from checkout
+      // completion.
+      //
+      // Pre-Slice-6: workspaces had no trial_ends_at; Stripe owned the
+      // trial lifecycle; trial_period_days: 14 was correct.
+      //
+      // Post-Slice-6: workspaces have trial_ends_at from day 1. Passing
+      // trial_period_days: 14 to Stripe would give the user a FRESH
+      // 14-day trial starting from checkout completion — extending well
+      // beyond the deadline the banner copy + read-only enforcement
+      // promised. A day-10 user would get charged on day 24; a day-15
+      // expired user would get reset to a fresh 14-day trial (defeats
+      // Part C read-only enforcement entirely).
+      //
+      // Pre-deadline path (existingTrialEndsAt > now()): pass trial_end
+      // as the Unix timestamp of the existing deadline. Stripe charges
+      // at the original deadline, no extension.
+      //
+      // Post-deadline path (expired): omit trial_end entirely. Stripe
+      // charges immediately at $29/$39 — the Stripe Checkout page
+      // shows "Total today: $29" so the user sees what they're paying
+      // to restore their workspace. Matches Part C banner promise:
+      // "Add a card to restore your workspace and continue working."
+      //
+      // This pattern mirrors Slice 5's /api/billing/founding-upgrade
+      // pre/post-expiry branching (commit 3679a5c, prod-verified since
+      // 2026-06-05). Inline ternary keeps Stripe SDK type inference
+      // clean — no separate Stripe type import needed.
+      subscription_data:
+        existingTrialEndsAt &&
+        new Date(existingTrialEndsAt).getTime() > Date.now()
+          ? {
+              trial_end: Math.floor(
+                new Date(existingTrialEndsAt).getTime() / 1000,
+              ),
+              metadata: {
+                workspace_id,
+                plan,
+                supabase_user_id: userId,
+              },
+            }
+          : {
+              // No trial_end / trial_period_days → Stripe charges
+              // immediately. Reached when trial is expired (post-
+              // deadline) OR (defensively) when existingTrialEndsAt is
+              // somehow NULL — should never happen post-Slice-6 trigger
+              // + backfill, but the route handles it without crashing.
+              metadata: {
+                workspace_id,
+                plan,
+                supabase_user_id: userId,
+              },
+            },
       // Card REQUIRED at trial start — this is Track B's "card-on-file"
       // model. 'if_required' would let trial start without a card.
       payment_method_collection: "always",
