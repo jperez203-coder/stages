@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Image from "next/image";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Sparkles, X, Check, Home, AlertCircle } from "lucide-react";
 
 /**
@@ -138,7 +139,31 @@ export function StartTrialBanner({
    *  in the past). */
   remainingPhrase: string | null;
 }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [open, setOpen] = useState(false);
+
+  // Slice 6 Part F: ?addcard=true email CTA auto-open. The day-12 email's
+  // CTA link is `/w/{slug}?addcard=true`. When the user lands here, we
+  // auto-open the plan-picker modal so they don't have to click the
+  // banner separately, then strip the param via router.replace so a
+  // refresh doesn't re-fire the auto-open.
+  //
+  // Mirrors Slice 5's FoundingTrialEndingBanner ?founding=upgrade
+  // pattern exactly. Empty deps + eslint-disable matches Slice 5 —
+  // we only want this to run once on mount, not on every searchParams
+  // update (the router.replace would otherwise loop).
+  useEffect(() => {
+    if (searchParams.get("addcard") === "true") {
+      setOpen(true);
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete("addcard");
+      router.replace(
+        `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ""}`,
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Close modal on Escape. Listener only attached while open to avoid
   // intercepting Escape in other UIs.

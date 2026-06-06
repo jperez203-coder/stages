@@ -144,6 +144,56 @@ together compresses the surface area being touched.
 
 ---
 
+### Track B day-12 email — blocked-actions list freshness (post-launch milestone)
+
+The Slice 6 Part F email body lists specific blocked write actions when
+the workspace goes read-only: "creating pipelines, sending messages,
+uploading files." This list is accurate as of Slice 6 ship date but
+will go stale as we add features.
+
+**Specifically becomes stale when**:
+- Templates editor lands (would add "saving templates" to the list)
+- Export functionality ships (would add "exporting data")
+- Any new agency-side write surface ships
+
+**At the next launch milestone**: re-read this email body against the
+current set of `billing-guard.ts` gated routes + the `~25 direct-
+PostgREST write sites` audit from the WISHLIST RLS-hardening item.
+Update the list (or move to a vaguer phrase like "any changes to your
+workspace") so the email doesn't promise consequences that don't match
+reality.
+
+**Estimated cost**: 5 min copy edit per occurrence. Low priority but
+worth a habit-check at each major-feature ship.
+
+---
+
+### Track B day-12 email copy A/B test (post-launch)
+
+Current Slice 6 Part F email copy: *"Your free trial ends [phrase]. Add
+a card today to keep your workspace active — same plan, same pricing,
+just continue working."* + consequence paragraph framing "workspace
+becomes read-only" / "writes will pause until you do."
+
+Neutral, low-pressure, honest. Right shape for first launch where we
+don't yet know what resonates.
+
+**Post-launch A/B test once we have ≥30 day-12 sends per week:**
+- Variant A (current): "keep your workspace active" framing
+- Variant B: "Continue where you left off" (engagement-led)
+- Variant C: "Your trial ends [phrase]. Add a card to stay" (shorter, more urgent)
+- Variant D: explicit feature loss list ("You'll lose access to your X
+  pipelines, Y client portals, Z files" if we have aggregate counts)
+
+Track: open rate, click-through to /w/[slug]?addcard=true, eventual
+checkout completion rate. Pick winner after ~2 weeks of statistically
+meaningful volume.
+
+**Low priority** until volume justifies the analytics work. Subject-line
+test (a separate dimension) is cheaper to run first.
+
+---
+
 ### Track B canceled / past_due banner UX (after Slice 6)
 
 Post-Slice-6, the dashboard banner IIFE shows nothing for Track B users

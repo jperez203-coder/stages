@@ -3,7 +3,9 @@ import { createClient } from "@supabase/supabase-js";
 import {
   sendFirstPipelineEmail,
   sendFoundingDay28Reminder,
+  sendTrackBDay12Reminder,
   type FoundingDay28PayloadJson,
+  type TrackBDay12PayloadJson,
 } from "@/lib/email";
 
 // Hardcoded prod app URL for cron-context logo refs and CTA URL composition.
@@ -110,6 +112,30 @@ export async function GET(request: Request) {
           continue;
         }
         result = await sendFoundingDay28Reminder({
+          to: row.recipient,
+          name: row.recipient_name,
+          payload,
+          logoUrl: STAGES_LOGO_URL,
+        });
+      } else if (row.email_type === "trackb_day12") {
+        // Slice 6 Part F. Same payload shape as founding_day28; defensive
+        // shape-check guards against payload-jsonb drift between the
+        // enqueue route (/api/cron/enqueue-trackb-day12) and this drain.
+        const payload = row.payload as TrackBDay12PayloadJson | null;
+        if (
+          !payload ||
+          typeof payload.workspace_id !== "string" ||
+          typeof payload.workspace_slug !== "string" ||
+          typeof payload.workspace_name !== "string" ||
+          typeof payload.trial_ends_at !== "string"
+        ) {
+          console.warn(
+            `[cron] trackb_day12 row ${row.id} has malformed payload; ` +
+              `leaving un-sent. payload=${JSON.stringify(payload)}`,
+          );
+          continue;
+        }
+        result = await sendTrackBDay12Reminder({
           to: row.recipient,
           name: row.recipient_name,
           payload,

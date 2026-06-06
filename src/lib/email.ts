@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { Resend } from "resend";
 import { ClientInviteEmail } from "@/emails/ClientInviteEmail";
 import { FoundingDay28Email } from "@/emails/FoundingDay28Email";
+import { TrackBDay12Email } from "@/emails/TrackBDay12Email";
 import { WorkspaceInviteEmail } from "@/emails/WorkspaceInviteEmail";
 
 /**
@@ -379,6 +380,112 @@ export async function sendFoundingDay28Reminder(
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("[email] Resend SDK threw (founding-day28):", message);
+    return { ok: false, error: message };
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Slice 6 Part F — Track B day-12 nudge
+//
+// Track B (non-founder) parallel of the founding day-28 nudge. Same shape:
+// SECURITY DEFINER candidate RPC enqueues into pending_emails; this helper
+// gets invoked by send-pending-emails when it drains a `trackb_day12` row.
+// Different copy (no founding/50% framing) + different CTA URL (?addcard=true
+// vs ?founding=upgrade). Same from-address (Jordan, personal) and same
+// formatTrialRemaining helper.
+
+export type TrackBDay12PayloadJson = {
+  workspace_id: string;
+  workspace_slug: string;
+  workspace_name: string;
+  /** ISO 8601 string. Used at send time to compute the remaining-time copy. */
+  trial_ends_at: string;
+};
+
+export type TrackBDay12EmailPayload = {
+  to: string;
+  /** display_name snapshot from the queue row. */
+  name: string | null;
+  payload: TrackBDay12PayloadJson;
+  /** Absolute URL to the PNG logo. Cron passes the prod URL. */
+  logoUrl: string;
+};
+
+/**
+ * Sends the Track B day-12 nudge email. Invoked by the send-pending-
+ * emails cron when it drains a pending_emails row with
+ * email_type='trackb_day12'. The pending_emails row is enqueued by
+ * /api/cron/enqueue-trackb-day12.
+ *
+ * Remaining-time copy ("in 3 days" / "in 2 days" / "tomorrow" / "in 6
+ * hours" / "shortly") is computed HERE at send time, not at enqueue
+ * time. A row that sits in the queue for ~5 min still renders accurate
+ * copy. Same formatTrialRemaining helper as founder day-28.
+ *
+ * Subject and CTA URL built here, both threaded through to the React
+ * Email template. CTA points to the workspace dashboard with
+ * `?addcard=true` so StartTrialBanner can auto-open the plan-picker
+ * modal — mirrors Slice 5's `?founding=upgrade` pattern.
+ */
+export async function sendTrackBDay12Reminder(
+  args: TrackBDay12EmailPayload,
+): Promise<EmailResult> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const firstName = firstNameOrThere(args.name);
+  const remainingPhrase = formatTrialRemaining(
+    new Date(args.payload.trial_ends_at),
+  );
+
+  const addcardUrl =
+    `${STAGES_APP_BASE_URL}/w/${encodeURIComponent(args.payload.workspace_slug)}` +
+    `?addcard=true`;
+
+  if (!apiKey) {
+    console.warn(
+      [
+        "[email] RESEND_API_KEY missing — trackb-day12 email NOT sent.",
+        `  To:          ${args.to}`,
+        `  Workspace:   ${args.payload.workspace_name}`,
+        `  Remaining:   ${remainingPhrase}`,
+        `  Addcard URL: ${addcardUrl}`,
+      ].join("\n"),
+    );
+    return { ok: true };
+  }
+
+  const subject = `Your Stages trial ends ${remainingPhrase}`;
+
+  try {
+    const resend = new Resend(apiKey);
+    const result = await resend.emails.send({
+      // Personal-from-address; same pattern as first-pipeline + founding
+      // day-28. The email reads as a personal nudge from Jordan, not a
+      // billing-system transactional.
+      from: FIRST_PIPELINE_FROM_ADDRESS,
+      to: args.to,
+      subject,
+      react: createElement(TrackBDay12Email, {
+        firstName,
+        remainingPhrase,
+        workspaceName: args.payload.workspace_name,
+        addcardUrl,
+        logoUrl: args.logoUrl,
+      }),
+    });
+
+    if (result.error) {
+      console.error("[email] Resend trackb-day12 send failed:", result.error);
+      return { ok: false, error: result.error.message };
+    }
+
+    console.log(
+      `[email] Sent trackb-day12 to ${args.to} via Resend ` +
+        `(id: ${result.data?.id ?? "unknown"}; remaining=${remainingPhrase})`,
+    );
+    return { ok: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[email] Resend SDK threw (trackb-day12):", message);
     return { ok: false, error: message };
   }
 }
