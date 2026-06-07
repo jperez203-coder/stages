@@ -344,6 +344,24 @@ DROP + CREATE pattern matching Slice S1 Phase 3 Fix 2 (commit `24f65d2`).
 
 ---
 
+#### ✅ RESOLVED 2026-06-07 in commit `d1cb6c8` — `fix(slice-s2): qualify storage.objects.name in stage_attachments policies (typo fix)`
+
+Single migration `20260624170000_fix_stage_attachments_storage_typo.sql` — DROP + CREATE both affected policies with `where sa.storage_path = storage.objects.name` (qualified). INSERT policy untouched (no metadata-table join → no ambiguity).
+
+**Verified post-apply:**
+- Probe (a): both fixed policies show `has_qualified_ref=true` and `has_bare_buggy_ref=false`. `pg_policies` normalizer stored form: `sa.storage_path = objects.name` (schema prefix dropped because policy is `ON storage.objects`).
+- Probe (b): INSERT policy untouched (`stage_attachments_storage_insert`).
+- Probe (c): 6 total Stages-defined storage policies — count unchanged.
+- Probe (d) — canonical behavior probe via `scripts/test-rls-phase3.mjs`:
+  - Pre-fix: `S2.6 SKIPPED — Waiting on Slice S2 Phase 3 typo fix`
+  - Post-fix: `S2.6 PASS — Phase 3 fix is live — Jordan mint+fetch ok`
+
+Harness now reports 13/13 PASS (with only the pre-existing T1.2 SKIP on the Sarah-membership gap, separately tracked).
+
+**Lesson for future policy authors:** when a SECURITY DEFINER / RLS policy's USING/WITH CHECK joins a metadata table inside an EXISTS subquery, **always qualify** any column reference shared with the policy's target table. The Slice S2 typo pattern fires whenever the joined table happens to share a column name (e.g. `name`, `id`, `created_at`) with the target — silently broken, no compile-time warning, no test failure unless the policy is exercised with real data.
+
+---
+
 ### Storage bucket hygiene — file_size_limit + allowed_mime_types defaults
 
 **Surfaced**: 2026-06-07 during Slice S2 Phase 1 storage audit (`docs/STORAGE-AUDIT.md` § 3, hygiene items H1 + H2).
@@ -389,6 +407,24 @@ where id in ('stage_attachments', 'pipeline_files');
 **Cross-references**:
 - `docs/STORAGE-AUDIT.md` § 3 — bucket configuration table where the null values were observed
 - WISHLIST → existing "Storage janitor (orphan bytes from deleted pipelines)" — natural PR companion
+
+---
+
+### docs/DATA-COLLECTION.md § 1.6 — `kind` value drift (`'image'` → `'file'`)
+
+**Surfaced**: 2026-06-07 during Slice S2 Phase 2 harness implementation. First seed run crashed with `new row for relation "pipeline_links" violates check constraint "pipeline_links_kind_check"`.
+
+**The drift.** Migration `20260531120000_pipeline_links_file_kind_and_mime_type.sql` renamed the storage-backed `pipeline_links.kind` value from `'image'` to `'file'`. `docs/DATA-COLLECTION.md` § 1.6 (Pipeline links section) still lists `kind` as taking `'url'` or `'image'`. Other doc sections may have the same drift — worth a grep before fixing.
+
+**The fix.** Grep `docs/` for `kind = 'image'` / `kind='image'` / `'image'` in pipeline-links context, replace with `'file'` where appropriate. Single ~10-min docs touch-up.
+
+**Estimated cost**: ~10 min (grep + edit + one-paragraph note in the section explaining the rename happened in the linked migration).
+
+**Trigger**: opportunistic — pure docs hygiene. Caught harness implementation, no user impact.
+
+**Cross-references**:
+- `supabase/migrations/20260531120000_pipeline_links_file_kind_and_mime_type.sql` — the migration that renamed the value
+- `docs/DATA-COLLECTION.md` § 1.6 — the stale doc section
 
 ---
 
