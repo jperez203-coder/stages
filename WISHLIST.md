@@ -254,6 +254,64 @@ Extend the IIFE precedence tree to mount them.
 
 ---
 
+### Hardening: table-level GRANT audit across `public` schema
+
+**Surfaced**: 2026-06-06 during Slice 0.1 smoke test.
+
+**The finding**. PostgreSQL evaluates `GRANT` privileges BEFORE RLS policies. A table can have a perfectly-correct RLS UPDATE policy (e.g. `id = auth.uid()`) and still refuse the operation with `42501 permission denied for table X` if the calling role doesn't hold the corresponding column-level UPDATE GRANT.
+
+Slice 0.1's user toggle for `improvement_signals` 42501'd immediately on the first smoke click — even though the `profiles_update` RLS policy is correct — because the `authenticated` role's GRANT allowlist on `public.profiles` didn't include the new `ai_consent` column (and was also missing the older `avatar_url` column the audit doc previously claimed was wired up).
+
+Ad-hoc SQL applied to prod added both columns to the allowlist; captured as migration `20260624130000_profiles_update_grants.sql` for restore parity.
+
+**The risk to other tables**. The same shape of mismatch may exist elsewhere in the `public` schema, in two directions:
+
+1. **RLS exists, GRANT missing** — false-sense-of-access: the policy reads "this is allowed" but operationally everything 42501s. User-facing bugs that look like Supabase outages. Easy to detect via integration tests.
+2. **GRANT exists, RLS missing** — real exploit surface: the policy doesn't constrain who can read or write a column, but the GRANT layer let it through anyway. Silent data leak or privilege escalation. Hard to detect without an explicit audit.
+
+The second case is the dangerous one. The Slice 0.1 finding raises the prior probability that other policy/grant pairs are out of sync across the ~30 tables.
+
+**The audit**. For every table in the `public` schema, verify:
+- Column-level `GRANT` lists for `authenticated` and `anon` roles match the intent expressed by RLS policies.
+- No column is grant-permitted but RLS-blocked (false-promise pattern — annoying but safe).
+- More importantly: no column is RLS-blocked but GRANT-permitted, or RLS-missing-entirely while GRANT-permitted.
+- The exclusion-canary pattern from `20260624130000` is replicated for every other "must not be user-writable" column (e.g. any future `is_*` flag that confers paid access).
+
+Single SQL query to enumerate every grant + policy pair:
+
+```sql
+select t.table_name,
+       array_agg(distinct cp.column_name || ':' || cp.privilege_type)
+         filter (where cp.grantee = 'authenticated') as auth_grants,
+       array_agg(distinct p.cmd) as rls_cmds
+from information_schema.tables t
+left join information_schema.column_privileges cp
+  on cp.table_schema = t.table_schema
+ and cp.table_name = t.table_name
+left join pg_policies p
+  on p.schemaname = t.table_schema
+ and p.tablename = t.table_name
+where t.table_schema = 'public'
+  and t.table_type = 'BASE TABLE'
+group by t.table_name
+order by t.table_name;
+```
+
+Read the output table-by-table, flag every mismatch as either a fix-migration or an open finding.
+
+**Estimated cost**: ~2 hours including the enumeration query, manual review of all ~30 tables, fix migrations for any anomalies found, and a privacy-harness extension that asserts the policy/grant pairing for every table.
+
+**Scoped within Slice S1** (RLS audit + automated test suite — see the slice plan in the project handoff). Flagging here explicitly because Slice S1 as originally scoped focused on the RLS layer; the GRANT layer is a co-equal concern that the Slice 0.1 smoke surfaced as material risk.
+
+**Trigger**: pre-launch hardening sweep before live-mode Stripe flip, alongside the broader RLS-billing-state hardening above.
+
+**Cross-references**:
+- `supabase/migrations/20260624130000_profiles_update_grants.sql` (the Slice 0.1 fix that surfaced this pattern)
+- `supabase/migrations/20260621120100_founding_member_grant_amendment.sql` (prior incident — same shape, smaller blast radius)
+- `docs/DATA-COLLECTION.md` § 5 (Slice S1 referenced as the home for the test suite)
+
+---
+
 ### 🚨 CRITICAL: RTBF (Right To Be Forgotten) deletion handler
 
 **Surfaced**: 2026-06-06 during Slice 0 Part 0.A data audit.
