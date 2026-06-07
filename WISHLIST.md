@@ -252,6 +252,32 @@ Extend the IIFE precedence tree to mount them.
 1. Real-customer signal (a customer asks "can I lock teammates out after I cancel?"), or
 2. Pre-launch hardening sweep before flipping live-mode Stripe.
 
+**Slice S1 Phase 3 status (2026-06-07)**: still active. The C1 client-boundary instance of this same architectural pattern (app-layer-only enforcement → direct-PostgREST bypass) was closed by Slice S1 Phase 3 Fix 4 (`f34fe32` — `workspaces_insert` RLS-layer enforcement via `can_create_workspace` helper). That fix demonstrates the pattern (SECURITY DEFINER predicate helper + RLS policy WITH CHECK) that this broader billing-state hardening will use too. The billing-state half of this entry remains unaddressed — ~25 direct-PostgREST write sites still pass through to Supabase regardless of `subscription_status`.
+
+---
+
+### ✅ RESOLVED 2026-06-07: workspaces_insert C1 client-boundary bypass
+
+**Surfaced**: 2026-06-06 during Slice S1 Phase 1 RLS audit. Documented in `docs/RLS-AUDIT.md` § 3.1 as the single 🚨 CRITICAL finding of the audit.
+
+**The exploit.** Pre-fix `workspaces_insert` had `WITH CHECK = (auth.uid() IS NOT NULL)` — any authenticated user could POST directly to `/rest/v1/workspaces` with their JWT and create a workspace row. A pure client could open DevTools and escape the C1 client-boundary entirely. The C1 rule was enforced only in the application layer (`create_workspace_with_owner` RPC) — direct PostgREST INSERT bypassed the RPC and the rule never ran.
+
+**Fixed in**: `f34fe32` — `fix(slice-s1): close C1 bypass via can_create_workspace helper + RLS policy`.
+
+Three-part fix in one migration (`20260624140300_workspaces_insert_c1_enforcement.sql`):
+1. `public.can_create_workspace(actor uuid)` SECURITY DEFINER helper mirroring the locked three-case rule from the existing RPC (20260605120000) byte-for-byte. `has_agency` includes both `workspace_memberships` AND agency-role `pipeline_memberships` (owner/admin/member) — matches the RPC's broader definition so mixed-role users pass through as agency.
+2. Least-privilege EXECUTE allowlist on the helper: revoked from `public` AND `anon` explicitly, granted only to `authenticated`. The `anon` revoke was the post-apply discovery — in Supabase, revoking from PUBLIC does NOT transitively cover `anon`/`authenticated`. Lesson captured inline in the migration header.
+3. `workspaces_insert` DROP + CREATE with WITH CHECK calling the helper.
+
+The application-layer RPC check STAYS — defense-in-depth, two distinct threat models. RPC callers hit the RPC's check first (clearer error). Direct-PostgREST callers now hit the new RLS policy.
+
+**Canonical proof of close** (probe (e) from the migration):
+- Pre-fix: pure client `supabase.from('workspaces').insert(...)` → 201, row inserted (THE EXPLOIT).
+- Post-fix: same call → BLOCKED at helper level. `activity_test_allowed = false` verified live.
+- Onboarding regression check: Jordan created `post-fix4-regression-test` workspace via standard `/onboarding/create-workspace` UI without issue.
+
+**Pattern reusable.** The SECURITY DEFINER helper + RLS WITH CHECK pattern this fix demonstrates is the same shape the broader RLS-billing-state hardening entry (above) will use when it ships. Worth noting: the C1 helper here is straightforward (membership-existence checks across two tables); a billing-state helper would be a single PK lookup on `workspace_billing` and is per-statement cacheable.
+
 ---
 
 ### Hardening: table-level GRANT audit across `public` schema
@@ -690,12 +716,15 @@ Per the founder checklist (§ 3.9 item 19), an email to `info@cron-job.org` requ
 - Export to CSV for compliance review.
 - New RLS SELECT policy on `ai_consent_audit` (added in this slice's migration, not Slice 0.1's): workspace owners can read `where scope_type = 'workspace' and scope_id = $workspace_id`, plus their own `where scope_type = 'user' and scope_id = auth.uid()`. Members read only own `scope_type = 'user'` rows.
 
-**Estimated cost**: ~3–4 hours including the RLS policy migration, two query patterns (consent vs actions), table rendering, filters, and CSV export.
+**🚨 Pre-requisite from Slice S1 Phase 3 Fix 1 (2026-06-06, commit `2500e56`)**: `ai_consent_audit` had its `anon` + `authenticated` table-level GRANTs revoked as part of the brittle-architecture cleanup. **This slice's SELECT policy alone will NOT work — it must also re-GRANT `SELECT` at the column level to `authenticated`.** Pattern matches `20260624130000_profiles_update_grants.sql` (column-level grant allowlist excluding sensitive columns). Recommended column scope for the audit-UI: `id, scope_type, scope_id, actor_name, changed_field, old_value, new_value, changed_at` — exclude nothing today (no sensitive columns on this table), but the column-level form keeps the door open for future column additions to be off by default. Without the re-grant, the SELECT policy will 42501 the same way Slice 0.1's `profiles.ai_consent` toggle did before its grants migration.
+
+**Estimated cost**: ~3–4 hours including the RLS policy migration, the column-level re-grant migration, two query patterns (consent vs actions), table rendering, filters, and CSV export.
 
 **Trigger**: first AI action ships (no point shipping the audit UI before there are actions to audit). Also useful for compliance review and trust-building with customers.
 
 **Cross-references**:
 - `docs/DATA-COLLECTION.md` § 4.3.C (placeholder slot), § 4.3.D (audit-table design), § 4.4 (forward-looking question on member-visibility)
+- `supabase/migrations/20260624140000_revoke_service_role_table_grants.sql` (Slice S1 Phase 3 Fix 1 — the REVOKE this slice must re-grant against)
 - WISHLIST → Slice 0.3 (audit rows for AI actions originate there)
 
 ---
