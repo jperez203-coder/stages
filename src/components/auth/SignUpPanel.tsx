@@ -216,6 +216,7 @@ export function SignUpPanel() {
           onSignedUp={setPendingConfirmEmail}
           lockedEmail={inviteLock.email}
         />
+        <ConsentMicrocopy />
       </AuthShell>
     );
   }
@@ -226,6 +227,30 @@ export function SignUpPanel() {
       subtitle="Set up a workspace to start tracking client engagements."
     >
       <SignUpForm onSignedUp={setPendingConfirmEmail} />
+      <ConsentMicrocopy />
     </AuthShell>
+  );
+}
+
+/**
+ * Legal-consent microcopy rendered below the SignUpForm in both
+ * invite-locked and non-locked signup paths. Locked at Slice S7
+ * build time — the microcopy MUST be visually proximate to the
+ * "Create account" submit button for the consent linkage to be
+ * unambiguous.
+ */
+function ConsentMicrocopy() {
+  return (
+    <p className="mt-4 text-[12px] text-zinc-500 leading-relaxed text-center">
+      By creating an account, you agree to our{" "}
+      <Link href="/terms" className="text-stages-blue hover:underline">
+        Terms of Service
+      </Link>{" "}
+      and acknowledge our{" "}
+      <Link href="/privacy" className="text-stages-blue hover:underline">
+        Privacy Policy
+      </Link>
+      .
+    </p>
   );
 }
