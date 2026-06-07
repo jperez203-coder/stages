@@ -256,6 +256,58 @@ Extend the IIFE precedence tree to mount them.
 
 ---
 
+### Slice S1 follow-on — Tier 3 RLS tests (column-grant alignment + refined weak-policy heuristic)
+
+**Surfaced**: 2026-06-06 during Slice S1 Phase 1 audit (Q5 lock) — deferred from Phase 2 to keep that sprint scoped at 7 tests (Tier 1 + Tier 2).
+
+**Status**: deferred. Phase 2 (`scripts/test-rls-phase3.mjs`, commit `a473156`) ships 4 critical-regression tests + 3 defensive canaries — all passing 7/7. Tier 3 extends the harness with two additional standing-invariant tests that would catch broader-pattern regressions earlier than waiting for them to manifest as a specific bug.
+
+**The two Tier 3 tests:**
+
+1. **Column-grant alignment.** For every public-schema table with an RLS UPDATE policy, verify the `authenticated` column-level GRANT allowlist contains exactly the columns the policy implicitly permits writing — no more, no less. Catches the Slice 0.1 shape (RLS-permits, GRANT-missing → 42501) generically across the schema, not just on `profiles`. Implementation: a SECURITY DEFINER RPC `audit_column_grant_alignment()` (sibling of `audit_grant_without_rls()`) that returns a row per misalignment, plus a harness test that asserts the RPC returns 0 rows.
+
+2. **Refined weak-policy heuristic.** The Phase 1 Query 6 regex matched several `template_*` policies as "weak" but they were correct (`workspace_id IS NOT NULL` as a join guard, NULL `with_check` on DELETE, etc.). Per Phase 1 § 8 the refined predicate is:
+   - USING is literally `true` / `(true)`, OR
+   - USING's only condition is `auth.uid() IS NOT NULL` / `auth.role() = 'authenticated'` (full match, not substring),
+   - AND the policy command is SELECT / UPDATE / DELETE.
+   Implementation: a SECURITY DEFINER RPC `audit_weak_policies()` returning matching policies, plus a snapshot-vs-current harness test that flags any new policy that newly matches the weak heuristic (i.e. tighter than just "not zero").
+
+**Estimated cost**: ~1.5–2 hours. Two RPCs (mirroring the `audit_grant_without_rls` shape) + two harness tests + their verification + a WISHLIST `RESOLVED` update.
+
+**Trigger**: either (a) a future Phase 2 run reveals a Tier 1+2 gap that a Tier 3 test could have caught earlier, or (b) the pre-launch hardening sweep wants stricter standing invariants in CI before live-mode Stripe flip.
+
+**Cross-references**:
+- `docs/RLS-AUDIT.md` § 9 — Phase 2 test harness recommendations (Tier 3 explicitly named).
+- `docs/RLS-AUDIT.md` § 10 Q5 — the lock that deferred Tier 3.
+- `supabase/migrations/20260624150000_audit_grant_without_rls_rpc.sql` — pattern to mirror for the two new RPCs.
+
+---
+
+### Slice S1 Phase 2 follow-on — T1.2 cross-workspace test has no eligible exclusion target
+
+**Surfaced**: 2026-06-07 during the first run of `scripts/test-rls-phase3.mjs`. T1.2 reported `SKIPPED — no eligible excluded workspace`.
+
+**The gap.** T1.2 cross-workspace isolation needs a workspace where the target user (Sarah) is NOT a member AND has no pipeline_memberships to any pipeline in it — so the test can assert Sarah's authenticated session sees zero rows. Sarah is currently a member (workspace or pipeline) of every workspace Jordan owns, so the eligibility probe returns no candidate, and T1.2 skips with a green check by harness convention.
+
+**Why this is a weak pass, not a real failure.** The cross-workspace isolation policy itself (C2 from CLAUDE.md → Security Model) has been live since Slice 1's RLS migrations — same shape as the policies T1.1 / T1.3 / T1.4 are already validating. C2 isn't relying on this one test for coverage. But T1.2 was supposed to be the standing automated proof of C2; right now it's effectively skipped at every harness run.
+
+**Two fix options:**
+
+1. **Dedicated single-membership test account.** Add a new test user (e.g. `jordanperez1270+rls-isolation@gmail.com`) whose ONLY membership is to the seeded test pipeline. T1.2 then uses that user instead of Sarah, and is guaranteed to find an eligible excluded workspace. ~10 min: create the account, add ID to the harness `ACCOUNTS` map, swap the user in the T1.2 body.
+
+2. **Seed an excluded workspace as part of fixture setup.** Service-role create a second workspace `rls-phase3-test-exclusion-${runId}` with a pipeline inside, owned by Jordan but with no Sarah membership. T1.2 reads from THAT workspace's pipeline. Costs more setup time + cleanup complexity; option 1 is cleaner.
+
+**Recommendation**: option 1. Keep the harness fixture footprint small; pay the 10-min account-creation cost once.
+
+**Estimated cost**: ~15 min including the account creation, harness update, re-run verification.
+
+**Trigger**: opportunistic. Cross-workspace isolation isn't going untested in practice — every Tier 1 test that uses Sarah as a non-member implicitly relies on the same policy. But the harness should be honest about its own coverage, and SKIPPED-by-convention is not the same as PASS.
+
+**Cross-references**:
+- `scripts/test-rls-phase3.mjs` — `resolveExclusionTargets()` and `t12_crossWorkspace()`.
+
+---
+
 ### ✅ RESOLVED 2026-06-07: workspaces_insert C1 client-boundary bypass
 
 **Surfaced**: 2026-06-06 during Slice S1 Phase 1 RLS audit. Documented in `docs/RLS-AUDIT.md` § 3.1 as the single 🚨 CRITICAL finding of the audit.
