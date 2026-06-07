@@ -542,6 +542,116 @@ The `xmax = 0` trick distinguishes a fresh INSERT from an UPDATE-of-existing-row
 
 ---
 
+### Slice S8 follow-on — full Content-Security-Policy rollout
+
+**Surfaced**: 2026-06-08 during Slice S8 OWASP sweep. Documented in `docs/OWASP-AUDIT.md` § 6 (WO1).
+
+**Status**: deferred per the Slice S8 spec ("Don't try to add comprehensive CSP if app uses dynamic scripts — start permissive, tighten in follow-on"). Slice S8 shipped 5 statically-safe baseline headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Strict-Transport-Security`, `Permissions-Policy`); CSP is the next layer.
+
+**The gap.** Without a CSP, the only protection against script injection is React's automatic JSX escaping (which Slice S8 verified — zero `dangerouslySetInnerHTML` in `src/`). If a future maintainer introduces a `dangerouslySetInnerHTML` usage, an `eval`-based pattern, or a third-party script that gets compromised, there's no second-layer defense to fall back on. CSP provides that defense — a server-side allowlist of which origins the browser is permitted to load script/style/image/font/connect targets from.
+
+**The fix shape — three phases:**
+
+1. **Empirically enumerate origins.** Survey the app for all script/style/image/font/connect targets. Known so far: Supabase (`*.supabase.co`), Stripe (`js.stripe.com`, Stripe Checkout iframes), Google OAuth (`accounts.google.com`), our own origin, fonts (already self-hosted via `next/font` so no external font origin needed).
+
+2. **Deploy in report-only mode for 1–2 weeks.** Use the `Content-Security-Policy-Report-Only` header — browsers report violations but don't block. Collect violations from real traffic. Especially watch for blind spots (third-party integrations that surprise us, dynamic imports that have a CDN-hosted manifest, etc.).
+
+3. **Tighten to enforcement mode.** Switch the header from `-Report-Only` to enforcement. Lock the policy in `next.config.ts` alongside the existing baseline headers.
+
+**Estimated cost**: ~3–4 hours including the report-only window (mostly waiting for traffic to surface violations). Implementation itself is ~1 hour.
+
+**Trigger**: post-launch hardening sweep. Not blocking pre-launch — the baseline headers close the immediate clickjacking + MIME-sniff + referrer-leak gaps; CSP is the next layer of defense, not the first.
+
+**Cross-references**:
+- `docs/OWASP-AUDIT.md` § 6 (WO1) — full rollout plan
+- `next.config.ts` — where the CSP will live alongside the existing 5 baseline headers
+- Slice S8 commit (this slice's `feat(slice-s8): OWASP sweep`) — established the headers infrastructure
+
+---
+
+### Slice S8 follow-on — `postcss` transitive CVE upstream watch
+
+**Surfaced**: 2026-06-08 during Slice S8 `npm audit`. Documented in `docs/OWASP-AUDIT.md` § 3 (F2) + § 6 (WO2).
+
+**The CVE.** `postcss` <8.5.10 has a moderate-severity XSS vector via unescaped `</style>` in stringify output. The vulnerable version is pulled in as a transitive dependency by Next.js (`node_modules/next/node_modules/postcss`). `npm audit fix --force` would downgrade Next.js to 9.3.3, which is unacceptable. Slice S8 left the CVE in place per the Slice S3 cost-justified posture (accept-and-wait for upstream).
+
+**App-side risk.** Minimal. The vulnerability requires the attacker to control the CSS that postcss is processing. Stages only processes CSS at build time on our infrastructure (CI), not in response to user input. There is no runtime path from user input to postcss.
+
+**The fix path.** Wait for Next.js to bump the transitive `postcss` dependency past 8.5.10. Track via:
+- Next.js GitHub releases or upgrade-guide notes
+- Re-running `npm audit` at each Next.js patch bump
+
+**Estimated cost**: opportunistic — the fix is automatic when Next.js publishes a patch. Just verify post-upgrade with another `npm audit`.
+
+**Trigger**: every Next.js minor or patch bump. Founder can re-run `npm audit` opportunistically.
+
+**Cross-references**:
+- `docs/OWASP-AUDIT.md` § 3 (F2) + § 6 (WO2)
+- Advisory: <https://github.com/advisories/GHSA-qx2v-qp2m-jg93>
+
+---
+
+### Slice S8 follow-on — forgot-password / reset-password smoke verification
+
+**Surfaced**: 2026-06-08 during Slice S8 auth-flow inventory. Documented in `docs/OWASP-AUDIT.md` § 5 (A07) + § 6 (WO3).
+
+**The handoff context.** The original Slice 0 handoff WISHLIST flagged a 404 on `/auth/signin`'s "Forgot password?" link (reset page missing). Slice S8 verified both `ForgotPasswordPanel.tsx` and `reset-password/page.tsx` exist on disk with clean structure, so the 404 was likely already fixed at some point. **Spot-check did not run end-to-end (would require sending a reset email and clicking through).**
+
+**The fix.** A 5-minute manual smoke test by the founder:
+
+1. Sign out (or use incognito).
+2. Visit `/auth/signin`.
+3. Click "Forgot password?" — assert: lands at `/auth/forgot-password`, no 404.
+4. Submit an email — assert: triggers Supabase reset-email send, success state renders.
+5. Open the email, click the reset link — assert: lands at `/auth/reset-password`, no 404.
+6. Set a new password — assert: signs in successfully on the next attempt.
+
+If any step fails, the symptoms drive a targeted code fix (the components exist, so most likely root cause is a Supabase email-template redirect-URL mismatch or a broken intermediate route).
+
+**Estimated cost**: 5 min smoke + at most ~30 min fix if a route's broken.
+
+**Trigger**: post-S8 smoke window or any pre-launch test pass.
+
+**Cross-references**:
+- `docs/OWASP-AUDIT.md` § 5 (A07) — auth flows survey
+- `src/components/auth/ForgotPasswordPanel.tsx` — component exists
+- `src/app/auth/reset-password/page.tsx` — page exists
+
+---
+
+### Slice S7 follow-on — marketing-site Privacy/Terms sync (single source of truth)
+
+**Surfaced**: 2026-06-08 during Slice S8 commit window. The Slice S7 legal pages live at `app.trystages.com/{privacy,terms}` and were built consuming the locked drafts from `docs/DATA-COLLECTION.md`. The marketing site (`trystages.com`) has its own `/privacy` and `/terms` pages that currently require manual copy-paste sync — every legal-review update would need to touch both surfaces.
+
+**The drift risk.** With two surfaces of the "same" document:
+- A founder or counsel edits the app version; marketing version stays stale.
+- A founder or counsel edits the marketing version; app version stays stale.
+- Customers reading via different entry paths see different commitments. Worst case: a published commitment on one surface is not honored on the other — direct contractual exposure.
+
+**Recommended fix — 301 redirects from marketing → app.** Make `app.trystages.com/{privacy,terms}` the single source of truth. The marketing site sets up 301 (permanent) redirects:
+
+```
+trystages.com/privacy → app.trystages.com/privacy
+trystages.com/terms   → app.trystages.com/terms
+```
+
+301 preserves SEO link equity and tells search engines the canonical URL has moved. Any link to `trystages.com/privacy` (e.g., from old emails, marketing collateral) still resolves to the live, correct version.
+
+**Implementation depends on marketing platform.** The exact mechanism is whatever the marketing site uses for routing:
+- **Static site (Vercel / Netlify / Cloudflare Pages)** — add a `_redirects` file or `redirects()` config function.
+- **CMS-hosted (Webflow / Framer)** — platform's redirect-settings UI.
+- **Custom Next.js marketing site** — `next.config.ts` `async redirects()` mirroring the app's `headers()` pattern.
+
+**Estimated cost**: ~30 min depending on marketing platform's redirect support. Founder typically does this in the marketing-platform admin UI; engineer-level work only if the marketing site is custom-coded.
+
+**Trigger**: opportunistic. Recommended before the next legal-review pass so the syncing toil doesn't get reintroduced. Pre-launch if marketing-site visitors are a significant signin source.
+
+**Cross-references**:
+- `src/app/(legal)/` — Slice S7 — the canonical source-of-truth surface
+- `docs/DATA-COLLECTION.md` § 1.15 + § 4.2 — locked content sourced from here
+
+---
+
 ### ✅ RESOLVED 2026-06-07: workspaces_insert C1 client-boundary bypass
 
 **Surfaced**: 2026-06-06 during Slice S1 Phase 1 RLS audit. Documented in `docs/RLS-AUDIT.md` § 3.1 as the single 🚨 CRITICAL finding of the audit.

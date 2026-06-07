@@ -243,11 +243,11 @@ function ConsentMicrocopy() {
   return (
     <p className="mt-4 text-[12px] text-zinc-500 leading-relaxed text-center">
       By creating an account, you agree to our{" "}
-      <Link href="/terms" className="text-stages-blue hover:underline">
+      <Link href="/terms" className="text-zinc-500 hover:underline">
         Terms of Service
       </Link>{" "}
       and acknowledge our{" "}
-      <Link href="/privacy" className="text-stages-blue hover:underline">
+      <Link href="/privacy" className="text-zinc-500 hover:underline">
         Privacy Policy
       </Link>
       .
