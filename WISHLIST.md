@@ -308,6 +308,90 @@ Extend the IIFE precedence tree to mount them.
 
 ---
 
+### Slice S2 Phase 3 — stage_attachments policy typo fix
+
+**Surfaced**: 2026-06-07 during Slice S2 Phase 1 storage audit. Documented in `docs/STORAGE-AUDIT.md` § 4.2.
+
+**Status**: medium severity. **Not exploitable** — the typo makes the policy more restrictive than intended, never less. But the `stage_attachments` feature is structurally broken from the storage layer — first agency to upload a stage attachment in production would lose access to the file the moment the page reloads.
+
+**The bug.** Both `stage_attachments_storage_select` (line 1108 of `20260509120000_rls_policies.sql`) and `stage_attachments_storage_delete` (line 1137) use a bare `name` reference inside an EXISTS subquery that joins `public.stages`. PostgreSQL resolves `name` to `stages.name` (the human-readable stage label) instead of `storage.objects.name` (the file path). The query becomes `sa.storage_path = s.name` — comparing a file path to a stage label — which never matches. EXISTS returns false; SELECT/DELETE deny.
+
+The mirror policies on `pipeline_files` are correct because `pipeline_links` has no `name` column, so the bare reference resolves correctly to `storage.objects.name`. Same author wrote both; the typo only manifests where the joined table happens to share a column name with the policy target — a latent landmine that propagates whenever a new metadata table joins another table with a `name` column.
+
+**Why no user-facing incident yet.** `public.stage_attachments` has 0 rows in production, and the `stage_attachments` storage bucket has 0 objects. The broken policy paths have never been exercised. Feature is wired in app code (`TaskDetailPanel.tsx:1608`) but not in use.
+
+**The fix** (one-character qualification, applied to two policies):
+
+```sql
+-- stage_attachments_storage_select USING — change:
+where sa.storage_path = name
+-- to:
+where sa.storage_path = storage.objects.name
+
+-- stage_attachments_storage_delete USING — same change.
+```
+
+DROP + CREATE pattern matching Slice S1 Phase 3 Fix 2 (commit `24f65d2`).
+
+**Estimated cost**: ~30 min including the migration, the verification queries, and the Phase 2 harness test T2.6 (which fails pre-fix and passes post-fix — explicit proof the fix works).
+
+**Trigger**: pre-launch — within the Slice S2 sprint. Single fix migration, single commit.
+
+**Cross-references**:
+- `docs/STORAGE-AUDIT.md` § 4.2 — exact mechanism + comparison with the correct `pipeline_files` shape
+- `docs/STORAGE-AUDIT.md` § 4.5 — fix shape rationale
+- Slice S1 Phase 3 Fix 2 (commit `24f65d2`) — DROP + CREATE pattern this fix mirrors
+
+---
+
+### Storage bucket hygiene — file_size_limit + allowed_mime_types defaults
+
+**Surfaced**: 2026-06-07 during Slice S2 Phase 1 storage audit (`docs/STORAGE-AUDIT.md` § 3, hygiene items H1 + H2).
+
+**The gap.** Both `stage_attachments` and `pipeline_files` buckets have `file_size_limit = null` (no size cap) and `allowed_mime_types = null` (any MIME accepted). Not a security finding — RLS still gates who can upload what — but a hygiene one: an authenticated agency user can upload any size file of any type. A motivated insider could upload multi-GB binaries or executable types without architectural friction.
+
+**Recommended defaults** (locked 2026-06-07 — future implementer starts here, not from a blank slate):
+
+- **`file_size_limit`**: **50 MB** (52,428,800 bytes). Covers most agency assets — designs, photos, short videos, PDFs. Adjustable later based on real usage patterns.
+- **`allowed_mime_types`** — a curated allowlist covering the assets agencies actually exchange with clients:
+  - **Images**: `image/jpeg`, `image/png`, `image/gif`, `image/webp`, `image/svg+xml`
+  - **Documents**: `application/pdf`; Office: `application/msword` (.doc), `application/vnd.openxmlformats-officedocument.wordprocessingml.document` (.docx), `application/vnd.ms-excel` (.xls), `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` (.xlsx), `application/vnd.ms-powerpoint` (.ppt), `application/vnd.openxmlformats-officedocument.presentationml.presentation` (.pptx); text: `text/plain` (.txt), `text/csv`
+  - **Video**: `video/mp4`, `video/quicktime` (.mov), `video/webm`, `video/x-msvideo` (.avi)
+  - **Audio**: `audio/mpeg` (.mp3), `audio/mp4` (.m4a), `audio/wav`
+  - **Archive**: `application/zip`
+
+**The migration shape**:
+
+```sql
+update storage.buckets
+set file_size_limit = 52428800,
+    allowed_mime_types = ARRAY[
+      'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml',
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-powerpoint',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'text/plain', 'text/csv',
+      'video/mp4', 'video/quicktime', 'video/webm', 'video/x-msvideo',
+      'audio/mpeg', 'audio/mp4', 'audio/wav',
+      'application/zip'
+    ]
+where id in ('stage_attachments', 'pipeline_files');
+```
+
+**Estimated cost**: ~30 min including the migration, app-side handling of the new rejection error from Supabase (a `400` with `mime_type_not_allowed` or `payload_too_large` shape), a brief user-facing error toast ("File too large — max 50 MB" / "File type not supported"), and a Phase 2 test asserting the limits actually enforce.
+
+**Trigger**: opportunistic. Pre-launch nice-to-have, not blocking. Reasonable companion to either the Slice S2 Phase 3 typo fix above or the existing storage-janitor entry — could ship in the same PR window as either.
+
+**Cross-references**:
+- `docs/STORAGE-AUDIT.md` § 3 — bucket configuration table where the null values were observed
+- WISHLIST → existing "Storage janitor (orphan bytes from deleted pipelines)" — natural PR companion
+
+---
+
 ### ✅ RESOLVED 2026-06-07: workspaces_insert C1 client-boundary bypass
 
 **Surfaced**: 2026-06-06 during Slice S1 Phase 1 RLS audit. Documented in `docs/RLS-AUDIT.md` § 3.1 as the single 🚨 CRITICAL finding of the audit.
