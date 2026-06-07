@@ -254,6 +254,46 @@ Extend the IIFE precedence tree to mount them.
 
 ---
 
+### 🚨 CRITICAL: RTBF (Right To Be Forgotten) deletion handler
+
+**Surfaced**: 2026-06-06 during Slice 0 Part 0.A data audit.
+
+**The gap**: when a user requests account deletion today, Supabase Auth's CASCADE wipes most attribution (FK SET NULL on author / assignee / completer fields), but several PII-bearing columns survive in denormalized or queue-table form:
+
+- `upgrade_interest.email` — survives via `user_id ON DELETE SET NULL`; the email column is untouched.
+- `pending_emails.recipient` + `pending_emails.recipient_name` — no FK to `auth.users`, so user deletion does nothing.
+- `activity_events.actor_name` — denormalized text snapshot; intentional for audit integrity, but conflicts with right-to-be-forgotten if the user requests a full scrub.
+- `profiles.email` — mirrored from `auth.users.email`; should CASCADE on user delete, but the sync direction for full account deletion (vs. soft-delete) is worth verifying as part of this slice.
+
+**Required for**: GDPR Article 17 + CCPA "Delete My Personal Information" requests. Blocking customer #1 in EU.
+
+**The fix**: a server-side `delete_user_account(user_id)` RPC + route handler that:
+
+1. Validates the caller is the user being deleted (or service-role).
+2. Within a SQL transaction (SECURITY DEFINER RPC):
+   - Anonymizes `activity_events.actor_name` for that user to `"Former user"` (preserves audit integrity per the locked § 1.15 PP language).
+   - Hard-deletes `upgrade_interest` rows where `email = (select email from auth.users where id = $1)`.
+   - Hard-deletes `pending_emails` rows where `recipient = (select email from auth.users where id = $1)` AND `sent_at IS NULL`.
+3. Outside the transaction, fans out to the processor APIs:
+   - **Stripe**: if `user_billing.stripe_customer_id` exists, call `stripe.customers.del(customer_id)`. Stripe will mark the customer deleted but retain transaction history per AML (acceptable carveout for the privacy policy).
+   - **Google OAuth**: if the user signed in with Google, call `https://oauth2.googleapis.com/revoke?token=${refresh_token}` to revoke the OAuth grant on Google's side. Otherwise refresh tokens stay valid on Google indefinitely.
+   - (Resend: no per-recipient delete API; the 30-day backup window is documented as a privacy-policy carveout — no action.)
+4. Calls Supabase Admin API `auth.admin.deleteUser(user_id)` to trigger CASCADE on `auth.users`.
+5. Returns success / failure JSON.
+
+A "Delete my account" affordance lives in `/settings/account` with a confirmation modal. Privacy-harness extension verifies the sweep is complete (zero rows for the user's email across all PII columns; Stripe customer marked deleted; Google revoke returned 200).
+
+**Estimated cost**: ~4–5 hours (revised up from initial 3–4h estimate to include processor-side fan-out, error handling for the partial-success case, and the harness test).
+
+**Trigger**: pre-launch. Required before accepting EU customers, before flipping live-mode Stripe, and before Slice S7 (Privacy Policy) can promise full deletion without hedging.
+
+**Cross-references**:
+- `docs/DATA-COLLECTION.md` § 1.1, 1.11, 1.12, 1.15, 3.1, 3.2, 3.6
+- Slice S7 depends on this shipping or PP language must hedge.
+- Founder checklist § 3.9 items 5, 8, 22 verify this works end-to-end after the handler ships.
+
+---
+
 ### 🚨 CRITICAL: POST /api/invites/send returns 404 from browser (Slice 5 pre-existing, ALL invites broken in prod)
 
 **Surfaced**: 2026-06-25 during Slice 6 Part F Phase 7 smoke test.
@@ -319,6 +359,257 @@ The downstream email send (which IS gated via `/api/invites/send`) doesn't matte
 **Estimated cost**: ~10 min. Likely a single-line fix where the loop accumulator was scoped to the inner block instead of the outer function.
 
 **Trigger**: low-priority. Fix opportunistically next time the file is touched for a related reason.
+
+---
+
+### pending_emails 90-day cleanup cron (Slice 0.X)
+
+**Surfaced**: 2026-06-06 during Slice 0 Part 0.A data audit.
+
+**Locked policy** (`docs/DATA-COLLECTION.md` § 1.11, § 1.15): `pending_emails` rows retained for **up to 90 days** for support and debugging. Privacy-Policy language already pre-approved: *"We retain email delivery records for up to 90 days for support and debugging purposes."*
+
+**Current state**: no cleanup running. Rows persist unbounded. The locked policy is 90 days; the implementation is this entry.
+
+**The fix**: a daily cron route `/api/cron/cleanup-pending-emails`:
+- Bearer `${CRON_SECRET}` auth (matches existing cron pattern).
+- Service-role client.
+- Runs `delete from pending_emails where created_at < now() - interval '90 days'` (NB: keyed on `created_at`, not `sent_at` — even orphaned unsent enqueues drop).
+- Logs row count to console for cron-job.org observability.
+
+**Estimated cost**: ~30 min. Mirror the existing cron route structure (`/api/cron/sync-seats` is the simplest template). Schedule on cron-job.org daily at e.g. 04:00 UTC, after the existing trial-lifecycle crons finish.
+
+**Why "minor slice" (Slice 0.X)**: privacy minimization is a one-route delivery, not a full slice. Ship after Slice 0 wraps Parts 0.B/C/D.
+
+**Cross-references**:
+- `docs/DATA-COLLECTION.md` § 1.11, § 1.14, § 1.15
+
+---
+
+### Strip recipient email from success-path Resend log line
+
+**Surfaced**: 2026-06-06 during Slice 0 Part 0.B telemetry audit.
+
+**The line**: `src/lib/email.ts` logs every successful send as `[email] Sent invite to ${payload.to} via Resend (id: ${result.data?.id ?? "unknown"})`. The recipient email lands in Vercel function logs, which:
+- May survive 1h–7d depending on Vercel plan tier (founder to verify).
+- Are accessible to anyone with Vercel project access (founder today; future teammates as the team grows).
+- Aggregated over time = a complete list of every Stages-mailed person, including invitees who never signed up.
+
+**Privacy posture**: The information is technically already in Resend's dashboard (which is necessary — Resend has to know who to send to). The Vercel log line is duplicative leakage into a second processor's log retention. Removing it doesn't reduce our operational capability — the Resend dashboard remains the system-of-record for "did the email send" queries.
+
+**The fix**:
+
+```ts
+// Before:
+console.log(`[email] Sent invite to ${payload.to} via Resend (id: ${result.data?.id ?? "unknown"})`);
+
+// After:
+console.log(`[email] Sent invite via Resend (id: ${result.data?.id ?? "unknown"})`);
+```
+
+Repeat for any sibling success-path logs in `src/lib/email.ts` and any per-template helper (Day-12, Day-28, founding-upgrade, first-pipeline emails). The Resend message ID is sufficient for support / debugging — paired with the Resend dashboard, the founder can always re-resolve email-id → recipient.
+
+**Estimated cost**: ~15 min including grep for sibling log lines + sanity-build.
+
+**Why low priority**: Vercel logs are already access-controlled and short-lived. But privacy minimization is the right default, and the fix is trivial.
+
+**Cross-references**:
+- `docs/DATA-COLLECTION.md` § 2.3, § 2.4, § 2.11
+- Consider in the same PR as the pending_emails cleanup cron above (both touch the email lifecycle).
+
+---
+
+### Migrate cron triggers from cron-job.org → Vercel Cron (pre-launch)
+
+**Surfaced**: 2026-06-06 during Slice 0 Part 0.C processor audit.
+
+**The gap**. cron-job.org is the only processor in Stages' stack with:
+- **No DPA published.** No GDPR Article 28 processor terms; the operator (Patrick Schlangen, Aachen, Germany) is a single individual on a free/freemium model.
+- **No security certifications.** No SOC 2, no ISO 27001, no PCI, no HIPAA.
+- **No breach notification SLA.** No commitment in their privacy policy or terms.
+- **Bearer token stored unencrypted on their side**, per their own privacy policy: "HTTP auth credentials configured for cronjobs are stored unencrypted for technical functionality." Stages' `CRON_SECRET` is therefore visible to cron-job.org operators in plaintext.
+
+Per the founder checklist (§ 3.9 item 19), an email to `info@cron-job.org` requesting a GDPR Art. 28 AVV should confirm the gap. Expected response: no.
+
+**The fix**: migrate cron triggers to **Vercel Cron** (https://vercel.com/docs/cron-jobs). Same triggering semantics (scheduled HTTPS hit to a route); inherits Vercel's:
+- Auto-incorporated DPA
+- SOC 2 Type II + ISO 27001
+- "Without undue delay" breach SLA (matched by Stages' Article 33 controller obligation)
+- Same security boundary as the app (the cron and the route live in the same Vercel project)
+
+**Implementation steps**:
+1. Add a `crons` array to `vercel.json` with the five current schedules:
+   - `03:15 UTC` → `/api/cron/sync-seats`
+   - `03:30 UTC` → `/api/cron/enqueue-founding-day28`
+   - `03:45 UTC` → `/api/cron/expire-founding-trials`
+   - `03:45 UTC` → `/api/cron/enqueue-trackb-day12`
+   - Every ~10 min → `/api/cron/send-pending-emails`
+2. Update each route's auth check. Vercel Cron sends an `Authorization: Bearer ${CRON_SECRET}` matching the value of the `CRON_SECRET` env var — same shape as cron-job.org sends today, so the existing route auth checks should work as-is. **Verify** by reading the Vercel Cron docs: confirm the header format and `vercel.json` schedule grammar.
+3. Rotate `CRON_SECRET` to invalidate the value cron-job.org has stored unencrypted.
+4. Pause (or delete) the schedules at cron-job.org's console.
+5. Verify each cron fires from Vercel via Vercel Dashboard → Project → Crons → Logs.
+
+**Estimated cost**: ~1–2 hours including `vercel.json` edit, secret rotation, dual-running window for verification, and decommissioning the old schedules.
+
+**Why pre-launch**: removing the cron-job.org dependency closes three compliance gaps (DPA, certs, secret-storage) before we make any privacy / security promises to paying customers. Migration cost is tiny relative to the explanation burden of "we use a small German cron service with no DPA."
+
+**Trigger**: pre-launch hardening sweep, ideally before live-mode Stripe flip. Has dependency: requires Vercel plan tier that supports Cron (currently Pro+ for unlimited; Hobby allows up to 2 cron jobs at limited frequencies).
+
+**Cross-references**:
+- `docs/DATA-COLLECTION.md` § 3.5, § 3.8, § 3.9 (items 17–19)
+
+---
+
+### `stripe_events` 90-day purge cron
+
+**Surfaced**: 2026-06-06 during Slice 0 Part 0.C processor audit (resolves § 2.12 item 7).
+
+**The gap**: `stripe_events.payload` stores the full Stripe webhook event JSON for idempotency + audit (§ 1.9). The table has no purge policy — it grows unbounded. The payload contains customer IDs, subscription IDs, plan IDs, and amounts; while not raw PII, it's a Stripe-transaction archive that doesn't need to live forever in our DB.
+
+**Locked decision**: 90 days (mirrors the `pending_emails` retention locked in Slice 0 Part 0.A § 1.11). Idempotency only needs the most recent ~24h of events; 90 days is generous headroom for support / debugging lookback.
+
+**The fix**: a daily cron route `/api/cron/cleanup-stripe-events`:
+- Bearer `${CRON_SECRET}` auth (matches the existing cron pattern; if Vercel Cron migration ships first, inherits that).
+- Service-role client.
+- Runs `delete from stripe_events where received_at < now() - interval '90 days' and processed_successfully = true`.
+- The `processed_successfully = true` guard avoids deleting any still-failing events that may need re-investigation.
+- Logs row count for cron observability.
+
+**Estimated cost**: ~30 min. Sibling of the `pending_emails` cleanup cron — same pattern, different table.
+
+**Why ship together with `pending_emails` cleanup**: both are 90-day retention crons added to address Part 0.A / 0.B findings; one PR is half the review burden of two.
+
+**Cross-references**:
+- `docs/DATA-COLLECTION.md` § 1.9, § 2.12 (item 7), § 3.2
+
+---
+
+### Drop vestigial `user_templates` table
+
+**Surfaced**: 2026-06-06 during Slice 0 Part 0.A data audit; SQL-confirmed empty in production (0 rows).
+
+**Status**: `user_templates` predates the current `templates` / `template_stages` / `template_tasks` trio (introduced in `20260606120000_pipeline_templates_schema_and_rls.sql`). No code path writes to `user_templates` — confirmed by reading the `save_pipeline_as_template` RPC source, which writes to the trio. Production row count: **0**.
+
+**The fix**: drop the table in a single migration.
+
+**Estimated cost**: ~15 min including:
+- Confirm no FKs reference `user_templates` (one `select * from information_schema.referential_constraints` query).
+- Drop migration with `drop table public.user_templates;`.
+- Apply via Supabase SQL editor (same flow as every other migration; never `db push`).
+
+**Why low priority**: schema hygiene, not security. The empty table is invisible to RLS-filtered queries (owner-only policy returns zero rows for everyone), so it's not a leak vector — just dead weight.
+
+**Cross-references**:
+- `docs/DATA-COLLECTION.md` § 1.8
+
+---
+
+### Slice 0.1 — AI consent infrastructure (agent platform)
+
+**Surfaced**: 2026-06-06 during Slice 0 Part 0.D (AI-readiness disclosure).
+
+**Status**: pre-AI-feature blocker. Builds Level 1 (workspace AI enablement) + Level 4 (improvement signals) of the 4-level consent framework documented in `docs/DATA-COLLECTION.md` § 4.2.B. Levels 2 and 3 are deferred to their own slices (below).
+
+**Meta-commitment** (locked, § 4): *"Stages AI acts on your behalf within tools you connect. Every action requires your permission. We never train on your data."*
+
+**Scope**:
+
+1. **Migration** (file written, pending strategy approval): `supabase/migrations/20260624120000_ai_consent_infrastructure.sql`
+   - `workspaces.ai_consent` JSONB default `{"agent_enabled": false}`
+   - `profiles.ai_consent` JSONB default `{"improvement_signals": false}`
+   - `ai_consent_audit` sibling table (modeled on `seat_sync_log`; service-role only)
+   - Verification queries in commented footer
+2. **RLS**: no new policies — both consent columns inherit existing table-level SELECT/UPDATE behavior (workspace owner UPDATE, member SELECT; profile own UPDATE, shared-context SELECT). Documented in `docs/DATA-COLLECTION.md` § 4.3.B.
+3. **Settings page** at `/w/[slug]/settings/privacy` — four sections: workspace AI (owner-only toggle), your AI preferences (improvement-signals toggle), Connected Integrations (placeholder for Slice 0.2), AI Action History (placeholder for Slice 0.3/0.4). Mock layout in § 4.3.C.
+4. **Server action** for toggle updates with permission validation + JSONB merge (`||`) update + audit-row write via service-role admin client. Wired to `ai_consent_audit`. Flow in § 4.3.D.
+5. **`src/lib/ai-consent.ts` utility** with `checkAgentEnabled(workspaceId, supa)` + `checkImprovementSignals(userId, supa)`. Both fail closed on read error (privacy-by-default at runtime). Source in § 4.3.E. Every future AI feature must call into this module before touching user content.
+
+**Estimated cost**: ~2–3 hours including migration, RLS verification, settings page, server action, utility module, and smoke test.
+
+**Trigger**: pre-AI-feature blocker. **Ship in the same PR window as the 🚨 CRITICAL: RTBF deletion handler entry above** — shared settings infrastructure, paired "prove we respect your data" framing, both close the two biggest pre-launch privacy gaps simultaneously.
+
+**Open architectural decision pending strategy approval**: whether `ai_consent_audit` lives as its own table (proposed, matches `seat_sync_log` pattern) or extends `activity_events` (would require nullable `workspace_id` + new `payload jsonb` column). See § 4.3.D + § 4.4 for the analysis.
+
+**Cross-references**:
+- `docs/DATA-COLLECTION.md` § 4 (entire section)
+- `supabase/migrations/20260624120000_ai_consent_infrastructure.sql`
+- WISHLIST → "🚨 CRITICAL: RTBF deletion handler" (paired PR)
+- WISHLIST → Slices 0.2 / 0.3 / 0.4 below (deferred)
+
+---
+
+### Slice 0.2 — Per-integration consent UI (DEFERRED until first integration ships)
+
+**Surfaced**: 2026-06-06 as part of the 4-level consent framework locked in `docs/DATA-COLLECTION.md` § 4.
+
+**Status**: deferred. Builds **Level 2** of the framework — when the first external integration ships (Google Docs, Slack, Instantly, etc.), Stages needs a UI for users to grant the AI agent permission to read/write to that integration on their behalf.
+
+**Scope (placeholder until first integration is designed)**:
+- Per-integration row in `/w/[slug]/settings/privacy` (slot reserved in Slice 0.1's "Connected Integrations" placeholder).
+- Toggle per integration with scope description ("Stages AI can read your Google Docs" / "Stages AI can send messages in your Slack workspace").
+- OAuth flow handoff to the integration's authorization server; encrypted token storage in a new `user_integrations` table (schema TBD with the first integration).
+- Audit row in `ai_consent_audit` on grant + revoke.
+- Revoke flow that invalidates the token at both ends (Stages-side delete + integration-side revoke call).
+- New JSONB key on `workspaces.ai_consent` or new column entirely — TBD based on integration shape (per-user grants live on `profiles.ai_consent` JSONB; workspace-level scope limits live on `workspaces.ai_consent`).
+
+**Estimated cost**: ~3–4 hours per integration (the framework itself is ~2 hours; each new integration adds ~1–2 hours for its specific OAuth scopes and audit rows). The first integration carries the framework cost; subsequent ones are cheaper.
+
+**Trigger**: first integration is designed.
+
+**Cross-references**:
+- `docs/DATA-COLLECTION.md` § 4.2.B (Level 2), § 4.3.C (placeholder slot)
+- `docs/DATA-COLLECTION.md` § 4.4 (forward-looking question on per-user vs workspace-level scope limits)
+
+---
+
+### Slice 0.3 — Per-action consent flow (DEFERRED until first AI agent action ships)
+
+**Surfaced**: 2026-06-06 as part of the 4-level consent framework locked in `docs/DATA-COLLECTION.md` § 4.
+
+**Status**: deferred. Builds **Level 3** of the framework — when the first AI agent action ships, Stages needs a per-action consent flow that classifies each action by risk and asks the user accordingly.
+
+**Scope (placeholder until first AI action is designed)**:
+- **Risk classification per action**:
+  - **LOW-RISK** (read-only retrieval, draft generation that stays in-app, suggestion display): pre-authorized after Level 2 — no per-action prompt.
+  - **HIGH-RISK** (sends external email, posts to Slack, writes to a connected doc, modifies workspace data irreversibly): confirmation modal before action executes — "Stages AI is about to send this email to alice@example.com. Approve?".
+  - **HIGH-VALUE / IRREVERSIBLE** (moves money, signs documents, deletes connected-service data): explicit re-authentication required — password / biometric / OAuth re-confirm at the moment of action.
+- Static classification config per integration. Reviewed and signed off by Jordan before each integration ships. Living source: a TypeScript config module `src/lib/ai-action-classification.ts`.
+- Audit row in `ai_consent_audit` (or sibling table) for every AI action: invocation, classification, user response, outcome.
+- Failure-mode UX: what happens when the user denies consent mid-action (graceful cancel + audit trail).
+
+**Estimated cost**: ~4–6 hours for the framework (classification table + consent modal + re-auth flow + audit wiring + denial-path UX). Each new action then maps to its classification with negligible incremental cost.
+
+**Trigger**: first AI action is being designed (would likely block on Slice 0.2 also being live).
+
+**Cross-references**:
+- `docs/DATA-COLLECTION.md` § 4.2.B (Level 3), § 4.3.C (placeholder slot)
+- `docs/DATA-COLLECTION.md` § 4.4 (forward-looking question on classification process)
+
+---
+
+### Slice 0.4 — AI audit log UI (DEFERRED until first AI agent action ships)
+
+**Surfaced**: 2026-06-06 as part of the 4-level consent framework locked in `docs/DATA-COLLECTION.md` § 4.
+
+**Status**: deferred. Builds the user-visible UI surface for the AI audit trail accumulated in `ai_consent_audit` (Slice 0.1) + Slice 0.3's per-action audit rows.
+
+**Scope**:
+- New tab in `/w/[slug]/settings/privacy` (Slice 0.1 reserves the "AI Action History" placeholder slot for it) showing the workspace's AI activity log.
+- Filters: action type, integration, user (actor), date range.
+- Two views:
+  - **Consent changes**: who turned what on/off and when (Slice 0.1's `ai_consent_audit` rows).
+  - **AI actions taken**: per-action audit (Slice 0.3's audit rows) — what was asked, classification, user response, outcome.
+- Export to CSV for compliance review.
+- New RLS SELECT policy on `ai_consent_audit` (added in this slice's migration, not Slice 0.1's): workspace owners can read `where scope_type = 'workspace' and scope_id = $workspace_id`, plus their own `where scope_type = 'user' and scope_id = auth.uid()`. Members read only own `scope_type = 'user'` rows.
+
+**Estimated cost**: ~3–4 hours including the RLS policy migration, two query patterns (consent vs actions), table rendering, filters, and CSV export.
+
+**Trigger**: first AI action ships (no point shipping the audit UI before there are actions to audit). Also useful for compliance review and trust-building with customers.
+
+**Cross-references**:
+- `docs/DATA-COLLECTION.md` § 4.3.C (placeholder slot), § 4.3.D (audit-table design), § 4.4 (forward-looking question on member-visibility)
+- WISHLIST → Slice 0.3 (audit rows for AI actions originate there)
+
+---
 
 ## v1.1 wishlist
 
