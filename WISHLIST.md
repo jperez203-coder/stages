@@ -428,6 +428,120 @@ where id in ('stage_attachments', 'pipeline_files');
 
 ---
 
+### Slice S3 follow-on — Webhook concurrent-delivery race fix
+
+**Surfaced**: 2026-06-07 during Slice S3 Stripe webhook audit. Documented in `docs/STRIPE-WEBHOOK-AUDIT.md` § 4 (the single ⚠️ MEDIUM finding).
+
+**The race.** Two simultaneous webhook deliveries of the same `event_id` (Stripe re-sending while the first delivery is still mid-flight) both fall past the dedup check and run the handler concurrently:
+
+```
+T=0   Delivery A: INSERT { ..., processed_successfully=false }. Handler starts.
+T=1   Delivery B: INSERT collides (ignoreDuplicates). SELECT processed_successfully → false.
+T=2   Delivery B falls through and re-runs the handler in parallel with A.
+T=3,4 Both finish + UPSERT/UPDATE the same target state → idempotent today.
+```
+
+**Not exploitable.** Only Stripe can re-deliver the same `event_id`, and re-delivery is rare. Current handlers (`handleCheckoutSessionCompleted`, `handleSubscriptionUpdated`, etc.) all write via UPSERT or UPDATE — running them twice produces the same end state.
+
+**Why fix it anyway.** The architectural assumption "future handlers can rely on single-fire semantics" is NOT enforced by the code — only by convention. A future non-idempotent handler (e.g. "send a welcome email on first checkout", "post to a third-party API once") would double-fire under simultaneous delivery.
+
+**The fix** (per `docs/STRIPE-WEBHOOK-AUDIT.md` § 4):
+
+```sql
+-- pseudocode for the migration / handler change — NOT applied yet.
+INSERT INTO public.stripe_events (event_id, event_type, payload)
+VALUES (...)
+ON CONFLICT (event_id) DO UPDATE
+  SET processed_successfully = false
+RETURNING (xmax = 0) AS fresh;
+```
+
+The `xmax = 0` trick distinguishes a fresh INSERT from an UPDATE-of-existing-row at the same statement. Then before running the handler, `SELECT ... FOR UPDATE` on the existing row — two simultaneous deliveries serialize on the row lock; one runs the handler, the other waits for the first to commit (or fail) then re-evaluates `processed_successfully`.
+
+**Estimated cost**: ~30 min including the migration shape change, handler refactor at `src/app/api/billing/webhook/route.ts` lines 351–393, and a harness test that simulates concurrent delivery (would extend `scripts/test-rls-phase3.mjs` with an S3.1 test invoking two parallel POST requests against a test event).
+
+**Trigger**: **REQUIRED before shipping any non-idempotent handler.** Not blocking the live-mode flip (current handlers are idempotent). The fix gates the future "first-action email" or similar non-idempotent feature.
+
+**Cross-references**:
+- `docs/STRIPE-WEBHOOK-AUDIT.md` § 4 — exact race scenario + fix shape rationale
+- `src/app/api/billing/webhook/route.ts` lines 351–393 — current dedup pattern
+
+---
+
+### Slice S3 follow-on — Webhook rate limiting / Stripe IP allowlist
+
+**Surfaced**: 2026-06-07 during Slice S3 Stripe webhook audit. Documented in `docs/STRIPE-WEBHOOK-AUDIT.md` § 8 (hygiene item H1).
+
+**The gap.** `/api/billing/webhook` has no app-level rate limiter. An attacker could spam the endpoint with random POSTs; each one consumes minimal resources (raw body read + signature check fail + 400 response). No DB write, no handler execution.
+
+**Why hygiene, not MEDIUM.** Per-request CPU cost is tiny (Stripe SDK signature verification is microseconds). Vercel's edge layer provides baseline DDoS protection. Stripe sends webhooks from a finite, well-known IP range — any spam from outside that range fails signature verification.
+
+**Defense-in-depth options for a future hardening pass:**
+
+1. **Vercel edge rate limit** — `@vercel/edge-config` + the new Vercel Firewall (or a small middleware) limiting `/api/billing/webhook` to say 100 req/min. Cheap to add; catches the lazy spammer.
+2. **Stripe IP allowlist** — Stripe publishes their webhook source IPs at <https://stripe.com/files/ips/ips_webhooks.json>. A Vercel middleware could reject requests whose `x-forwarded-for` isn't in that list. Tighter but requires keeping the list fresh (Stripe updates rarely; a quarterly review is fine).
+
+**Estimated cost**: ~1 hour for either path including the middleware code + a test exercising the rate-limit denial.
+
+**Trigger**: pre-launch hardening sweep. Not blocking the live-mode flip; defer until the other S3 follow-ons (race fix, monitoring sub-slice) ship together as one webhook-hardening PR.
+
+**Cross-references**:
+- `docs/STRIPE-WEBHOOK-AUDIT.md` § 8 — rationale + Vercel/Stripe options
+- Stripe's published IP list: <https://stripe.com/files/ips/ips_webhooks.json>
+
+---
+
+### Slice S3 follow-on — `customer.subscription.trial_will_end` native handler
+
+**Surfaced**: 2026-06-07 during Slice S3 audit Q2 review. Stripe sends `customer.subscription.trial_will_end` ~3 days before a trialing subscription's `trial_end` timestamp.
+
+**The opportunity.** Currently the Slice 6 day-12 reminder cron (`/api/cron/enqueue-trackb-day12`, see PROGRESS.md / handoff) handles the "trial is about to end" prompt by enqueuing a Resend email from our side. Stripe-native `trial_will_end` could either replace it (simpler — Stripe schedules the notification, we just react) or supplement it (double the surfaces; defensive against cron failures).
+
+**The trade-off.**
+
+- **Native Stripe (replace):** simpler architecture; one less cron to maintain; tied to Stripe's lifecycle truth. But puts the email scheduling timing in Stripe's hands; if Stripe ever shifts the event timing (currently 3 days pre-end), our copy / cadence shifts with it.
+- **Supplement (both):** redundant signal; defensive against either side failing. But duplicate-email risk if both fire successfully + handler not idempotent (loops back into the § 4 race finding).
+
+**Recommendation**: native replace, but only after the concurrent-delivery race fix (§ 4 above) ships so the handler's single-fire semantics are guaranteed.
+
+**Estimated cost**: ~30 min including the new handler in `route.ts`, Resend email template (or reuse the existing day-12 one), and removing the day-12 cron route + schedule once verified.
+
+**Trigger**: post-launch. Not blocking. Quality-of-life simplification.
+
+**Cross-references**:
+- `docs/STRIPE-WEBHOOK-AUDIT.md` § 2 — current 5 explicit handlers + default-branch behavior
+- Slice 6 day-12 cron and email template (handoff history)
+
+---
+
+### Slice S3 follow-on — Stripe webhook monitoring sub-slice (`audit_stuck_webhook_events()` RPC)
+
+**Surfaced**: 2026-06-07 during Slice S3 audit § 11 (forward-looking section).
+
+**The opportunity.** Mirror the standing-invariant canary pattern from `audit_grant_without_rls` (Slice S1 Phase 2, commit `a473156`) and `audit_public_buckets` (Slice S2 Phase 2, commit `cefbb63`). A new `audit_stuck_webhook_events()` RPC returns rows from `stripe_events` where `processed_successfully = false AND received_at < now() - interval '1 hour'`.
+
+**Why it's useful.**
+
+- Today: a stuck event would only surface via the Vercel logs error stream OR a support ticket from a confused customer.
+- With the canary: any standing CI invocation of the harness OR a periodic cron call to the RPC would alert in real time. The Slice S3 audit's Q3 (0 stuck events) would become a continuous health check.
+
+**Scope.**
+
+1. **Migration**: `audit_stuck_webhook_events()` SECURITY DEFINER returning `(event_id, event_type, received_at, age_interval)`. Mirrors the audit-RPC pattern from `20260624150000_audit_grant_without_rls_rpc.sql` and `20260624160000_audit_public_buckets_rpc.sql`. ~15 min.
+2. **Harness test**: extend `scripts/test-rls-phase3.mjs` with a Tier 2 canary test S3.1 that calls the RPC and asserts 0 rows. ~10 min. Internal naming: S3.1 to avoid collision with the storage tier's S2.x.
+3. **Optional alerting**: if any future cron / monitoring infra is wired, hook the RPC into it. Out of scope for this sub-slice.
+
+**Estimated cost**: ~45 min total (15 migration + 10 harness + 20 verification/commit).
+
+**Trigger**: opportunistic. Pairs well with whichever S3 follow-on ships first — could land in the same PR as the concurrent-delivery race fix to get one consolidated webhook-hardening commit.
+
+**Cross-references**:
+- `docs/STRIPE-WEBHOOK-AUDIT.md` § 11 — forward-looking sub-slice design
+- `supabase/migrations/20260624150000_audit_grant_without_rls_rpc.sql` — pattern to mirror
+- `supabase/migrations/20260624160000_audit_public_buckets_rpc.sql` — pattern to mirror
+
+---
+
 ### ✅ RESOLVED 2026-06-07: workspaces_insert C1 client-boundary bypass
 
 **Surfaced**: 2026-06-06 during Slice S1 Phase 1 RLS audit. Documented in `docs/RLS-AUDIT.md` § 3.1 as the single 🚨 CRITICAL finding of the audit.
