@@ -1,0 +1,150 @@
+-- ============================================================================
+-- Slice S1 Phase 3 Fix 3: drop the duplicate profiles UPDATE policy
+-- ============================================================================
+--
+-- Closes the hygienic finding in docs/RLS-AUDIT.md § 7.1.
+--
+-- ── THE GAP ────────────────────────────────────────────────────────────
+--
+-- The profiles table has two distinct UPDATE policies:
+--
+--   "Users can update their own profile"   (role: authenticated)
+--   profiles_update                        (role: public)
+--
+-- Both gate on `id = auth.uid()`. The Studio-prose-named one was likely
+-- created via the Supabase Studio "policy template" UI early in the
+-- project's life; profiles_update matches the `<table>_<cmd>` naming
+-- convention used everywhere else in the schema and is the canonical one.
+--
+-- Permissive policies OR together, so the EFFECTIVE gate is still
+-- `id = auth.uid()` regardless of how many copies exist. Not an exploit;
+-- but it's a maintenance trap — if a future migration tightens one and
+-- not the other, the looser one still permits the operation.
+--
+-- ── ROLE DIFFERENCE NOTE ───────────────────────────────────────────────
+--
+-- "Users can update their own profile" applies to role=authenticated.
+-- profiles_update applies to role=public (which includes anon + authenticated).
+--
+-- Practically equivalent because the condition is `id = auth.uid()` —
+-- for anon callers, auth.uid() returns NULL, so NULL = NULL evaluates to
+-- NULL → row hidden. anon can never satisfy this gate regardless of
+-- which policy applies.
+--
+-- Dropping the authenticated-role policy and keeping the public-role one
+-- preserves the effective behavior. profiles_update is broader in role
+-- applicability but self-narrows via the identity predicate.
+--
+-- ── VERIFICATION RESULT (2026-06-06) ───────────────────────────────────
+--
+-- Per RLS-AUDIT.md § 10 Q3 lock the pre-apply verification ran the
+-- divergence-check query:
+--
+--   with norm as (
+--     select
+--       policyname,
+--       regexp_replace(coalesce(qual,       ''), '\s+', ' ', 'g') as u,
+--       regexp_replace(coalesce(with_check, ''), '\s+', ' ', 'g') as w
+--     from pg_policies
+--     where schemaname = 'public'
+--       and tablename = 'profiles'
+--       and cmd = 'UPDATE'
+--   )
+--   select count(*) as policy_count,
+--          count(distinct u) as distinct_using,
+--          count(distinct w) as distinct_with_check
+--   from norm;
+--
+-- The gate returned distinct_using = 2 AND distinct_with_check = 2 —
+-- which on the surface reads as "they diverge, do not apply." BUT the
+-- divergence is purely syntactic, not semantic:
+--
+--   "Users can update their own profile" (role=authenticated)
+--     using      (id = auth.uid())
+--     with check (id = auth.uid())
+--
+--   profiles_update (role=public)
+--     using      (id = (SELECT auth.uid() AS uid))
+--     with check (id = (SELECT auth.uid() AS uid))
+--
+-- Both gates compute `id = auth.uid()` identically. The subquery form
+-- `(SELECT auth.uid() AS uid)` is the PostgREST-recommended optimization
+-- that prevents per-row re-evaluation of the function call. Same
+-- security guarantee; the subquery form is just faster on bulk reads.
+--
+-- The Q3 lock's "if they diverge, keep stricter" rule doesn't apply
+-- here because there's no stricter version — they're semantically
+-- equivalent. The locked decision is therefore:
+--
+--   - Keep profiles_update — subquery form (performance) + matches the
+--     `<table>_<cmd>` naming convention used everywhere else in the
+--     schema.
+--   - Drop "Users can update their own profile" — direct-call form
+--     (slower at scale) + Studio-prose name that doesn't match the
+--     convention.
+--
+-- Result: the schema converges on the faster, conventionally-named
+-- policy. No behavior change for users (the OR of two permissive
+-- policies and the single remaining one with the same predicate are
+-- equivalent at the authorization layer).
+--
+-- ── DOWN PLAN ──────────────────────────────────────────────────────────
+--
+-- Recreate the dropped policy verbatim from the pre-apply pg_policies
+-- snapshot:
+--
+--   create policy "Users can update their own profile" on public.profiles
+--   for update to authenticated
+--   using (id = auth.uid())
+--   with check (id = auth.uid());
+--
+-- Note: the DOWN deliberately preserves the direct-call form (no
+-- subquery wrapping) because that's what was actually present before
+-- this migration. A rollback should restore byte-identical pre-state,
+-- not "improve" it during the revert.
+-- ============================================================================
+
+
+drop policy if exists "Users can update their own profile" on public.profiles;
+
+
+-- ============================================================================
+-- VERIFICATION QUERIES (commented — run after apply)
+-- ============================================================================
+--
+-- (a) Confirm exactly one UPDATE policy remains on profiles, and it's
+--     the project-convention one (profiles_update).
+--
+--   select policyname, roles, permissive,
+--          qual as using_clause,
+--          with_check as with_check_clause
+--   from pg_policies
+--   where schemaname = 'public'
+--     and tablename = 'profiles'
+--     and cmd = 'UPDATE'
+--   order by policyname;
+--   -- Expected: 1 row.
+--   --   policyname = 'profiles_update'
+--   --   roles      = '{public}'
+--   --   qual       = '((SELECT auth.uid() AS uid) = id)' (or equivalent normalized)
+--   --   with_check = '((SELECT auth.uid() AS uid) = id)' (or equivalent normalized)
+--
+-- (b) Confirm the dropped policy is gone.
+--
+--   select count(*) as dropped_policy_residue
+--   from pg_policies
+--   where schemaname = 'public'
+--     and tablename = 'profiles'
+--     and policyname = 'Users can update their own profile';
+--   -- Expected: 0.
+--
+-- (c) Behavior probe — confirm profile UPDATE still works for the caller
+--     on their own row (regression check for Slice 0.1's improvement_signals
+--     toggle, which is the most recent profile UPDATE consumer).
+--
+--   As an authenticated user, in the Stages app, visit
+--   /w/[any-workspace]/settings/privacy and toggle the "improvement
+--   signals" switch. Confirm the toggle persists and an ai_consent_audit
+--   row appears. If it 42501s, the wrong policy was dropped — revert via
+--   the DOWN plan immediately.
+-- ============================================================================
