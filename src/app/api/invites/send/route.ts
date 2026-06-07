@@ -68,9 +68,21 @@ export async function POST(request: Request) {
       { status: 401 },
     );
   }
-  // Fresh per-request client; we don't reuse a singleton because this
-  // server-side context has no persistent session.
-  const supa = createClient(SUPABASE_URL, SUPABASE_KEY);
+  // User-scoped client: every PostgREST request includes the caller's JWT
+  // via the Authorization header, so RLS evaluates as that user. Critical
+  // for the workspace_invites lookup below — workspace_invites_select gates
+  // visibility to workspace owner/admin, and a missing JWT here would run
+  // the read as anon, return zero rows, and collapse to a 404 from the
+  // route's own "Invite not found or no permission" path. Mirrors the
+  // pattern in /api/invites/resend, /api/client-invites/send, and
+  // /api/client-invites/resend — see those for the longer explanation.
+  //
+  // (This was missing in the Slice 5 build of this route; surfaced as the
+  // pre-existing prod-blocking invite bug fixed in slice-x1.)
+  const supa = createClient(SUPABASE_URL, SUPABASE_KEY, {
+    global: { headers: { Authorization: `Bearer ${jwt}` } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
   const { data: userResult, error: authError } = await supa.auth.getUser(jwt);
   if (authError || !userResult?.user) {
     return NextResponse.json(

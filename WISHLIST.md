@@ -379,6 +379,37 @@ A "Delete my account" affordance lives in `/settings/account` with a confirmatio
 
 ---
 
+#### ✅ RESOLVED 2026-06-06 in commit `fix(slice-x1): bind JWT to Supabase client in invites/send route`
+
+**Actual root cause** (none of the three original "Likely causes" was correct — all three guessed at client-side or routing issues):
+
+`/api/invites/send/route.ts:73` constructed the Supabase client with no JWT binding —
+`createClient(SUPABASE_URL, SUPABASE_KEY)`. The subsequent `supa.auth.getUser(jwt)` call decoded the token to *identify* the user but did NOT bind the JWT to the client for PostgREST queries. The `workspace_invites` lookup below it therefore ran as `anon`, the `workspace_invites_select` RLS policy (owner/admin only) returned zero rows, and the route fell through to its **own intentional 404 at line 109-110**: `{"error":"Invite not found or no permission"}`.
+
+The 404 was the route's application-layer "not found or no permission" path — never a routing 404.
+
+**Why the curl test misled the diagnosis.** curl was called with an empty body, which failed `parseBody` at line 49-51 and returned **400 before reaching the workspace_invites lookup**. The bug only manifests when the body parses successfully — exactly the code path curl never executed. The "curl returns 400, browser returns 404" asymmetry that read like a header/middleware issue was actually two different early-exits in the same route.
+
+**Pattern divergence.** Three of four invite routes were already correct:
+
+| Route | Pattern | Pre-fix status |
+| --- | --- | --- |
+| `/api/invites/send` | `createClient(URL, KEY)` (anon) | 🚨 broken |
+| `/api/invites/resend` | `createClient(URL, KEY, { global: { headers: { Authorization: 'Bearer …' } } })` | ✅ correct |
+| `/api/client-invites/send` | Same JWT-bound pattern | ✅ correct |
+| `/api/client-invites/resend` | Same JWT-bound pattern | ✅ correct |
+
+`/api/invites/resend` even had an inline comment documenting the rationale (*"User-scoped client: every PostgREST request includes the caller's JWT, so RLS evaluates as that user. If the caller has no permission, the invite query returns null (no row → no error) and we collapse to a 404, indistinguishable from 'doesn't exist.'"*). A maintainer had already understood the trap on the resend route but never propagated the fix back to send. Slice 5 (commit `3679a5c`) is when the send route was rebuilt and the JWT-binding step was dropped.
+
+**The fix.** Three lines on `src/app/api/invites/send/route.ts:73` — replace anon-bound client construction with the JWT-bound shape mirroring `invites/resend/route.ts:75-78` verbatim. Added an inline comment explaining why so future maintainers don't strip it again.
+
+**Lessons** (carry forward into any future "browser-only 404" diagnosis):
+1. **Check the response body, not just the status code.** DevTools' status-code-at-a-glance can't tell you whether a 404 is a routing 404 or the route's own `{"error":"…"}` response. The body is the diagnostic tell.
+2. **curl-vs-browser asymmetry doesn't always mean a transport-layer divergence.** It can mean the two requests are hitting different early-exits in the same route. Compare what each request *does* on the server, not just what each sends.
+3. **Patterns that exist in 3-of-4 sibling routes should be lifted into a shared helper.** If a fourth maintainer rebuilds another invite route in the future without inheriting the JWT-binding step, the same bug recurs. Tracked separately under Slice S1 (RLS audit + test suite) as a follow-on: a `createUserScopedSupabaseClient(jwt)` helper in `src/lib/` would prevent recurrence by giving everyone one obvious right-shape to import.
+
+---
+
 ### Hardening: workspace_invites INSERT bypasses billing-guard (architectural gap matching RLS-billing item above)
 
 **Re-confirmed**: 2026-06-25 during Slice 6 Part F Phase 7 smoke test.
