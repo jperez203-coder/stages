@@ -1,0 +1,142 @@
+-- ============================================================================
+-- Slice S1 Phase 3 Fix 1: revoke inert anon + authenticated grants on the
+-- four service-role-only tables
+-- ============================================================================
+--
+-- Closes the brittle-architecture finding in docs/RLS-AUDIT.md § 5.1.
+--
+-- ── THE GAP ────────────────────────────────────────────────────────────
+--
+-- Four tables in the public schema are designed as service-role-only audit
+-- logs: RLS enabled, zero policies — service_role bypasses RLS, every
+-- other role (anon, authenticated) gets zero rows on SELECT and permission
+-- denied on writes via the RLS layer.
+--
+--   ai_consent_audit  (Slice 0.1)
+--   pending_emails    (cron-managed; Phase 4 transactional email queue)
+--   seat_sync_log     (Stripe Slice 3 audit log)
+--   stripe_events     (Stripe Slice 2 idempotency log)
+--
+-- All four worked correctly at the Slice S1 Phase 1 audit time — the
+-- founder verified inertness via `SET ROLE authenticated; SELECT … →
+-- 0 rows`. The brittle part: each of these tables also has table-level
+-- GRANTs for anon + authenticated (Supabase defaults applied at table
+-- creation time). Those grants are INERT today because zero-policy RLS
+-- blocks every row. They become LIVE the moment any future migration adds
+-- a single permissive policy.
+--
+-- This is the inverse of the Slice 0.1 finding. Slice 0.1: RLS permits,
+-- GRANT blocks → 42501 (user-facing bug). Here: GRANT permits, RLS blocks
+-- today → silent and safe UNTIL a maintainer adds an RLS policy without
+-- checking the GRANT layer underneath it, at which point the latent
+-- grants activate. Defense-in-depth means both layers should reflect the
+-- same intent.
+--
+-- ── ZERO BEHAVIOR CHANGE FOR REAL CALLERS ──────────────────────────────
+--
+-- service_role still bypasses RLS (no change). Authenticated and anon
+-- callers still get zero data — the gate just moves from "RLS-alone
+-- denying" to "RLS + GRANT both denying." Practical outcome unchanged.
+--
+-- The only surface-level difference: pre-migration, `SET ROLE authenticated;
+-- SELECT count(*)` returns 0 rows; post-migration it errors with
+-- "permission denied for table …" (GRANT layer now denies before RLS even
+-- evaluates). Identical from a security standpoint; just a different
+-- error shape. PostgREST clients never see this because PostgREST never
+-- gets past the equally-restrictive RLS-without-policy in either case.
+--
+-- ── FORWARD DEPENDENCY: SLICE 0.4 ──────────────────────────────────────
+--
+-- Slice 0.4 (AI audit log UI — see WISHLIST.md) will add a SELECT policy
+-- to ai_consent_audit so workspace owners can view their workspace's
+-- consent-change history. That slice MUST ALSO re-GRANT SELECT on the
+-- audit-display columns to the authenticated role; otherwise the SELECT
+-- policy will 42501 the same way Slice 0.1's profile.ai_consent toggle
+-- did before the 20260624130000 grants migration. Captured as a WISHLIST
+-- update in this Phase 3 wrap.
+--
+-- The pattern Slice 0.4 will need is column-level re-grant (not table-
+-- level) so it can include just the audit-display columns and exclude
+-- anything sensitive — same posture as profiles' column-level grants in
+-- 20260624130000.
+--
+-- ── DOWN PLAN ──────────────────────────────────────────────────────────
+--
+-- Restores the Supabase-default privilege set if needed for rollback.
+-- Note: this DOWN doesn't re-introduce exploit risk because RLS-with-
+-- zero-policies still blocks; the DOWN is for fidelity, not safety.
+--
+--   grant select, insert, update, delete
+--     on table public.ai_consent_audit to anon, authenticated;
+--   grant select, insert, update, delete
+--     on table public.pending_emails   to anon, authenticated;
+--   grant select, insert, update, delete
+--     on table public.seat_sync_log    to anon, authenticated;
+--   grant select, insert, update, delete
+--     on table public.stripe_events    to anon, authenticated;
+-- ============================================================================
+
+
+revoke all privileges on table public.ai_consent_audit from anon, authenticated;
+revoke all privileges on table public.pending_emails   from anon, authenticated;
+revoke all privileges on table public.seat_sync_log    from anon, authenticated;
+revoke all privileges on table public.stripe_events    from anon, authenticated;
+
+
+-- ============================================================================
+-- VERIFICATION QUERIES (commented — run after apply)
+-- ============================================================================
+--
+-- (a) Confirm zero table-level grants remain for anon + authenticated on
+--     the four target tables.
+--
+--   select table_name, grantee, privilege_type
+--   from information_schema.role_table_grants
+--   where table_schema = 'public'
+--     and table_name in (
+--       'ai_consent_audit', 'pending_emails', 'seat_sync_log', 'stripe_events'
+--     )
+--     and grantee in ('anon', 'authenticated')
+--   order by table_name, grantee, privilege_type;
+--   -- Expected: zero rows.
+--
+-- (b) Confirm service_role grants are UNCHANGED — the migration must not
+--     accidentally lock out the only role that legitimately accesses
+--     these tables (webhook handler, crons).
+--
+--   select table_name, grantee, privilege_type
+--   from information_schema.role_table_grants
+--   where table_schema = 'public'
+--     and table_name in (
+--       'ai_consent_audit', 'pending_emails', 'seat_sync_log', 'stripe_events'
+--     )
+--     and grantee = 'service_role'
+--   order by table_name, privilege_type;
+--   -- Expected: service_role has SELECT, INSERT, UPDATE, DELETE on each
+--   -- table (4 rows × 4 privileges = 16 rows).
+--
+-- (c) Cover the column-level case. REVOKE ALL ON TABLE doesn't touch
+--     explicitly-granted column privileges. No column-level grants are
+--     expected on these tables, but verify.
+--
+--   select table_name, column_name, grantee, privilege_type
+--   from information_schema.column_privileges
+--   where table_schema = 'public'
+--     and table_name in (
+--       'ai_consent_audit', 'pending_emails', 'seat_sync_log', 'stripe_events'
+--     )
+--     and grantee in ('anon', 'authenticated');
+--   -- Expected: zero rows. Any row here means an explicit column-level
+--   -- revoke is needed as a follow-on migration.
+--
+-- (d) Behavior probe — re-run the Phase 1 audit's SET ROLE test.
+--
+--   set role authenticated;
+--   select count(*) from public.ai_consent_audit;
+--   -- Expected: ERROR  42501  permission denied for table ai_consent_audit
+--   --   Pre-migration this returned `0 rows` (RLS without policies blocked
+--   --   the rows but the GRANT was satisfied). Post-migration it errors
+--   --   because the GRANT denial precedes RLS evaluation.
+--   reset role;
+--
+-- ============================================================================
