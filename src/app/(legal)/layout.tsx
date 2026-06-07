@@ -1,12 +1,10 @@
 import Link from "next/link";
-import { AlertTriangle } from "lucide-react";
 
 /**
  * Shared chrome for public legal pages (/privacy, /terms).
  *
  * Renders:
- *   - Top: a thin back-to-app link.
- *   - Pre-legal-review banner (locked copy — see Slice S7).
+ *   - Top: full Stages wordmark on the left + back-to-app link on the right.
  *   - The page content (centered, max-width prose width).
  *   - Footer: cross-link to the sibling legal page + locked disclaimer.
  *
@@ -15,7 +13,9 @@ import { AlertTriangle } from "lucide-react";
  *
  * Aesthetic: dark mode + stages-purple accents (matches Slice 0.1's
  * OwnerOnlyPill styling for visual continuity with the in-app AI
- * features surface).
+ * features surface). Wordmark via plain <img> rather than next/image
+ * — matches the AuthShell pattern (same rationale: SVGs don't benefit
+ * from raster-optimisation and the logo is above-the-fold).
  */
 export default function LegalLayout({
   children,
@@ -29,9 +29,15 @@ export default function LegalLayout({
         <div className="max-w-[1080px] mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
           <Link
             href="/"
-            className="text-[14px] font-semibold text-zinc-100 hover:text-zinc-200 transition-colors"
+            className="inline-flex items-center hover:opacity-80 transition-opacity"
+            aria-label="Stages, back to app"
           >
-            Stages
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/stages-logo.svg"
+              alt="Stages"
+              style={{ height: 24, width: "auto", display: "block" }}
+            />
           </Link>
           <Link
             href="/"
@@ -41,32 +47,6 @@ export default function LegalLayout({
           </Link>
         </div>
       </header>
-
-      {/* Pre-legal-review banner */}
-      <div
-        className="border-b"
-        style={{
-          background: "rgba(245, 158, 11, 0.08)",
-          borderBottomColor: "rgba(245, 158, 11, 0.25)",
-        }}
-      >
-        <div className="max-w-[1080px] mx-auto px-4 sm:px-6 py-3 flex items-start gap-3">
-          <AlertTriangle
-            size={16}
-            className="text-stages-amber flex-shrink-0 mt-0.5"
-            strokeWidth={2}
-          />
-          <p className="text-[13px] text-zinc-300 leading-snug">
-            <span className="font-semibold text-zinc-100">
-              This document is pending professional legal review.
-            </span>{" "}
-            We&apos;ve published it to set expectations honestly while we engage
-            counsel; the substantive commitments are accurate to the
-            system&apos;s current behavior, but specific language may be refined.
-            Last reviewed by: pending — engaging legal review.
-          </p>
-        </div>
-      </div>
 
       {/* Page content */}
       <main className="max-w-[1080px] mx-auto px-4 sm:px-6 py-10">

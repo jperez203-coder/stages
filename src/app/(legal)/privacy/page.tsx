@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Privacy Policy — Stages",
+  title: "Privacy Policy | Stages",
   description:
     "How Stages collects, uses, and protects your data. Includes our AI-features commitments and processor list.",
 };
@@ -105,7 +105,7 @@ export default function PrivacyPolicyPage() {
         {/* ─── 2. Who we are ───────────────────────────────────────── */}
         <Section id="who" title="2. Who we are">
           <P>
-            Stages is a workspace product for client services businesses —
+            Stages is a workspace product for client services businesses:
             agencies, consultants, and freelancers. Stages is operated by{" "}
             <strong>
               SalesEdge LLC, a New Jersey limited liability company doing
@@ -175,8 +175,8 @@ export default function PrivacyPolicyPage() {
               <strong>Server logs.</strong> Standard request logs (URL paths,
               timestamps, error messages) captured by our hosting provider
               (Vercel) for operational debugging. We do not extract IP
-              addresses, User-Agent strings, or referrer headers ourselves —
-              those are captured at the hosting-platform layer per our
+              addresses, User-Agent strings, or referrer headers ourselves.
+              Those are captured at the hosting-platform layer per our
               provider&apos;s defaults.
             </li>
             <li>
@@ -199,7 +199,7 @@ export default function PrivacyPolicyPage() {
               permissions (camera, microphone, etc.).
             </li>
             <li>
-              We do not see or store your payment card details — those go
+              We do not see or store your payment card details. Those go
               directly to Stripe.
             </li>
             <li>
@@ -243,7 +243,7 @@ export default function PrivacyPolicyPage() {
             <li>
               To improve the product based on aggregate, non-personal usage
               patterns (e.g., which features are used at what rate). When AI
-              features ship, this category extends — see § 9.
+              features ship, this category extends. See § 9.
             </li>
           </List>
         </Section>
@@ -260,7 +260,7 @@ export default function PrivacyPolicyPage() {
 
           <List>
             <li>
-              <strong>Supabase</strong> — our primary backend (database, auth,
+              <strong>Supabase.</strong> Our primary backend (database, auth,
               file storage). All workspace content is stored on Supabase&apos;s
               infrastructure.{" "}
               <a
@@ -274,7 +274,7 @@ export default function PrivacyPolicyPage() {
               .
             </li>
             <li>
-              <strong>Stripe</strong> — payment processing. Stripe holds your
+              <strong>Stripe.</strong> Payment processing. Stripe holds your
               card details under PCI-DSS Level 1 attestation; we hold only
               Stripe identifiers and subscription state.{" "}
               <a
@@ -288,7 +288,7 @@ export default function PrivacyPolicyPage() {
               .
             </li>
             <li>
-              <strong>Resend</strong> — transactional email delivery (invites,
+              <strong>Resend.</strong> Transactional email delivery (invites,
               trial reminders). Resend receives recipient emails and the
               rendered email body.{" "}
               <a
@@ -302,7 +302,7 @@ export default function PrivacyPolicyPage() {
               .
             </li>
             <li>
-              <strong>Vercel</strong> — hosting and serverless functions.
+              <strong>Vercel.</strong> Hosting and serverless functions.
               Vercel handles edge requests and captures standard request logs.{" "}
               <a
                 href="https://vercel.com/legal/dpa"
@@ -315,12 +315,12 @@ export default function PrivacyPolicyPage() {
               .
             </li>
             <li>
-              <strong>cron-job.org</strong> — external cron scheduler used to
+              <strong>cron-job.org.</strong> External cron scheduler used to
               trigger our background-task endpoints. Receives a bearer-token
               header; receives no user data in request or response bodies.
             </li>
             <li>
-              <strong>Google</strong> — identity provider for &ldquo;Sign in
+              <strong>Google.</strong> Identity provider for &ldquo;Sign in
               with Google.&rdquo; Google operates as an independent controller
               for the authentication transaction; Stages is the relying party
               and receives only the email, name, profile picture URL, and a
@@ -329,8 +329,8 @@ export default function PrivacyPolicyPage() {
           </List>
 
           <P>
-            We will list any future processors (including AI service providers
-            — see § 9) at the same level of detail. We give at least 30 days
+            We will list any future processors (including AI service providers;
+            see § 9) at the same level of detail. We give at least 30 days
             notice in-app before adding a new sub-processor.
           </P>
         </Section>
@@ -439,15 +439,17 @@ export default function PrivacyPolicyPage() {
         </Section>
 
         {/* ─── 9. AI features ──────────────────────────────────────── */}
-        {/* Source: docs/DATA-COLLECTION.md § 4.2.A–§ 4.2.I — verbatim per
-            Slice S7 lock. The agent-platform framing here is contractually
-            binding once published. */}
+        {/* Source: docs/DATA-COLLECTION.md § 4.2.A-§ 4.2.I, verbatim per
+            Slice S7 lock. Em-dashes replaced with commas/periods/parens per
+            founder UX direction 2026-06-07. Substantive content unchanged.
+            The agent-platform framing here is contractually binding once
+            published. */}
         <Section id="ai" title="9. AI features">
           <P>
             <strong>AI and machine learning.</strong> Stages is a workspace
             where you and your AI assistant collaborate to manage client
             work. Our AI acts on your behalf within tools you&apos;ve
-            connected — like a smart assistant who can take actions you
+            connected, like a smart assistant who can take actions you
             delegate. Here&apos;s how that works and how you stay in
             control.
           </P>
@@ -495,7 +497,7 @@ export default function PrivacyPolicyPage() {
 
           <P>
             <strong>Improvement signals (opt-in).</strong> With your
-            explicit consent — off by default — we may use anonymized
+            explicit consent (off by default), we may use anonymized
             signals about how AI features get used (e.g., which suggestions
             get accepted, which actions you redo) to make AI features better
             for everyone. We never use the content of your work, your
@@ -532,8 +534,8 @@ export default function PrivacyPolicyPage() {
           <P>
             <strong>Security-incident carveout.</strong> We may swap one
             AI provider for another without 30 days&apos; advance notice
-            if we need to do so to address an active security incident —
-            for example, if a current provider experiences a breach or
+            if we need to do so to address an active security incident.
+            For example, if a current provider experiences a breach or
             sustained outage that puts your data at risk. In that case,
             we will inform you promptly after the swap and explain why.
           </P>
@@ -545,15 +547,15 @@ export default function PrivacyPolicyPage() {
             solely to evaluate quality and detect safety issues (for
             example, prompt-injection attempts or misuse of an
             integration). Reviewed material is never used to train AI
-            models — this is consistent with our broader commitment that
+            models. This is consistent with our broader commitment that
             no AI provider trains on your data.
           </P>
 
           <P>
             <strong>Questions or concerns.</strong> For any AI-related
-            question — including requests to clarify what an action did,
+            question (including requests to clarify what an action did,
             to revoke an integration&apos;s permission, or to opt out of
-            improvement signals — email{" "}
+            improvement signals), email{" "}
             <a
               href="mailto:privacy@trystages.com"
               className="text-stages-blue hover:underline"
@@ -612,8 +614,8 @@ export default function PrivacyPolicyPage() {
         <Section id="changes" title="12. Changes to this policy">
           <P>
             We will update this Privacy Policy from time to time. For
-            material changes — including the addition of new processors
-            or AI providers — we will give at least 30 days&apos; notice
+            material changes (including the addition of new processors
+            or AI providers), we will give at least 30 days&apos; notice
             via an in-app banner before the changes take effect, so you
             can review them and (if applicable) pause your use of
             affected features.
@@ -627,8 +629,8 @@ export default function PrivacyPolicyPage() {
         {/* ─── 13. Contact ─────────────────────────────────────────── */}
         <Section id="contact" title="13. Contact">
           <P>
-            For all privacy-related inquiries — access requests, deletion
-            requests, data portability, complaints, or general questions —
+            For all privacy-related inquiries (access requests, deletion
+            requests, data portability, complaints, or general questions),
             please email{" "}
             <a
               href="mailto:privacy@trystages.com"

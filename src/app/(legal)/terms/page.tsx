@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Terms of Service — Stages",
+  title: "Terms of Service | Stages",
   description:
     "The agreement between SalesEdge LLC d/b/a Stages and customers of the Stages service.",
 };
@@ -133,7 +133,7 @@ export default function TermsOfServicePage() {
         {/* ─── 3. Service description ──────────────────────────────── */}
         <Section id="service" title="3. Service description">
           <P>
-            Stages is a workspace product for client services businesses —
+            Stages is a workspace product for client services businesses:
             agencies, consultants, freelancers, and similar teams. Stages
             provides tools to organize client work, including pipelines,
             stages, tasks, notes, chat, and files. We also provide a
@@ -257,8 +257,8 @@ export default function TermsOfServicePage() {
         <Section id="content" title="7. Your content">
           <P>
             <strong>You own your content.</strong> All workspace data you
-            create or upload — pipelines, stages, tasks, notes, messages,
-            files, and similar — remains your property. Stages does not
+            create or upload (pipelines, stages, tasks, notes, messages,
+            files, and similar) remains your property. Stages does not
             claim ownership of your content.
           </P>
           <P>
@@ -284,9 +284,9 @@ export default function TermsOfServicePage() {
         {/* ─── 8. IP ───────────────────────────────────────────────── */}
         <Section id="ip" title="8. Intellectual property">
           <P>
-            <strong>Our IP.</strong> The Stages platform — including the
+            <strong>Our IP.</strong> The Stages platform (including the
             software, design, brand, trademarks, logos, and all related
-            intellectual property — is and remains the exclusive property
+            intellectual property) is and remains the exclusive property
             of SalesEdge LLC. These Terms grant you a limited,
             non-exclusive, non-transferable, revocable license to access
             and use the service in accordance with these Terms; no other

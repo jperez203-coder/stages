@@ -652,6 +652,61 @@ trystages.com/terms   → app.trystages.com/terms
 
 ---
 
+### Slice S7 follow-on — engage professional legal review for /privacy and /terms
+
+**Surfaced**: 2026-06-08 during Slice S7 polish window. The Slice S7 drafts ship without the prior pending-legal-review banner (removed per founder call: banner adds noise without value; substantive commitments are already accurate; competitor SaaS legal pages don't carry similar banners).
+
+**The position.** The substantive commitments in `/privacy` and `/terms` are verified accurate to the system's current behavior (audited through Slices 0, 0.1, S1–S3, S7). What benefits from counsel is **language refinement**, not commitments-correction. Specific areas where professional legal review will likely refine:
+
+- Jurisdiction-specific GDPR / CCPA / state-privacy-law language (e.g., California CPRA-specific rights phrasings, Virginia VCDPA, Colorado CPA).
+- Limitation-of-liability cap enforceability across more jurisdictions than the New Jersey base assumed in ToS § 13.
+- Boilerplate refinements (force majeure clause, severability, third-party beneficiary, entire agreement) — currently minimal-to-absent.
+- Specific language for the AI agent-platform commitments in Privacy § 9 — these are unusually granular for a SaaS privacy policy (most don't have a 4-level consent framework articulated publicly) and may benefit from counsel's eye on which commitments create the cleanest contractual hooks.
+- Mailing address insertion (currently flagged as "to be added on next legal-review iteration" in Privacy § 13).
+
+**Recommended engagement shape.** A 2-3 hour SaaS-experienced counsel review focused on:
+1. Confirming the substantive commitments don't create unintended exposure (especially the agent-platform § 4.2 language).
+2. Adding jurisdictional refinements for the major US states + EU/UK GDPR coverage.
+3. Refining the limitation-of-liability and indemnification clauses.
+4. Adding the standard boilerplate.
+
+**Estimated cost**: counsel time, ~$1-2K for a focused review at typical SaaS-counsel rates. Self-engineering cost is ~30 min to integrate counsel's redlines back into the page components.
+
+**Target**: post-launch (Q3 2026 or upon hitting $5K MRR, whichever sooner). Pre-launch is fine without professional review because the commitments are accurate and the disclaimer-footer ("This document does not constitute legal advice. We recommend customers consult their own counsel...") sets the right expectation.
+
+**Cross-references**:
+- `src/app/(legal)/privacy/page.tsx` — current draft
+- `src/app/(legal)/terms/page.tsx` — current draft
+- `docs/DATA-COLLECTION.md` § 1.15 + § 4.2 — locked source-of-truth content
+
+---
+
+### Slice S7 follow-on — broader AI-tell editorial pass on /privacy and /terms
+
+**Surfaced**: 2026-06-08 during Slice S7 polish window. Em-dash removal pass (locked + shipped same commit window) closes the strongest single AI-tell. Several softer tells remain but are not worth fixing in tonight's window.
+
+**What was kept (deliberate, not deferred).** Per founder review: bold lead-ins (`<strong>Supabase.</strong> Our primary backend...`) are standard in good legal writing — Stripe + Vercel + Linear all use them. Nested lists with consistent indentation are good UX. Section-level structure mirrors the underlying audit doc by design (and that mirror is contractually meaningful given § 4.2's verbatim consumption).
+
+**What could be softened in a focused copyediting pass:**
+
+- **Sentence-length variance.** Current prose runs in a fairly narrow length range. Mixing in shorter declarative sentences ("That's it." / "We do not.") and occasional longer flowing sentences breaks the rhythm that machine-generated copy tends to produce.
+- **Parenthetical density.** The em-dash removal converted many em-dash pairs to parentheses; the page now has more parenthetical asides than pre-removal. A copyedit pass could push some back to standalone sentences or rephrase to avoid the aside entirely.
+- **Perfectly-symmetric structure.** The Privacy Policy's 13 sections + Terms' 16 sections each follow consistent internal patterns (paragraph + bullet list, paragraph + bullet list). Selectively breaking the pattern in a few places (e.g., one section reads as pure prose, no bullets) makes the whole feel more hand-crafted.
+- **Lead-in formula.** Many sections open with a single-sentence paragraph that states what the section is about. Varying the opening (sometimes lead with the rule, sometimes with the rationale, sometimes with a question) reduces formulaic feel.
+
+**Scope and cost.** A focused copyediting pass by someone with strong SaaS copy instincts. Not a re-write; a structural-rhythm refinement. ~2-3 hours of judgment-applied editing.
+
+**Why deferred.** Half-finished scrubs read worse than the current state. Tonight's em-dash pass is internally consistent (one rule, applied uniformly). A broader editorial pass needs sharp focus, not a tail-end-of-marathon attempt. Post-launch when the first 5-10 customers' reactions inform what actually matters is the right window.
+
+**Target trigger**: post-launch + first customer cohort feedback. Or earlier if legal-review counsel flags rhythm-related issues during their pass.
+
+**Cross-references**:
+- `src/app/(legal)/privacy/page.tsx` — current draft (em-dash pass applied 2026-06-07)
+- `src/app/(legal)/terms/page.tsx` — current draft (em-dash pass applied 2026-06-07)
+- WISHLIST → "Engage professional legal review for /privacy and /terms" — adjacent priority; might be the natural moment for the rhythm pass too
+
+---
+
 ### ✅ RESOLVED 2026-06-07: workspaces_insert C1 client-boundary bypass
 
 **Surfaced**: 2026-06-06 during Slice S1 Phase 1 RLS audit. Documented in `docs/RLS-AUDIT.md` § 3.1 as the single 🚨 CRITICAL finding of the audit.
