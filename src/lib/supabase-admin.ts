@@ -25,10 +25,19 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
  * Pattern mirrors src/lib/stripe.ts — lazy init, prefix guard, single
  * singleton across the server runtime.
  *
- * Currently the only authorized caller is the Stripe webhook handler
- * at src/app/api/billing/webhook/route.ts. Any new import of this
- * file is a request to widen the trust boundary — treat it as a
- * design review, not a routine code change.
+ * Authorized callers (each entry was a deliberate trust-boundary
+ * widening — reviewed at the slice it shipped in):
+ *
+ *   - src/app/api/billing/webhook/route.ts  (Stripe webhook handler,
+ *     verified signature)
+ *   - src/lib/seat-count.ts → computeAgencySeatCount (Stripe Slice 3,
+ *     cron-only consumer — sync-seats cron)
+ *   - src/app/w/(workspace)/[slug]/settings/privacy/actions.ts
+ *     (Slice 0.1 — writes ai_consent_audit, a service-role-only audit
+ *     table modeled on seat_sync_log per docs/DATA-COLLECTION.md § 4.3.D)
+ *
+ * Any new import of this file is a request to widen the trust boundary
+ * further — treat it as a design review, not a routine code change.
  */
 
 let _admin: SupabaseClient | null = null;

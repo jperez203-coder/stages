@@ -31,11 +31,12 @@ import Link from "next/link";
  * unknown activeTab prop is passed.
  */
 
-type TabKey = "team" | "billing";
+type TabKey = "team" | "billing" | "privacy";
 
 const TABS: Array<{ key: TabKey; label: string; pathSuffix: string }> = [
   { key: "team", label: "Team", pathSuffix: "team" },
   { key: "billing", label: "Billing", pathSuffix: "billing" },
+  { key: "privacy", label: "Privacy", pathSuffix: "privacy" },
 ];
 
 export function WorkspaceSettingsTabs({
