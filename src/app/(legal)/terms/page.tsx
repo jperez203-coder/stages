@@ -238,7 +238,7 @@ export default function TermsOfServicePage() {
             required by law.
           </P>
           <P>
-            <strong>Failed payments.</strong> If a payment fails, your
+            <strong>Failed payments.</strong>{" "}If a payment fails, your
             subscription may move to a &ldquo;past due&rdquo; state and,
             after a reasonable retry period, be canceled.
           </P>
@@ -299,7 +299,7 @@ export default function TermsOfServicePage() {
             any purpose, without obligation to you.
           </P>
           <P>
-            <strong>Trademarks.</strong> &ldquo;Stages&rdquo; and the
+            <strong>Trademarks.</strong>{" "}&ldquo;Stages&rdquo; and the
             Stages logo are trademarks of SalesEdge LLC. You may not use
             them without our prior written permission, except for
             permitted descriptive uses (e.g., &ldquo;we use Stages to
@@ -503,8 +503,18 @@ export default function TermsOfServicePage() {
           </P>
           <P className="text-zinc-500 text-[13px] mt-6 italic">
             Operated by SalesEdge LLC, a New Jersey limited liability
-            company doing business as Stages. Mailing address to be added
-            on the next legal-review iteration.
+            company doing business as Stages.
+          </P>
+          <P className="text-zinc-500 text-[13px] mt-3">
+            Mailing address:
+            <br />
+            SalesEdge LLC d/b/a Stages
+            <br />
+            1070 State Route 34, Ste H PMB 1022
+            <br />
+            Matawan, NJ 07747
+            <br />
+            United States
           </P>
         </Section>
       </div>
