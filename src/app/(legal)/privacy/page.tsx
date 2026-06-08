@@ -167,12 +167,12 @@ export default function PrivacyPolicyPage() {
               token stored in HTTP-only cookies, used to keep you signed in.
             </li>
             <li>
-              <strong>Interface state.</strong> A small number of preference
+              <strong>Interface state.</strong>{" "}A small number of preference
               flags stored in your browser&apos;s local storage (e.g.,
               dismissed-banner state, recently picked emojis).
             </li>
             <li>
-              <strong>Server logs.</strong> Standard request logs (URL paths,
+              <strong>Server logs.</strong>{" "}Standard request logs (URL paths,
               timestamps, error messages) captured by our hosting provider
               (Vercel) for operational debugging. We do not extract IP
               addresses, User-Agent strings, or referrer headers ourselves.
@@ -374,8 +374,7 @@ export default function PrivacyPolicyPage() {
             <li>
               <strong>User account deletion</strong> deletes your profile,
               memberships, and stored authentication metadata. Some
-              attribution metadata may remain in workspace audit logs
-              (see § 9 for AI-specific retention).
+              attribution metadata may remain in workspace audit logs.
             </li>
             <li>
               <strong>Email delivery records</strong> are retained for up to{" "}
@@ -424,8 +423,7 @@ export default function PrivacyPolicyPage() {
               the app. For full account deletion, email us. Note: a small
               amount of denormalized data may remain in workspace audit
               logs for integrity purposes (e.g., &ldquo;Sarah completed
-              stage X&rdquo; in activity history); see § 9 for AI-specific
-              retention.
+              stage X&rdquo; in activity history).
             </li>
             <li>
               <strong>Data portability.</strong> Email us to request an
@@ -446,12 +444,12 @@ export default function PrivacyPolicyPage() {
             published. */}
         <Section id="ai" title="9. AI features">
           <P>
-            <strong>AI and machine learning.</strong> Stages is a workspace
-            where you and your AI assistant collaborate to manage client
-            work. Our AI acts on your behalf within tools you&apos;ve
-            connected, like a smart assistant who can take actions you
-            delegate. Here&apos;s how that works and how you stay in
-            control.
+            <strong>AI and machine learning.</strong> When Stages AI
+            features are active, you and your AI assistant collaborate to
+            manage client work. The AI acts on your behalf within tools
+            you&apos;ve connected, like a smart assistant who can take
+            actions you delegate. Here&apos;s how that works and how you
+            stay in control.
           </P>
 
           <P>
@@ -650,8 +648,18 @@ export default function PrivacyPolicyPage() {
           </P>
           <P className="text-zinc-500 text-[13px] mt-6 italic">
             Operated by SalesEdge LLC, a New Jersey limited liability
-            company doing business as Stages. Mailing address to be added
-            on the next legal-review iteration.
+            company doing business as Stages.
+          </P>
+          <P className="text-zinc-500 text-[13px] mt-3">
+            Mailing address:
+            <br />
+            SalesEdge LLC d/b/a Stages
+            <br />
+            1070 State Route 34, Ste H PMB 1022
+            <br />
+            Matawan, NJ 07747
+            <br />
+            United States
           </P>
         </Section>
       </div>
