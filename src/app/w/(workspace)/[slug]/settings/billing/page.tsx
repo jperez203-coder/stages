@@ -167,6 +167,7 @@ export default async function BillingSettingsPage({ params }: PageProps) {
         workspaceId={ws.id}
         hasStripeCustomer={stripeCustomerId !== null}
         workspaceSlug={slug}
+        isFounder={isFounder}
       />
     </WorkspaceSettingsTabs>
   );
@@ -392,10 +393,12 @@ function ManageBillingCard({
   workspaceId,
   hasStripeCustomer,
   workspaceSlug,
+  isFounder,
 }: {
   workspaceId: string;
   hasStripeCustomer: boolean;
   workspaceSlug: string;
+  isFounder: boolean;
 }) {
   return (
     <div className="panel-card p-6">
@@ -410,6 +413,7 @@ function ManageBillingCard({
         workspaceId={workspaceId}
         hasStripeCustomer={hasStripeCustomer}
         workspaceSlug={workspaceSlug}
+        isFounder={isFounder}
       />
     </div>
   );

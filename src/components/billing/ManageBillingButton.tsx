@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { PlanPickerModal } from "@/components/billing/StartTrialBanner";
+import { FoundingPlanPickerModal } from "@/components/billing/FoundingTrialEndingBanner";
 
 /**
  * Manage-billing CTA on /w/[slug]/settings/billing.
@@ -14,23 +15,24 @@ import { PlanPickerModal } from "@/components/billing/StartTrialBanner";
  *
  * The "no_billing_yet" 404 case renders a "Start a trial first →"
  * affordance that opens the SAME plan-picker modal the dashboard's
- * StartTrialBanner uses (the Track B Solo $29/Team $39 picker),
- * mounted in place over the billing tab. Pre-fix this was a <Link>
- * back to /w/[slug] which dumped the user on the dashboard and forced
- * them to hunt for the "Add card" banner to retrigger the same modal.
+ * banners use — mounted in place over the billing tab. Pre-fix this
+ * was a <Link> back to /w/[slug] which dumped the user on the dashboard
+ * and forced them to hunt for the right banner to retrigger the modal.
  *
- * KNOWN GAP — FOUNDER USERS: a founding-member workspace in the
- * trialing-no-Stripe-customer state will also see the Track B picker
- * via this affordance, which would route them through
- * /api/billing/checkout at full $29/$39 pricing instead of through
- * /api/billing/founding-upgrade with the lifetime 50%-off coupon. In
- * practice founders are expected to convert from the dashboard's
- * FoundingTrialEndingBanner CTA (which surfaces during the same
- * trial state), so the billing-tab path is the secondary entry. A
- * follow-up could branch on profiles.is_founding_member to render
- * FoundingPlanPickerModal here instead — left out of this scope per
- * strategy's "no scope creep" guidance + their explicit description
- * of the Solo $29 / Team $39 modal as the intended target.
+ * FOUNDER BRANCHING (added 2026-06-08): the modal rendered depends on
+ * isFounder, mirroring the dashboard's banner-precedence rule
+ * (computed server-side in /w/[slug]/page.tsx):
+ *
+ *   isFounder=true  → FoundingPlanPickerModal — strikethrough base
+ *                     pricing + $14.50 / $19.50 founding tiles.
+ *                     Routes through /api/billing/founding-upgrade
+ *                     with the lifetime 50%-off coupon applied.
+ *   isFounder=false → PlanPickerModal — Track B Solo $29 / Team $39.
+ *                     Routes through /api/billing/checkout.
+ *
+ * Same source of truth as the dashboard (profiles.is_founding_member),
+ * read server-side in billing/page.tsx and passed in as a prop. No
+ * new lookup — matches the FoundingTrialEndingBanner mount pattern.
  *
  * Other errors get a generic retry caption.
  *
@@ -55,10 +57,12 @@ export function ManageBillingButton({
   workspaceId,
   hasStripeCustomer: _hasStripeCustomer,
   workspaceSlug: _workspaceSlug,
+  isFounder,
 }: {
   workspaceId: string;
   hasStripeCustomer: boolean;
   workspaceSlug: string;
+  isFounder: boolean;
 }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<{
@@ -170,12 +174,18 @@ export function ManageBillingButton({
         </div>
       )}
 
-      {showPlanPicker && (
-        <PlanPickerModal
-          workspaceId={workspaceId}
-          onClose={() => setShowPlanPicker(false)}
-        />
-      )}
+      {showPlanPicker &&
+        (isFounder ? (
+          <FoundingPlanPickerModal
+            workspaceId={workspaceId}
+            onClose={() => setShowPlanPicker(false)}
+          />
+        ) : (
+          <PlanPickerModal
+            workspaceId={workspaceId}
+            onClose={() => setShowPlanPicker(false)}
+          />
+        ))}
     </>
   );
 }

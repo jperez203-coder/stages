@@ -198,8 +198,15 @@ export function FoundingTrialEndingBanner({
  * coupon-applied price + per-tile founding badge + specific-dollar CTA
  * copy. POSTs to /api/billing/founding-upgrade and redirects to the
  * returned Checkout URL.
+ *
+ * Exported so the billing tab's <ManageBillingButton /> can mount it
+ * in place for founders hitting the "No Stripe customer yet" 404
+ * branch — mirrors the parallel PlanPickerModal export from
+ * StartTrialBanner.tsx for Track B users. The modal is self-contained:
+ * no URL-param coupling (that lives in FoundingTrialEndingBanner's
+ * effect) so it safely mounts anywhere.
  */
-function FoundingPlanPickerModal({
+export function FoundingPlanPickerModal({
   workspaceId,
   onClose,
 }: {
