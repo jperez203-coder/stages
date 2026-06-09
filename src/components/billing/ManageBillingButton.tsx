@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
+import { PlanPickerModal } from "@/components/billing/StartTrialBanner";
 
 /**
  * Manage-billing CTA on /w/[slug]/settings/billing.
@@ -12,17 +12,38 @@ import Link from "next/link";
  *   3. On error → revert button, render inline error caption mapped from
  *      the route's status code + error code.
  *
- * The "no_billing_yet" 404 case shows a different inline UX — explicit
- * link back to the dashboard where StartTrialBanner (Track B) or
- * FoundingTrialEndingBanner (Track A) will surface the trial-start flow.
+ * The "no_billing_yet" 404 case renders a "Start a trial first →"
+ * affordance that opens the SAME plan-picker modal the dashboard's
+ * StartTrialBanner uses (the Track B Solo $29/Team $39 picker),
+ * mounted in place over the billing tab. Pre-fix this was a <Link>
+ * back to /w/[slug] which dumped the user on the dashboard and forced
+ * them to hunt for the "Add card" banner to retrigger the same modal.
+ *
+ * KNOWN GAP — FOUNDER USERS: a founding-member workspace in the
+ * trialing-no-Stripe-customer state will also see the Track B picker
+ * via this affordance, which would route them through
+ * /api/billing/checkout at full $29/$39 pricing instead of through
+ * /api/billing/founding-upgrade with the lifetime 50%-off coupon. In
+ * practice founders are expected to convert from the dashboard's
+ * FoundingTrialEndingBanner CTA (which surfaces during the same
+ * trial state), so the billing-tab path is the secondary entry. A
+ * follow-up could branch on profiles.is_founding_member to render
+ * FoundingPlanPickerModal here instead — left out of this scope per
+ * strategy's "no scope creep" guidance + their explicit description
+ * of the Solo $29 / Team $39 modal as the intended target.
+ *
  * Other errors get a generic retry caption.
  *
  * `hasStripeCustomer` prop is the server-side hint about whether the
  * 404 no_billing_yet case is likely. The button DOES NOT pre-disable
- * itself when hasStripeCustomer is false — server's the source of truth
- * for that branch, and the button still hits the API to get the
- * authoritative answer. The prop is purely a UI hint for future
- * "Start trial first" prominence; currently unused but reserved.
+ * itself when hasStripeCustomer is false — server's the source of
+ * truth for that branch, and the button still hits the API to get the
+ * authoritative answer. The prop is reserved for future "Start trial
+ * first" prominence; currently unused but kept on the contract.
+ *
+ * `workspaceSlug` is no longer used since the affordance opens a modal
+ * in place (the pre-fix <Link> needed it for the /w/[slug] href).
+ * Kept on the contract for the same reason as hasStripeCustomer.
  */
 
 type ApiResponse = {
@@ -33,7 +54,7 @@ type ApiResponse = {
 export function ManageBillingButton({
   workspaceId,
   hasStripeCustomer: _hasStripeCustomer,
-  workspaceSlug,
+  workspaceSlug: _workspaceSlug,
 }: {
   workspaceId: string;
   hasStripeCustomer: boolean;
@@ -44,6 +65,7 @@ export function ManageBillingButton({
     code: "session_expired" | "no_billing_yet" | "stripe_unreachable" | "generic";
     message: string;
   } | null>(null);
+  const [showPlanPicker, setShowPlanPicker] = useState(false);
 
   const handleClick = async () => {
     setError(null);
@@ -76,7 +98,8 @@ export function ManageBillingButton({
       //   403 not_authorized      → generic (shouldn't happen — page
       //                             gates server-side already, but
       //                             safety net)
-      //   404 no_billing_yet      → distinct branch with dashboard link
+      //   404 no_billing_yet      → distinct branch with the
+      //                             plan-picker affordance
       //   404 workspace_not_found → generic
       //   502 stripe_error        → stripe_unreachable
       //   500 / other             → generic
@@ -132,18 +155,26 @@ export function ManageBillingButton({
       {error && error.code === "no_billing_yet" && (
         <div className="mt-3 text-[13px] text-stages-red">
           ⚠ No Stripe customer yet.{" "}
-          <Link
-            href={`/w/${encodeURIComponent(workspaceSlug)}`}
+          <button
+            type="button"
+            onClick={() => setShowPlanPicker(true)}
             className="underline hover:text-zinc-200"
           >
             Start a trial first →
-          </Link>
+          </button>
         </div>
       )}
       {error && error.code !== "no_billing_yet" && (
         <div className="mt-3 text-[13px] text-stages-red">
           ⚠ {error.message}
         </div>
+      )}
+
+      {showPlanPicker && (
+        <PlanPickerModal
+          workspaceId={workspaceId}
+          onClose={() => setShowPlanPicker(false)}
+        />
       )}
     </>
   );

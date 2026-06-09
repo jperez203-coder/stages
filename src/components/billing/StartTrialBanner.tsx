@@ -248,8 +248,15 @@ export function StartTrialBanner({
  * /api/billing/checkout, then window.location.href to the returned
  * Stripe URL. Errors render inline beneath the tile that triggered
  * them.
+ *
+ * Exported so the billing tab's <ManageBillingButton /> can mount it
+ * in place when the user hits the "No Stripe customer yet" 404 branch,
+ * matching the dashboard banner's UX instead of dumping the user back
+ * on /w/[slug]. The modal is self-contained — no URL-param coupling
+ * (that lives in StartTrialBanner's effect) — so it safely mounts
+ * anywhere.
  */
-function PlanPickerModal({
+export function PlanPickerModal({
   workspaceId,
   onClose,
 }: {
