@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Sparkles, X, Check } from "lucide-react";
+import { Sparkles, X, Check, Home } from "lucide-react";
 
 /**
  * Track A founding member upgrade banner — two visual states, one
@@ -57,10 +58,25 @@ type CheckoutResponse = {
   support_hint?: string;
 };
 
+// Tile content. Subtitle + iconSrc + bullets mirror the PlanPickerModal
+// defs in StartTrialBanner.tsx verbatim — same audience descriptor, same
+// marketing-site PNG icons, same 6-bullet feature lists — so the founder
+// modal reads as the standard modal plus the founding-specific elements
+// (badge, strikethrough pricing, founding CTA copy). The two basePrice /
+// foundingPrice / ctaCopy fields are the only intentional copy drift
+// from PlanPickerModal — they encode the founder-specific pricing math.
 const PLAN_DEFS: Array<{
   key: Plan;
   name: string;
-  tagline: string;
+  /** Short audience descriptor — rendered with a Home icon prefix to
+   *  match the marketing site treatment. Copy verbatim from
+   *  PlanPickerModal so the founder modal feels like the same tile
+   *  with a discount layer on top. */
+  subtitle: string;
+  /** Plan icon — same PNGs PlanPickerModal serves so the brand visual
+   *  carries from marketing → standard plan modal → founding plan
+   *  modal at the conversion moment. Files live in public/. */
+  iconSrc: string;
   basePrice: string;
   foundingPrice: string;
   ctaCopy: string;
@@ -69,29 +85,35 @@ const PLAN_DEFS: Array<{
   {
     key: "solo",
     name: "Solo",
-    tagline: "For solo founders and freelancers",
+    subtitle: "Freelancers / solopreneurs",
+    iconSrc: "/solo-icon.png",
     basePrice: "$29",
     foundingPrice: "$14.50",
     ctaCopy: "Start with $14.50/seat/mo",
     bullets: [
-      "One agency seat (you)",
-      "Unlimited client portals",
       "Unlimited pipelines",
-      "Custom templates",
+      "Unlimited client seats",
+      "Unlimited channels",
+      "Pre-built pipeline snapshots",
+      "File uploads & stage notes",
+      "Deadlines and status tracking",
     ],
   },
   {
     key: "team",
     name: "Team",
-    tagline: "For agencies with multiple teammates",
+    subtitle: "Agencies / consultancies",
+    iconSrc: "/team-icon.png",
     basePrice: "$39",
     foundingPrice: "$19.50",
     ctaCopy: "Start with $19.50/seat/mo",
     bullets: [
-      "Multiple agency seats",
       "Everything in Solo",
+      "Multiple members",
+      "Role permission (admin/member)",
+      "Per-pipeline access controls",
+      "Shared workspace history",
       "Priority support",
-      "Workspace-level team chat (soon)",
     ],
   },
 ];
@@ -259,7 +281,7 @@ export function FoundingPlanPickerModal({
       }}
     >
       <div
-        className="panel-card w-full max-w-[640px] p-6"
+        className="panel-card w-[calc(100vw-2rem)] max-w-[760px] p-6"
         style={{
           maxHeight: "calc(100vh - 32px)",
           overflowY: "auto",
@@ -315,6 +337,17 @@ export function FoundingPlanPickerModal({
   );
 }
 
+/**
+ * Tile markup mirrors PlanPickerModal's PlanTile (StartTrialBanner.tsx)
+ * for visual parity at the conversion moment — same container padding +
+ * border, same 48×48 PNG-icon block, same 28px plan-name typography,
+ * same Home-icon-prefixed audience subtitle, same 40px price weight,
+ * same green filled-checkbox feature list, same full-width btn-primary
+ * CTA. Founder-specific elements (badge pill + strikethrough base
+ * price + founding CTA copy) overlay this base. Duplicated inline
+ * rather than extracted into a shared subcomponent per the strategy
+ * direction not to touch PlanPickerModal — option (b) in the brief.
+ */
 function FoundingPlanTile({
   def,
   loading,
@@ -328,16 +361,18 @@ function FoundingPlanTile({
 }) {
   return (
     <div
-      className="p-4 rounded-lg flex flex-col"
+      className="p-6 rounded-lg flex flex-col"
       style={{
         background: "#1F1F22",
         border: "1px solid #36363A",
       }}
     >
-      {/* Founding badge above the price block. Subtle stages-blue
-          treatment so it reinforces without dominating. */}
+      {/* Founding badge above the icon row. Subtle stages-blue
+          treatment so it reinforces the offer without dominating the
+          plan-name typography. Preserved styling from the pre-alignment
+          tile. */}
       <div
-        className="self-start mb-2 px-2 py-0.5 rounded-full text-[10.5px] font-semibold tracking-wide uppercase"
+        className="self-start mb-3 px-2 py-0.5 rounded-full text-[10.5px] font-semibold tracking-wide uppercase"
         style={{
           background: "rgba(16, 140, 233, 0.14)",
           color: "#5BB6F5",
@@ -347,42 +382,84 @@ function FoundingPlanTile({
         Founding member — 50% off forever
       </div>
 
-      <div className="text-[15px] font-semibold text-white">{def.name}</div>
-      <div className="text-[12.5px] text-zinc-500 mt-0.5">{def.tagline}</div>
-
-      {/* Strikethrough base price + primary founding price. Two-line
-          stack so the comparison reads quickly. */}
-      <div className="mt-3 mb-3">
-        <div className="text-[13px] text-zinc-500 leading-tight">
-          <span style={{ textDecoration: "line-through" }}>
-            {def.basePrice}
-          </span>
-          <span className="ml-1 text-zinc-500">/ seat / month</span>
+      {/* Header row — 48×48 PNG icon block + 28px plan name. Same
+          treatment as PlanPickerModal so the brand visual carries
+          across marketing → standard modal → founding modal. */}
+      <div className="flex items-center gap-3 mb-2">
+        <div
+          className="flex-shrink-0 w-12 h-12 rounded-lg flex items-center justify-center"
+          style={{
+            background: "#1F1F22",
+            border: "1px solid #36363A",
+          }}
+        >
+          <Image
+            src={def.iconSrc}
+            width={32}
+            height={32}
+            alt={`${def.name} icon`}
+          />
         </div>
-        <div className="leading-none mt-1">
-          <span className="text-[28px] font-semibold text-white">
-            {def.foundingPrice}
-          </span>
-          <span className="text-[13px] text-zinc-400 ml-1">/ seat / month</span>
+        <div className="text-[28px] font-bold text-zinc-100 leading-none">
+          {def.name}
         </div>
       </div>
 
-      <ul className="space-y-1.5 mb-4 flex-1">
+      {/* Subtitle row — Home icon + audience descriptor, mirroring
+          PlanPickerModal's "🏠 Freelancers / solopreneurs" pattern. */}
+      <div className="flex items-center gap-1.5 text-[13px] text-zinc-500 mb-4">
+        <Home size={13} className="flex-shrink-0" />
+        <span>{def.subtitle}</span>
+      </div>
+
+      {/* Pricing block — strikethrough base price on a small upper
+          line, 40px founding price baseline-aligned with the "per seat
+          / month" suffix on the lower line. Matches PlanPickerModal's
+          price weight + suffix treatment. */}
+      <div className="mb-5">
+        <div className="text-[13px] text-zinc-500 leading-tight mb-1">
+          <span style={{ textDecoration: "line-through" }}>
+            {def.basePrice}
+          </span>
+          <span className="ml-1">/ seat / month</span>
+        </div>
+        <div className="flex items-baseline">
+          <span className="text-[40px] font-bold text-zinc-100 leading-none">
+            {def.foundingPrice}
+          </span>
+          <span className="text-[13px] text-zinc-400 ml-2">
+            per seat / month
+          </span>
+        </div>
+      </div>
+
+      {/* Feature list — 6 bullets per plan, parity with PlanPickerModal.
+          Filled green checkbox square (16×16, rounded-sm, bg #15B981,
+          inner Check icon at strokeWidth 3.5) replaces the prior plain
+          Check icon. flex-1 pushes the CTA to the bottom of the tile so
+          both tiles' CTAs align even if their bullet copy lengths
+          differ. */}
+      <ul className="space-y-2.5 mb-6 flex-1">
         {def.bullets.map((b) => (
           <li
             key={b}
-            className="flex items-start gap-2 text-[12.5px] text-zinc-300"
+            className="flex items-start gap-2 text-[13.5px] text-zinc-300"
           >
-            <Check
-              size={12}
-              className="flex-shrink-0 mt-1 text-stages-green"
-              strokeWidth={3}
-            />
+            <span
+              className="flex-shrink-0 mt-0.5 w-4 h-4 rounded-sm flex items-center justify-center"
+              style={{ background: "#15B981" }}
+            >
+              <Check size={11} className="text-white" strokeWidth={3.5} />
+            </span>
             <span>{b}</span>
           </li>
         ))}
       </ul>
 
+      {/* CTA — full-width btn-primary with founder-specific dollar copy
+          ("Start with $14.50/seat/mo" / "Start with $19.50/seat/mo"),
+          preserving the founder offer's headline number at the moment
+          of conversion. */}
       <button
         type="button"
         onClick={onSelect}
