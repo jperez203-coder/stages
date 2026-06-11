@@ -63,6 +63,13 @@ type ClientInvitePreview = {
   inviter_is_active_pipeline_member?: boolean;
   expires_at?: string;
   accepted_at?: string | null;
+  /** PI-2: invite role returned by get_client_invite_preview. PI-5b
+   *  uses this to branch the pre-accept UI (headline / body / CTA
+   *  copy) and the post-accept routing target. Optional + defaults to
+   *  'client' for resilience — pre-PI-2 RPC versions and pre-PI-1
+   *  invites (where the column default 'client' applies) both
+   *  collapse to the existing client-side behavior. */
+  role?: "admin" | "member" | "client";
 };
 
 type PreviewState =
@@ -653,15 +660,30 @@ function ReadyToAcceptState({
     const result = (data ?? null) as {
       pipeline_id?: string;
       workspace_slug?: string;
+      role?: "admin" | "member" | "client";
     } | null;
     if (!result?.pipeline_id) {
       setError("Accept succeeded but the response was malformed. Refresh.");
       setAccepting(false);
       return;
     }
-    // Per the locked plan: route to /portal/[pipeline_id]. The destination
-    // is an internal stub during step 7 — Phase 4 builds the real portal.
-    router.push(`/portal/${result.pipeline_id}`);
+    // PI-5b: branch on the role the RPC echoed back. Client → portal
+    // (unchanged behavior). Member / admin → agency canvas at
+    // /w/{workspace_slug}/p/{pipeline_id}, which PI-5a widened the
+    // route gate to accept pipeline-only memberships for.
+    const acceptedRole = result.role ?? "client";
+    if (acceptedRole === "client") {
+      router.push(`/portal/${result.pipeline_id}`);
+    } else {
+      if (!result.workspace_slug) {
+        setError(
+          "Accept succeeded but the response was missing workspace_slug. Refresh and try again.",
+        );
+        setAccepting(false);
+        return;
+      }
+      router.push(`/w/${result.workspace_slug}/p/${result.pipeline_id}`);
+    }
   };
 
   const inviterName =
@@ -670,9 +692,24 @@ function ReadyToAcceptState({
     ? ""
     : " (no longer on this project)";
 
+  // PI-5b: per-variant pre-accept copy. Role defaults to 'client' so
+  // pre-PI-2 RPC versions (which don't return role in the preview)
+  // produce the existing client-side UI bit-for-bit.
+  const role = preview.role ?? "client";
+  const isClient = role === "client";
+  const isAdmin = role === "admin";
+
+  const headline = isClient
+    ? "Accept invitation"
+    : isAdmin
+      ? "You've been invited as an admin"
+      : "You've been invited to join the team";
+
+  const acceptButtonLabel = isClient ? "Accept invitation" : "Accept and join";
+
   return (
     <AuthShell
-      title="Accept invitation"
+      title={headline}
       subtitle={
         preview.workspace_name
           ? `From ${preview.workspace_name} on Stages.`
@@ -683,15 +720,30 @@ function ReadyToAcceptState({
         <div className="inline-flex w-12 h-12 rounded-full items-center justify-center mb-4 bg-stages-blue/10">
           <UserPlus size={22} className="text-stages-blue" />
         </div>
-        <p className="text-[13px] text-zinc-300 mb-5 leading-relaxed">
-          <span className="text-zinc-100 font-medium">{inviterName}</span>
-          <span className="text-zinc-500">{inviterSuffix}</span> invited you to
-          view{" "}
-          <span className="text-zinc-100 font-medium">
-            {preview.pipeline_name ?? "a project"}
-          </span>
-          .
-        </p>
+        {isClient ? (
+          <p className="text-[13px] text-zinc-300 mb-5 leading-relaxed">
+            <span className="text-zinc-100 font-medium">{inviterName}</span>
+            <span className="text-zinc-500">{inviterSuffix}</span> invited
+            you to view{" "}
+            <span className="text-zinc-100 font-medium">
+              {preview.pipeline_name ?? "a project"}
+            </span>
+            .
+          </p>
+        ) : (
+          // PI-5b: workspace-centric framing for member / admin variants.
+          // Drops the pipeline-name and "(no longer on this project)"
+          // suffix per locked strategy copy.
+          <p className="text-[13px] text-zinc-300 mb-5 leading-relaxed">
+            <span className="text-zinc-100 font-medium">{inviterName}</span>{" "}
+            from{" "}
+            <span className="text-zinc-100 font-medium">
+              {preview.workspace_name ?? "a workspace"}
+            </span>{" "}
+            invited you to join {isAdmin ? "as an admin" : "their team"} on
+            Stages.
+          </p>
+        )}
 
         {/* Full name — required. Pre-filled from existing display_name
             when set, so a returning user (second invite) doesn't have
@@ -732,7 +784,7 @@ function ReadyToAcceptState({
           className="btn-primary w-full justify-center"
         >
           <Check size={14} />
-          {accepting ? "Accepting…" : "Accept invitation"}
+          {accepting ? "Accepting…" : acceptButtonLabel}
         </button>
       </div>
     </AuthShell>
