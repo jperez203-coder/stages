@@ -76,6 +76,13 @@ export function HeaderProfileMenu({
   // the item doesn't render. Role check mirrors canCreatePipeline in
   // AppShell.tsx: a source === "workspace" owner/admin context for the
   // active slug (a pipeline-level admin does NOT get workspace settings).
+  //
+  // WT-5 follow-up: also hide on personal workspaces. Personal workspaces
+  // have no team-member invite surface (Model C); the link would route
+  // the user to /w/[slug]/settings/team which redirects them right back
+  // out via the settings/team/layout.tsx server gate. Hiding the link
+  // here closes the loop visually so personal-workspace users never
+  // see the dead-end affordance.
   const activeSlug = typeof params?.slug === "string" ? params.slug : null;
   const canManageTeam =
     activeSlug !== null &&
@@ -85,7 +92,8 @@ export function HeaderProfileMenu({
         c.workspaceSlug === activeSlug &&
         c.type === "agency" &&
         c.source === "workspace" &&
-        (c.role === "owner" || c.role === "admin"),
+        (c.role === "owner" || c.role === "admin") &&
+        c.workspaceType !== "personal",
     );
 
   useEffect(() => {

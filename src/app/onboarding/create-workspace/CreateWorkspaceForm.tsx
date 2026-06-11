@@ -448,17 +448,27 @@ function WorkspaceTypeCard({
   // UI. Server-side RPC raise is the security floor (WT-4).
   const locked = atLimit || disabled;
   const handleClick = atLimit ? undefined : onSelect;
-  return (
+  // WT-5 follow-up: the at-limit tooltip uses a CSS hover overlay
+  // instead of the browser's native title attribute. Native title
+  // showed inconsistently on aria-disabled buttons across browsers
+  // (Jordan's verification: tooltip not visible in production), so
+  // the overlay is the more reliable pattern. Wraps the button in a
+  // `relative group` so the overlay can position relative to the card
+  // and the button's hover triggers `group-hover` on the wrapper.
+  const card = (
     <button
       type="button"
       role="radio"
       aria-checked={selected}
       aria-disabled={atLimit || undefined}
-      aria-label={`${title} workspace`}
-      title={atLimit ? atLimitTooltip : undefined}
+      aria-label={
+        atLimit && atLimitTooltip
+          ? `${title} workspace — ${atLimitTooltip}`
+          : `${title} workspace`
+      }
       onClick={handleClick}
       disabled={disabled}
-      className="text-left p-3.5 rounded-lg flex flex-col gap-1.5 transition-colors"
+      className="text-left p-3.5 rounded-lg flex flex-col gap-1.5 transition-colors w-full"
       style={{
         background: selected ? "rgba(16, 140, 233, 0.06)" : "#1F1F22",
         border: selected
@@ -505,4 +515,34 @@ function WorkspaceTypeCard({
       <p className="text-[12px] text-zinc-500 leading-snug">{description}</p>
     </button>
   );
+
+  if (atLimit && atLimitTooltip) {
+    return (
+      <div className="relative group">
+        {card}
+        {/* Tooltip — fades in on hover OR keyboard focus within the
+            wrapper. pointer-events-none on the tooltip itself so it
+            doesn't intercept the user's cursor + cause flicker.
+            Positioned just below the card with a 6px gap so it doesn't
+            overlap the next card in the grid. role="tooltip" + the
+            aria-describedby on the button (not needed here because the
+            tooltip text is already mirrored into aria-label) gives
+            screen readers redundant access to the same explanation. */}
+        <div
+          role="tooltip"
+          className="absolute left-0 right-0 top-full mt-1.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-events-none transition-opacity duration-150 z-10 px-3 py-2 rounded-md text-[12px] leading-snug"
+          style={{
+            background: "#1A1A1C",
+            color: "#E4E4E7",
+            border: "1px solid #36363A",
+            boxShadow: "0 6px 24px rgba(0,0,0,0.4)",
+          }}
+        >
+          {atLimitTooltip}
+        </div>
+      </div>
+    );
+  }
+
+  return card;
 }
