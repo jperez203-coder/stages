@@ -1180,6 +1180,28 @@ Per the founder checklist (§ 3.9 item 19), an email to `info@cron-job.org` requ
 
 ---
 
+### Slice WT-7 follow-ups
+
+Carryover items from the workspace-type sprint (WT-1 through WT-7). None blocking; all deferred until either a customer signal lands or a follow-up sprint clears the backlog.
+
+- **Personal → Agency in-place conversion.** Currently blocked by the WT-6 type-immutability trigger (`workspaces_prevent_type_change`). The trigger fires for all writes including SECURITY DEFINER, so a future conversion RPC will need to `ALTER TABLE ... DISABLE TRIGGER` inside its transaction (and re-enable on exit, or rely on transaction-local scope). Design questions before building: (a) how does conversion interact with `workspace_billing` — fresh 14-day trial row from `init_workspace_billing` semantics, or immediate paid with seat-count reconciliation? (b) what's the UX entry point — a "Convert to Agency" affordance on the personal workspace's billing settings tab? (c) inverse direction Agency → Personal — almost certainly not allowed once a workspace has additional members or clients; if zero, allowed at the same entry point with a confirmation flow? Defer until there's demand signal — a personal-workspace user explicitly asking how to invite a teammate.
+
+- **Workspace-type-aware UI badge on agency settings.** Minor polish: show a small badge on the workspace's settings surface (or wherever a general workspace-info card lands) indicating "Agency workspace" or "Personal workspace". Today there's no visual indicator outside the switcher's section grouping and the billing tab's Personal info card. Small cleanup, harmless if deferred indefinitely.
+
+- **RLS test harness extension for workspace_type.** `scripts/test-rls-phase3.mjs` is gitignored (test credentials + inline JWTs). When that harness is refactored to use checked-in fixtures, add workspace_type test cases:
+  - Agency workspace: direct PostgREST INSERT `workspace_invites` SUCCEEDS for owner/admin (regression).
+  - Personal workspace: direct PostgREST INSERT `workspace_invites` FAILS with RLS denial.
+  - Agency workspace: direct INSERT `client_invites` SUCCEEDS for owner/admin (regression).
+  - Personal workspace: direct INSERT `client_invites` FAILS with RLS denial.
+  - Personal workspace: `UPDATE workspaces SET type='agency'` FAILS with the trigger error 0A000.
+  - SECURITY DEFINER regression — `create_workspace_with_owner`, `accept_workspace_invite`, `accept_client_invite` still work on agency workspaces and reject personal targets at the RPC layer.
+
+  Until automation lands, the verification queries embedded in migration `20260627120000_workspace_type_rls.sql` cover the same surface manually via Supabase SQL Editor.
+
+- **Legacy Phase 2 file deletion.** Carryforward from prior sprint. The Phase 2 prototype port (`src/components/App.tsx`, `src/hooks/useAppState.ts`, `src/components/auth/LoginScreen.tsx`, `src/components/home/*`, `src/components/board/*` legacy files, `src/components/portal/ClientPortal.tsx`) has been unreachable since the root-redirect fix in commit `3c9c980`. Verify nothing else imports from them (full-tree `grep`), then delete. One-pass cleanup — no behavioral change. Worth one focused commit so the next maintainer doesn't accidentally pattern-match off legacy state-management code.
+
+---
+
 ## v1.1 wishlist
 
 Items intentionally **deferred from MVP** to v1.1. The discipline is to ship the prototype's feature set unchanged, then let real customer signal shape v1.1. Don't act on anything in this list without explicit go-ahead from the founder.

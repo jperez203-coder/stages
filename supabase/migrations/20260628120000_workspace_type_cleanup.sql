@@ -1,0 +1,67 @@
+-- ============================================================================
+-- Stages — workspace_type cleanup (WT-7)
+-- ============================================================================
+-- Drops the 1-arg create_workspace_with_owner shadow function left over
+-- from WT-1+2's CREATE OR REPLACE.
+--
+-- ── WHY IT'S A SHADOW ──────────────────────────────────────────────────
+-- PostgreSQL function overloading: CREATE OR REPLACE matches on the full
+-- argument signature, not just the name. When WT-1+2 ran
+--
+--   create or replace function public.create_workspace_with_owner(
+--     workspace_name text,
+--     workspace_type text default 'agency'
+--   ) returns json ...
+--
+-- it created a NEW function whose signature (text, text) differs from
+-- the pre-existing (text) version landed in
+-- 20260511120000_create_workspace_with_owner.sql + updated by
+-- 20260605120000_block_pure_clients_from_create_workspace.sql. Both
+-- functions coexist in the catalog.
+--
+-- ── ZERO CALLERS ───────────────────────────────────────────────────────
+-- Every call site in src/ post-WT-3 passes both arguments. Verified
+-- with `grep -rn "create_workspace_with_owner" src/` — only one
+-- supabase.rpc() invocation (CreateWorkspaceForm.tsx line 175) and it
+-- supplies workspace_name + workspace_type explicitly. All other matches
+-- are comments / docstrings referring to the RPC by name.
+--
+-- The 1-arg version is unreachable from application code. If a future
+-- direct-PostgREST caller somehow invoked the 1-arg signature, the
+-- workspace would land at type='agency' via the column default — not
+-- catastrophic, but the function carries the C1 pure-client block and
+-- name-validation logic in TWO places (1-arg + 2-arg) which drifts on
+-- every future update. Dropping the 1-arg version collapses to one
+-- maintenance surface.
+--
+-- ── DOWN PLAN ──────────────────────────────────────────────────────────
+-- │
+-- │   -- Re-create the 1-arg function from the migration that defined it.
+-- │   -- Copy create_workspace_with_owner(text) verbatim from
+-- │   -- supabase/migrations/20260605120000_block_pure_clients_from_create_workspace.sql
+-- │   -- and CREATE OR REPLACE.
+-- │
+-- └────────────────────────────────────────────────────────────────────────
+-- ============================================================================
+
+
+drop function if exists public.create_workspace_with_owner(text);
+
+
+-- ============================================================================
+-- VERIFICATION QUERIES (commented — run manually after apply)
+-- ============================================================================
+-- (a) Confirm only the 2-arg version remains in the catalog.
+--   select proname, pg_get_function_arguments(oid) as args
+--   from pg_proc
+--   where pronamespace = 'public'::regnamespace
+--     and proname = 'create_workspace_with_owner';
+--   -- Expected: 1 row. args = 'workspace_name text, workspace_type text DEFAULT 'agency'::text'
+--   -- Pre-WT-7 there were 2 rows; this drop reduces to 1.
+--
+-- (b) Smoke test — the active 2-arg version still works end-to-end.
+--     Run as a logged-in user; substitute a name that doesn't collide.
+--   select public.create_workspace_with_owner('WT7 Smoke Drop', 'agency');
+--   -- Expected: JSON with id, slug, name. Cleanup:
+--   -- delete public.workspaces where name = 'WT7 Smoke Drop';
+-- ============================================================================

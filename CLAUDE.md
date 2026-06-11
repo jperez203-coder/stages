@@ -267,13 +267,22 @@ stages/
 - **[v1.1 wishlist](WISHLIST.md)** captures intentionally-deferred features. Anything not in the prototype goes there, not into Phase 2 code. Don't act on wishlist items without explicit go-ahead.
 - **Dashboard sections stay position-agnostic.** Customizable dashboard ordering (user decides whether pipelines, tasks, activity, etc. come first) is a planned v1.1+ feature, deferred until post-launch validation. NOT being built now. But every dashboard section component (the cards under `src/components/dashboard/`, plus future sections) must (a) be self-contained — no section assumes what renders above or below it, (b) not hardcode its vertical position or order, (c) own its own data fetching / empty / error states independently. Keeps v1.1 customization a layout-shell change (persist a per-user order, drag-to-reorder the shell) rather than a rewrite of every card. Don't couple sections to fixed positions or to each other.
 
-## Known transitional state (Phase 3.4 → 4)
+## Workspace Types (workspace.type)
 
-The AppShell global header (logo + workspace switcher + profile menu) is introduced in Phase 3.4 step 4c. Its workspace switcher fetches real data from Supabase via the `useUserContexts` hook. But the views nested under it (`ClientList`, `ClientBoard`, `StagePage`) still render in-memory stub data via `useAppState` — they don't consume the active-workspace context from the shell yet.
+`workspace.type` column (`'agency' | 'personal'`) added in migration `20260625120000_workspace_type.sql`.
 
-**During Phase 3.4 → Phase 4, switching workspaces in the AppShell switcher will update the URL (`/w/[slug]/...`) and write `profiles.last_active_workspace_id`, but will NOT change what the in-memory views display.** This is a known transitional state, not a bug. Phase 4 replaces `useAppState` with real Supabase queries; at that point the views will honor the active workspace from the URL.
+- **Personal workspaces** — free (no `workspace_billing` row created; `init_workspace_billing` trigger skips), 1 per user limit (enforced in `create_workspace_with_owner` RPC), no team invites, no client portals, no client channels. `workspace.type` is immutable post-creation (`workspaces_prevent_type_change` trigger).
 
-Do NOT try to "fix" this during Phase 3.4 — it's the wrong layer. The fix is finishing Phase 4.
+- **Agency workspaces** — full Stages feature set. Per-seat Stripe billing (Solo $29 / Team $39). Unlimited free client seats. Default for every new workspace.
+
+Gating layers (defense-in-depth):
+
+- **API gates** (WT-4): 403 on `/api/billing/checkout`, `/api/billing/founding-upgrade`, `/api/invites/send`, `/api/client-invites/send` when target is personal. `/api/cron/sync-seats` skips personal workspaces.
+- **RPC gates** (WT-4): `accept_workspace_invite` + `accept_client_invite` raise 42501 when target workspace is personal. `create_workspace_with_owner` enforces the per-user 1-personal cap.
+- **UI gates** (WT-5): `HeaderWorkspaceSwitcher` classifies by `workspace.type`. `WorkspaceSettingsTabs` hides Team tab. `PipelineChromeShell` hides Clients tab. `StartTrialBanner` / `FoundingTrialEndingBanner` / `ManageBillingButton` / `HeaderProfileMenu` Team-link all self-suppress on personal workspaces. The onboarding selector disables the Personal card when `hasPersonalWorkspace=true`.
+- **RLS** (WT-6): RESTRICTIVE policies on `workspace_invites`, `workspace_memberships`, `client_invites` (per-pipeline-via-parent), `pipeline_memberships` (`role='client'` only), `channels` (`is_client=true` only). SECURITY DEFINER RPCs bypass RLS, so legitimate flows are unaffected.
+
+Source of truth: `workspace.type` column in DB. Client-side surfaced via `useUserContexts.workspaceType`. Server-side `fetchCallerContextSummary` returns `hasAgencyOwnerOrAdminRole` + `hasPersonalWorkspace` for the onboarding selector logic.
 
 ## Reading order for a new session
 
