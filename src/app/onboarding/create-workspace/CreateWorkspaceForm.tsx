@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertCircle, Building2, LogOut, Plus } from "lucide-react";
+import { AlertCircle, Building2, LogOut, Plus, User } from "lucide-react";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { useSession } from "@/hooks/useSession";
 import { useUserContexts } from "@/hooks/useUserContexts";
@@ -10,6 +10,18 @@ import { supabase } from "@/lib/supabase";
 
 const MAX_NAME_LENGTH = 80;
 const MAX_COMPANY_LENGTH = 80;
+
+/**
+ * Workspace-type selector visibility, computed server-side by the page
+ * component (which has access to `fetchCallerContextSummary` cheaply)
+ * and passed in as a prop. See page.tsx for the per-mode rationale.
+ */
+export type WorkspaceTypeSelectorMode =
+  | "show-no-default"
+  | "show-with-agency-default"
+  | "hide-force-personal";
+
+type WorkspaceType = "agency" | "personal";
 
 /**
  * Shape of `create_workspace_with_owner` RPC's return value. See migration
@@ -53,9 +65,17 @@ type Props = {
    *  exist yet). Drives whether the Company name input renders. Asked
    *  exactly once; editable later in /settings/account. */
   showCompanyNameField?: boolean;
+  /** Workspace-type selector visibility + default-selection behavior.
+   *  See page.tsx for the per-mode rationale; the form just renders
+   *  the appropriate UI and writes the chosen type through to the
+   *  create_workspace_with_owner RPC. */
+  selectorMode: WorkspaceTypeSelectorMode;
 };
 
-export function CreateWorkspaceForm({ showCompanyNameField = false }: Props) {
+export function CreateWorkspaceForm({
+  showCompanyNameField = false,
+  selectorMode,
+}: Props) {
   const router = useRouter();
   const session = useSession();
   // Reused for the client-side duplicate-name pre-check. Already fetched
@@ -64,6 +84,17 @@ export function CreateWorkspaceForm({ showCompanyNameField = false }: Props) {
   const contexts = useUserContexts();
   const [name, setName] = useState("");
   const [companyName, setCompanyName] = useState("");
+  // WT-3: initialise workspaceType from selectorMode.
+  //   'show-no-default'           → null  (must pick before submit)
+  //   'show-with-agency-default'  → 'agency' (default-but-changeable)
+  //   'hide-force-personal'       → 'personal' (locked, no UI shown)
+  const [workspaceType, setWorkspaceType] = useState<WorkspaceType | null>(
+    selectorMode === "show-with-agency-default"
+      ? "agency"
+      : selectorMode === "hide-force-personal"
+        ? "personal"
+        : null,
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -80,13 +111,29 @@ export function CreateWorkspaceForm({ showCompanyNameField = false }: Props) {
   const trimmed = name.trim();
   const tooLong = trimmed.length > MAX_NAME_LENGTH;
   const empty = trimmed === "";
+  // workspaceType non-null is part of canSubmit. In 'show-with-agency-
+  // default' and 'hide-force-personal' modes the initial value is non-
+  // null, so the button is enabled from first render. In 'show-no-
+  // default' mode the button stays disabled until the user picks.
   const canSubmit =
-    !empty && !tooLong && !submitting && session.status === "authenticated";
+    !empty &&
+    !tooLong &&
+    !submitting &&
+    session.status === "authenticated" &&
+    workspaceType !== null;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit) return;
     if (session.status !== "authenticated") return;
+    // Defensive — canSubmit already encodes workspaceType !== null, but
+    // the explicit check narrows the type for the RPC call below AND
+    // surfaces a user-facing error if some future bypass enables submit
+    // without a selection.
+    if (workspaceType === null) {
+      setError("Please select a workspace type.");
+      return;
+    }
 
     setSubmitting(true);
     setError(null);
@@ -117,7 +164,14 @@ export function CreateWorkspaceForm({ showCompanyNameField = false }: Props) {
 
     const { data, error: rpcError } = await supabase.rpc(
       "create_workspace_with_owner",
-      { workspace_name: trimmed },
+      {
+        workspace_name: trimmed,
+        // WT-3: write the selector's chosen type through to the RPC.
+        // The new parameter defaults to 'agency' server-side (WT-2), so
+        // omitting it would silently land an agency workspace even when
+        // the user picked personal — always pass explicitly.
+        workspace_type: workspaceType,
+      },
     );
 
     if (rpcError) {
@@ -203,6 +257,49 @@ export function CreateWorkspaceForm({ showCompanyNameField = false }: Props) {
       subtitle="Name it whatever fits. You can rename later."
     >
       <form onSubmit={submit}>
+        {/* WT-3: workspace-type selector. Placed above the name field
+            because the type decision dictates downstream feature
+            visibility (team invites, client portals, plan options) —
+            choosing it first frames the rest of the form. Hidden
+            entirely in 'hide-force-personal' mode where the type is
+            locked. */}
+        {selectorMode !== "hide-force-personal" && (
+          <div className="mb-5">
+            <label className="block mb-2.5">
+              <span className="text-[13px] text-zinc-400">Workspace type</span>
+            </label>
+            <div
+              role="radiogroup"
+              aria-label="Workspace type"
+              className="grid grid-cols-1 sm:grid-cols-2 gap-2.5"
+            >
+              <WorkspaceTypeCard
+                kind="agency"
+                title="Agency"
+                description="For agencies with team members and client portals. Invite teammates, manage clients, use Solo or Team plan."
+                Icon={Building2}
+                selected={workspaceType === "agency"}
+                onSelect={() => setWorkspaceType("agency")}
+                disabled={submitting}
+              />
+              <WorkspaceTypeCard
+                kind="personal"
+                title="Personal"
+                description="Solo workspace for your own work. No team invites, no client portals. Solo plan only."
+                Icon={User}
+                selected={workspaceType === "personal"}
+                onSelect={() => setWorkspaceType("personal")}
+                disabled={submitting}
+              />
+            </div>
+            {selectorMode === "show-no-default" && workspaceType === null && (
+              <p className="text-[12px] text-zinc-500 mt-2 leading-relaxed">
+                Choose your workspace type to continue.
+              </p>
+            )}
+          </div>
+        )}
+
         <label className="block mb-1.5">
           <span className="text-[13px] text-zinc-400">Workspace name</span>
         </label>
@@ -293,5 +390,89 @@ export function CreateWorkspaceForm({ showCompanyNameField = false }: Props) {
         </button>
       </form>
     </AuthShell>
+  );
+}
+
+// ─── WorkspaceTypeCard (WT-3) ───────────────────────────────────────────────
+
+/**
+ * One card in the workspace-type selector pair. Rendered as a
+ * <button role="radio"> so the pair behaves as a radiogroup — Tab
+ * focuses the first card, then Tab moves to the next focusable, and
+ * Space/Enter activates. aria-checked exposes the selection state to
+ * screen readers.
+ *
+ * Selected state lifts a 1px stages-blue border + a very light blue
+ * tint over the standard #1F1F22 card background. Hover (when not
+ * selected) lifts the border to #4A4A50, matching the panel-card
+ * pattern used elsewhere in AuthShell.
+ */
+function WorkspaceTypeCard({
+  kind,
+  title,
+  description,
+  Icon,
+  selected,
+  onSelect,
+  disabled,
+}: {
+  kind: "agency" | "personal";
+  title: string;
+  description: string;
+  Icon: typeof Building2;
+  selected: boolean;
+  onSelect: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      aria-label={`${title} workspace`}
+      onClick={onSelect}
+      disabled={disabled}
+      className="text-left p-3.5 rounded-lg flex flex-col gap-1.5 transition-colors"
+      style={{
+        background: selected ? "rgba(16, 140, 233, 0.06)" : "#1F1F22",
+        border: selected
+          ? "1px solid #108CE9"
+          : "1px solid #36363A",
+        opacity: disabled ? 0.5 : 1,
+        cursor: disabled ? "not-allowed" : "pointer",
+      }}
+      onMouseEnter={(e) => {
+        if (!disabled && !selected) {
+          e.currentTarget.style.borderColor = "#4A4A50";
+        }
+      }}
+      onMouseLeave={(e) => {
+        if (!disabled && !selected) {
+          e.currentTarget.style.borderColor = "#36363A";
+        }
+      }}
+      data-kind={kind}
+    >
+      <div className="flex items-center gap-2.5">
+        <div
+          className="flex-shrink-0 w-7 h-7 rounded-md flex items-center justify-center"
+          style={{
+            background: selected
+              ? "rgba(16, 140, 233, 0.18)"
+              : "rgba(255, 255, 255, 0.04)",
+            border: selected
+              ? "1px solid rgba(16, 140, 233, 0.30)"
+              : "1px solid #36363A",
+          }}
+        >
+          <Icon
+            size={14}
+            className={selected ? "text-stages-blue" : "text-zinc-400"}
+          />
+        </div>
+        <div className="text-[14px] font-semibold text-zinc-100">{title}</div>
+      </div>
+      <p className="text-[12px] text-zinc-500 leading-snug">{description}</p>
+    </button>
   );
 }

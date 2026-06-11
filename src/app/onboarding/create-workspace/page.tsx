@@ -4,7 +4,10 @@ import {
   fetchCallerContextSummary,
   type CallerContextSummary,
 } from "@/lib/caller-context-summary";
-import { CreateWorkspaceForm } from "./CreateWorkspaceForm";
+import {
+  CreateWorkspaceForm,
+  type WorkspaceTypeSelectorMode,
+} from "./CreateWorkspaceForm";
 
 /**
  * /onboarding/create-workspace — workspace creation page.
@@ -100,5 +103,45 @@ export default async function CreateWorkspacePage() {
     isFirstWorkspace = (count ?? 0) === 0;
   }
 
-  return <CreateWorkspaceForm showCompanyNameField={isFirstWorkspace} />;
+  // WT-3: workspace-type selector visibility. Three modes — chosen here
+  // server-side so the form mounts in its final shape and there's no
+  // post-hydration "the selector just appeared" flash. The C1 block
+  // above has already redirected pure clients, so the cases below cover
+  // only the agency-eligible / brand-new branches.
+  //
+  //   hasAgencyOwnerOrAdminRole → 'show-no-default'
+  //     User owns or admins at least one membership somewhere. Selector
+  //     is shown with neither option pre-picked; they must consciously
+  //     choose 'agency' vs 'personal' before the submit button enables.
+  //
+  //   else !hasAgency → 'show-with-agency-default'
+  //     Brand-new signup with zero memberships of any kind. Selector
+  //     shown with 'agency' pre-selected (Option B locked decision) —
+  //     they can change to 'personal' before submit, but the default
+  //     biases first-time agency onboarding through the agency surface.
+  //
+  //   else → 'hide-force-personal'
+  //     Caller is member-only somewhere (workspace_memberships role
+  //     'member' OR pipeline_memberships role 'member', no owner/admin
+  //     standing). They get no selector and the form locks to
+  //     'personal' silently — they can't unlock agency features by
+  //     creating their own agency workspace until they're invited as
+  //     owner/admin somewhere or pay through a future upgrade path.
+  //
+  // The fall-through ordering matters: hasAgencyOwnerOrAdminRole is
+  // checked first so an owner-of-A-who-is-also-a-member-of-B still gets
+  // 'show-no-default', not 'hide-force-personal'.
+  const selectorMode: WorkspaceTypeSelectorMode =
+    summary.hasAgencyOwnerOrAdminRole
+      ? "show-no-default"
+      : !summary.hasAgency
+        ? "show-with-agency-default"
+        : "hide-force-personal";
+
+  return (
+    <CreateWorkspaceForm
+      showCompanyNameField={isFirstWorkspace}
+      selectorMode={selectorMode}
+    />
+  );
 }
