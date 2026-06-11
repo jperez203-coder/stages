@@ -121,6 +121,37 @@ export async function POST(request: Request) {
       { status: 404 },
     );
   }
+
+  // Personal-workspace gate (WT-4 / Model C). Personal workspaces don't
+  // support team-member invites — the security floor here mirrors the
+  // accept_workspace_invite RPC's reject (defense in depth). The invite
+  // row may have been INSERTed before the WT-5 UI gate landed; this
+  // route catches that and never sends the email.
+  const { data: wsTypeRow, error: wsTypeErr } = await supa
+    .from("workspaces")
+    .select("type")
+    .eq("id", inviteRes.data.workspace_id)
+    .maybeSingle();
+  if (wsTypeErr) {
+    console.error(
+      "[invites/send] workspace type lookup failed:",
+      wsTypeErr?.message, "code:", wsTypeErr?.code,
+    );
+    return NextResponse.json(
+      { error: "Workspace type lookup failed" },
+      { status: 500 },
+    );
+  }
+  if (wsTypeRow?.type === "personal") {
+    return NextResponse.json(
+      {
+        error: "invites_not_available_on_personal",
+        message: "Personal workspaces do not support team-member invites.",
+      },
+      { status: 403 },
+    );
+  }
+
   const block = await assertSubscriptionWritable(
     inviteRes.data.workspace_id,
     supa,

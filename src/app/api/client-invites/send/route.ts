@@ -128,6 +128,37 @@ export async function POST(request: Request) {
       { status: 404 },
     );
   }
+
+  // Personal-workspace gate (WT-4 / Model C). Personal workspaces have
+  // no client-portal surface — reject before generating a magic link or
+  // sending an email. Mirrors the accept_client_invite RPC's reject
+  // (defense in depth). Caller may have INSERTed a client_invites row
+  // before the WT-5 UI gate landed; this route catches that.
+  const { data: wsTypeRow, error: wsTypeErr } = await supaAsUser
+    .from("workspaces")
+    .select("type")
+    .eq("id", pipelineWsRes.data.workspace_id)
+    .maybeSingle();
+  if (wsTypeErr) {
+    console.error(
+      "[client-invites/send] workspace type lookup failed:",
+      wsTypeErr?.message, "code:", wsTypeErr?.code,
+    );
+    return NextResponse.json(
+      { error: "Workspace type lookup failed" },
+      { status: 500 },
+    );
+  }
+  if (wsTypeRow?.type === "personal") {
+    return NextResponse.json(
+      {
+        error: "invites_not_available_on_personal",
+        message: "Personal workspaces do not support client portals.",
+      },
+      { status: 403 },
+    );
+  }
+
   const block = await assertSubscriptionWritable(
     pipelineWsRes.data.workspace_id,
     supaAsUser,

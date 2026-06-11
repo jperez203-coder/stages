@@ -91,6 +91,37 @@ export async function GET(request: Request) {
     );
   }
 
+  // WT-4: pre-fetch workspace types so personal workspaces are skipped
+  // explicitly in the loop. Post-WT-4 personal workspaces don't get
+  // workspace_billing rows so they shouldn't appear in `rows` at all,
+  // but the defensive skip covers (a) pre-migration data not yet cleaned
+  // up, (b) future drift if the trigger body diverges from this route's
+  // assumption, and (c) any out-of-band billing-row creation. Single
+  // batch query keyed on the workspace_ids already in scope; constant
+  // overhead regardless of row count.
+  const workspaceIds = (rows ?? []).map((r) => r.workspace_id);
+  const typeMap = new Map<string, string>();
+  if (workspaceIds.length > 0) {
+    const { data: typeRows, error: typeErr } = await admin
+      .from("workspaces")
+      .select("id, type")
+      .in("id", workspaceIds);
+    if (typeErr) {
+      console.error(
+        "[cron/sync-seats] workspace type lookup failed:",
+        typeErr.message,
+        "code:", typeErr.code,
+      );
+      return NextResponse.json(
+        { error: "Workspace type lookup failed" },
+        { status: 500 },
+      );
+    }
+    for (const r of typeRows ?? []) {
+      typeMap.set(r.id as string, r.type as string);
+    }
+  }
+
   const summary: Record<SyncStatus | "scanned", number> = {
     scanned: 0,
     synced: 0,
@@ -101,6 +132,19 @@ export async function GET(request: Request) {
 
   // ── Per-workspace sync (serial; see SCALING NOTE in docstring) ───────
   for (const row of rows ?? []) {
+    // WT-4: skip personal workspaces. Model C — they have no Stripe
+    // subscription to reconcile against. Debug log preserves
+    // observability ("how many personal workspaces snuck into the
+    // billing table?") without writing seat_sync_log rows for them
+    // (those rows are for billing-managed workspaces only).
+    const wsType = typeMap.get(row.workspace_id) ?? "agency";
+    if (wsType === "personal") {
+      console.log(
+        `[cron/sync-seats] Skipping personal workspace ${row.workspace_id}`,
+      );
+      continue;
+    }
+
     summary.scanned++;
 
     let computedSeats = 0;

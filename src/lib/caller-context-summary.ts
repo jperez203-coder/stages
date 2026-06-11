@@ -40,7 +40,7 @@ export type CallerContextSummary = {
    *  anywhere.
    *
    *  Drives the workspace-type selector visibility at
-   *  /onboarding/create-workspace (WT-3, follow-up commit):
+   *  /onboarding/create-workspace (WT-3):
    *    * false → user is member-only somewhere → selector skips the
    *              "agency" option, auto-assigns type='personal'.
    *    * true  → user can already invite team / own work elsewhere →
@@ -50,6 +50,14 @@ export type CallerContextSummary = {
    *  here, but WT-3's logic shows the selector with "agency" pre-
    *  selected for that distinct case. */
   hasAgencyOwnerOrAdminRole: boolean;
+  /** WT-4: true iff the caller currently owns at least one personal
+   *  workspace (workspace_memberships role='owner' AND the joined
+   *  workspace's type='personal'). Drives WT-5's "Personal option
+   *  disabled with tooltip" treatment on the workspace-type selector
+   *  — the underlying limit is enforced by create_workspace_with_owner
+   *  raising 23505, so this flag is a UX nicety rather than a
+   *  security floor. */
+  hasPersonalWorkspace: boolean;
   /** Exactly-one-client case: pipelineId for a direct /portal/<id>
    *  redirect on a blocked client. Null when the caller has zero or
    *  multiple client memberships. Callers with multiple clients should
@@ -65,14 +73,15 @@ export const fetchCallerContextSummary = cache(
     const user = userRes.user;
     if (!user) return null;
 
-    // workspace_memberships `role` added to the select (WT-2) so the new
-    // `hasAgencyOwnerOrAdminRole` field can be computed without a third
-    // round-trip — same two queries the helper has always run, one
-    // extra column on the first one.
+    // workspace_memberships `role` + embedded workspace.type added to
+    // the select. The role column powers hasAgencyOwnerOrAdminRole
+    // (WT-2); the joined workspace.type powers hasPersonalWorkspace
+    // (WT-4). Both are filtered from the already-fetched rows — no
+    // extra DB round-trips beyond the columns/embed added here.
     const [wsRes, pipRes] = await Promise.all([
       supabase
         .from("workspace_memberships")
-        .select("workspace_id, role")
+        .select("workspace_id, role, workspace:workspaces!inner(type)")
         .eq("user_id", user.id),
       supabase
         .from("pipeline_memberships")
@@ -91,8 +100,7 @@ export const fetchCallerContextSummary = cache(
     );
 
     // hasAgencyOwnerOrAdminRole: any owner/admin standing across either
-    // membership table. Plain `.some()` over the already-fetched rows;
-    // no DB cost beyond the role column added above.
+    // membership table. Plain `.some()` over the already-fetched rows.
     const hasOwnerOrAdminWs = wsRows.some(
       (r) => r.role === "owner" || r.role === "admin",
     );
@@ -100,10 +108,25 @@ export const fetchCallerContextSummary = cache(
       (r) => r.role === "owner" || r.role === "admin",
     );
 
+    // hasPersonalWorkspace (WT-4): owner of at least one workspace with
+    // type='personal'. PostgREST returns the embedded workspace row as
+    // either an object or a single-element array depending on codegen
+    // heuristic — normalize through unknown (same pattern used elsewhere
+    // in the codebase, e.g. src/app/page.tsx + /w/[slug]/page.tsx).
+    const hasPersonalWorkspace = wsRows.some((r) => {
+      if (r.role !== "owner") return false;
+      const w = (r as { workspace?: unknown }).workspace;
+      const wsObj = (Array.isArray(w) ? w[0] : w) as
+        | { type?: string }
+        | undefined;
+      return wsObj?.type === "personal";
+    });
+
     return {
       hasAgency: hasWsMembership || agencyPipelineRows.length > 0,
       hasClient: clientPipelineRows.length > 0,
       hasAgencyOwnerOrAdminRole: hasOwnerOrAdminWs || hasOwnerOrAdminPipeline,
+      hasPersonalWorkspace,
       singleClientPipelineId:
         clientPipelineRows.length === 1
           ? clientPipelineRows[0].pipeline_id

@@ -148,6 +148,37 @@ export async function POST(request: Request) {
     );
   }
 
+  // ── 3a. Personal-workspace gate (WT-4 / Model C) ─────────────────────
+  // Personal workspaces are free — no Stripe subscription, no trial, no
+  // billing tab. Rejecting the entire endpoint (not just Team plan
+  // attempts) for personal targets is the right shape: there is no
+  // "start a subscription" surface on a personal workspace at all.
+  // RLS on workspaces lets the workspace owner read their own row.
+  const { data: wsTypeRow, error: wsTypeErr } = await supa
+    .from("workspaces")
+    .select("type")
+    .eq("id", workspace_id)
+    .maybeSingle();
+  if (wsTypeErr) {
+    console.error(
+      "[billing/checkout] workspace type lookup failed:",
+      wsTypeErr?.message, "code:", wsTypeErr?.code,
+    );
+    return NextResponse.json(
+      { error: "Workspace type lookup failed" },
+      { status: 500 },
+    );
+  }
+  if (wsTypeRow?.type === "personal") {
+    return NextResponse.json(
+      {
+        error: "billing_not_available_on_personal",
+        message: "Personal workspaces do not require billing.",
+      },
+      { status: 403 },
+    );
+  }
+
   // ── 4. Dup-block + Slice 6 trial-state read ──────────────────────────
   // RLS lets owners/admins SELECT this row (slice 1 policy).
   //

@@ -154,6 +154,36 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "not_authorized" }, { status: 403 });
   }
 
+  // ── 3a. Personal-workspace gate (WT-4 / Model C) ─────────────────────
+  // Personal workspaces never need founding upgrades — they're free
+  // (no Stripe subscription, no plan, no trial). Reject the entire
+  // endpoint for personal targets. Matches the same shape as
+  // /api/billing/checkout's personal gate.
+  const { data: wsTypeRow, error: wsTypeErr } = await supa
+    .from("workspaces")
+    .select("type")
+    .eq("id", workspace_id)
+    .maybeSingle();
+  if (wsTypeErr) {
+    console.error(
+      "[founding-upgrade] workspace type lookup failed:",
+      wsTypeErr?.message, "code:", wsTypeErr?.code,
+    );
+    return NextResponse.json(
+      { error: "workspace_type_lookup_failed" },
+      { status: 500 },
+    );
+  }
+  if (wsTypeRow?.type === "personal") {
+    return NextResponse.json(
+      {
+        error: "billing_not_available_on_personal",
+        message: "Personal workspaces do not require billing.",
+      },
+      { status: 403 },
+    );
+  }
+
   // ── 4. Founding-member gate (NEW vs Slice 2) ─────────────────────────
   // RLS on profiles_select lets the caller read their own row; the
   // column-level GRANT lockdown (slice 5 migration) prevents this same
