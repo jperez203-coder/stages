@@ -19,43 +19,39 @@ import {
 import { useSession } from "@/hooks/useSession";
 import { useUserContexts } from "@/hooks/useUserContexts";
 import {
-  usePipelineClientsData,
-  type PipelineClientInvite,
-  type PipelineClient,
-  type PipelineClientsDataState,
-} from "@/hooks/usePipelineClientsData";
+  usePipelineMembersData,
+  type PipelineMemberInvite,
+  type PipelineMember,
+  type PipelineMembersDataState,
+} from "@/hooks/usePipelineMembersData";
 import { resolveInitial } from "@/lib/display-name";
 import { supabase } from "@/lib/supabase";
 
 /**
- * /w/[slug]/p/[pipeline-id]/clients — the agency-side UI for inviting
- * clients to a specific pipeline. Mirrors /w/[slug]/settings/team in
- * architecture but pipeline-scoped + single-role (clients only).
+ * PI-6: Members sub-tab body. Mirrors ClientsBody's three-section
+ * structure for the 'member' role:
+ *   1. "Invite a team member" form (POSTs role='member' to
+ *      /api/client-invites/send).
+ *   2. Pending member invites table — Copy / Resend / Revoke actions
+ *      mirror the Clients sub-tab.
+ *   3. Current members roster — admin + member rows, role badge shown
+ *      inline.
  *
- * Permission gate: workspace owner of the parent workspace, OR pipeline
- * owner/admin of this pipeline. Mirrors `can_edit_pipeline`'s logic on
- * the client side using useUserContexts (zero extra round-trip).
+ * The 'admin' role is NOT exposed in the invite form (Q5 strategy
+ * lock — SQL-only assignment for MVP). The roster shows admins when
+ * they exist in pipeline_memberships, so SQL-side promotions surface
+ * cleanly in the UI.
  *
- * AppShell wraps via /w/[slug]/layout.tsx — this page only renders its
- * own body.
+ * Permission gate, anonymous redirect, personal-workspace redirect all
+ * mirror ClientsBody bit-for-bit.
  */
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/**
- * Renamed from `PipelineClientsPage` (default export) in Phase 4a step
- * 5d. Now a named export so the route's new server `page.tsx` can wrap
- * this body in `<PipelineChromeShell>` for the pipeline header + rail.
- * The body itself is unchanged — same useSession/useUserContexts/
- * usePipelineClientsData hooks, same invite form, same client roster.
- */
-export function ClientsBody() {
+export function MembersBody() {
   const params = useParams();
   const router = useRouter();
   const slug = typeof params?.slug === "string" ? params.slug : null;
-  // Next.js gives back the route segment name lowercased, but the directory
-  // is `[pipeline-id]` (kebab) so the param key is `pipeline-id` (kebab) —
-  // we read it via bracket access since hyphens aren't valid JS identifiers.
   const pipelineId =
     typeof (params as Record<string, unknown>)?.["pipeline-id"] === "string"
       ? ((params as Record<string, unknown>)["pipeline-id"] as string)
@@ -64,13 +60,10 @@ export function ClientsBody() {
   const session = useSession();
   const contexts = useUserContexts();
 
-  // Permission gate derived from useUserContexts.
-  //   * workspace owner of the parent workspace (source='workspace' + role='owner')
-  //     OR
-  //   * pipeline owner/admin of this specific pipeline (source='pipeline')
-  // Mirrors `can_edit_pipeline`'s gate from the RLS layer, evaluated
-  // client-side to short-circuit the UX with a redirect for unauthorised
-  // users. RLS is still the real authorisation barrier underneath.
+  // Same can_edit_pipeline-mirroring gate as ClientsBody: workspace owner
+  // of the parent workspace OR pipeline owner/admin of this pipeline.
+  // Pipeline-level admin can invite teammates too — matches the API
+  // route's can_edit_pipeline gate.
   const canEdit =
     contexts.status === "ready" && slug && pipelineId
       ? contexts.contexts.some(
@@ -96,48 +89,41 @@ export function ClientsBody() {
     }
   }, [contexts.status, canEdit, slug, router]);
 
-  // WT-5: defensive client-side personal-workspace redirect. The page-
-  // level server redirect in clients/page.tsx catches the direct-URL
-  // case; this effect is the in-app navigation backstop (e.g. someone
-  // who bookmarked the URL or pasted it into a tab where the server
-  // already routed cached HTML). Redirects to the pipeline's canvas
-  // root — that's the default tab for a pipeline.
+  // WT-5 defensive client-side personal-workspace redirect (matches
+  // ClientsBody). Page-level server gate in clients/page.tsx catches
+  // direct URL navigation; this effect is the in-app navigation
+  // backstop.
   useEffect(() => {
     if (contexts.status !== "ready" || !slug || !pipelineId) return;
     const ctx = contexts.contexts.find(
-      (c) =>
-        c.type === "agency" &&
-        c.workspaceSlug === slug,
+      (c) => c.type === "agency" && c.workspaceSlug === slug,
     );
     if (ctx?.workspaceType === "personal") {
       router.replace(`/w/${slug}/p/${pipelineId}`);
     }
   }, [contexts, slug, pipelineId, router]);
 
-  const data = usePipelineClientsData(canEdit ? pipelineId : null);
+  const data = usePipelineMembersData(canEdit ? pipelineId : null);
 
-  const shouldRenderPage =
+  const shouldRender =
     session.status === "authenticated" &&
     contexts.status === "ready" &&
     canEdit;
 
-  if (!shouldRenderPage) {
+  if (!shouldRender) {
     return (
       <div className="text-[13px] text-zinc-500 py-8 text-center">Loading…</div>
     );
   }
 
-  // PI-6: max-w-4xl wrapper + page heading hoisted to PeopleBody so the
-  // Members | Clients sub-tabs share one frame. ClientsBody now returns
-  // just its three sections directly.
   return (
     <div>
       <section className="mb-10 panel-card p-6">
         <div className="flex items-center gap-2 mb-4">
           <UserPlus size={16} className="text-zinc-400" />
-          <h2 className="text-[15px] font-semibold">Invite a client</h2>
+          <h2 className="text-[15px] font-semibold">Invite a team member</h2>
         </div>
-        <InviteClientForm
+        <InviteMemberForm
           pipelineId={pipelineId ?? ""}
           onSent={data.status === "ready" ? data.refetch : async () => {}}
         />
@@ -153,7 +139,7 @@ export function ClientsBody() {
             </span>
           )}
         </div>
-        <PendingInvitesSection
+        <PendingMemberInvitesSection
           data={data}
           refetch={data.status === "ready" ? data.refetch : async () => {}}
         />
@@ -162,23 +148,22 @@ export function ClientsBody() {
       <section>
         <div className="flex items-center gap-2 mb-4">
           <Users size={16} className="text-zinc-400" />
-          <h2 className="text-[15px] font-semibold">Current clients</h2>
+          <h2 className="text-[15px] font-semibold">Current members</h2>
           {data.status === "ready" && (
             <span className="text-[12px] text-zinc-500">
-              {data.clients.length}
+              {data.members.length}
             </span>
           )}
         </div>
-        <ClientsSection data={data} />
+        <MembersSection data={data} />
       </section>
     </div>
   );
 }
 
-
 // ─── Invite form ────────────────────────────────────────────────────────────
 
-function InviteClientForm({
+function InviteMemberForm({
   pipelineId,
   onSent,
 }: {
@@ -222,7 +207,13 @@ function InviteClientForm({
           "Content-Type": "application/json",
           Authorization: `Bearer ${jwt}`,
         },
-        body: JSON.stringify({ pipeline_id: pipelineId, email: trimmed }),
+        body: JSON.stringify({
+          pipeline_id: pipelineId,
+          email: trimmed,
+          // PI-6: only difference from the Clients form. The shared
+          // route gates on can_edit_pipeline regardless of role.
+          role: "member",
+        }),
       });
     } catch {
       setError("Network error. Try again.");
@@ -251,8 +242,6 @@ function InviteClientForm({
     await onSent();
   };
 
-  const dismissSuccess = () => setSuccess(null);
-
   return (
     <div>
       <form onSubmit={submit}>
@@ -261,7 +250,7 @@ function InviteClientForm({
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="client@theircompany.com"
+            placeholder="teammate@yourcompany.com"
             className="field flex-1"
             autoComplete="off"
             disabled={submitting}
@@ -306,7 +295,7 @@ function InviteClientForm({
               </code>
               <CopyButton text={success.acceptUrl} />
               <button
-                onClick={dismissSuccess}
+                onClick={() => setSuccess(null)}
                 className="text-[12px] text-zinc-500 hover:text-zinc-300 transition-colors"
               >
                 Dismiss
@@ -321,11 +310,11 @@ function InviteClientForm({
 
 // ─── Pending invites ────────────────────────────────────────────────────────
 
-function PendingInvitesSection({
+function PendingMemberInvitesSection({
   data,
   refetch,
 }: {
-  data: PipelineClientsDataState;
+  data: PipelineMembersDataState;
   refetch: () => Promise<void>;
 }) {
   if (data.status === "loading") {
@@ -349,7 +338,7 @@ function PendingInvitesSection({
           No pending invites
         </p>
         <p className="text-[12px] text-zinc-500 mt-1">
-          Use the form above to invite a client.
+          Use the form above to invite a team member.
         </p>
       </div>
     );
@@ -370,7 +359,7 @@ function PendingInvitesSection({
         </thead>
         <tbody>
           {data.invites.map((invite, idx) => (
-            <InviteRow
+            <MemberInviteRow
               key={invite.token}
               invite={invite}
               isLast={idx === data.invites.length - 1}
@@ -383,12 +372,12 @@ function PendingInvitesSection({
   );
 }
 
-function InviteRow({
+function MemberInviteRow({
   invite,
   isLast,
   onRefetch,
 }: {
-  invite: PipelineClientInvite;
+  invite: PipelineMemberInvite;
   isLast: boolean;
   onRefetch: () => Promise<void>;
 }) {
@@ -402,9 +391,7 @@ function InviteRow({
   const blockMutations = isResending || revoking;
 
   const inviterLabel =
-    invite.inviterDisplayName ||
-    invite.inviterEmail ||
-    "Former member";
+    invite.inviterDisplayName || invite.inviterEmail || "Former member";
   const expiresAt = new Date(invite.expiresAt);
   const isExpired = expiresAt.getTime() <= Date.now();
 
@@ -514,10 +501,10 @@ function InviteRow({
                 isResending
                   ? "Sending…"
                   : resendState === "sent"
-                  ? "Resent"
-                  : resendState === "failed"
-                  ? "Resend failed"
-                  : "Resend email"
+                    ? "Resent"
+                    : resendState === "failed"
+                      ? "Resend failed"
+                      : "Resend email"
               }
               active={resendState === "sent" ? "success" : undefined}
             >
@@ -577,9 +564,9 @@ function ExpiresCell({
   );
 }
 
-// ─── Clients section ────────────────────────────────────────────────────────
+// ─── Members roster ─────────────────────────────────────────────────────────
 
-function ClientsSection({ data }: { data: PipelineClientsDataState }) {
+function MembersSection({ data }: { data: PipelineMembersDataState }) {
   if (data.status === "loading") {
     return (
       <div className="panel-card p-6 text-[13px] text-zinc-500">Loading…</div>
@@ -589,17 +576,17 @@ function ClientsSection({ data }: { data: PipelineClientsDataState }) {
     return (
       <div className="panel-card p-6 flex items-start gap-2 text-[13px] text-stages-red">
         <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
-        <span>Couldn&apos;t load clients: {data.message}</span>
+        <span>Couldn&apos;t load members: {data.message}</span>
       </div>
     );
   }
-  if (data.clients.length === 0) {
+  if (data.members.length === 0) {
     return (
       <div className="panel-card p-8 text-center">
         <Users size={22} className="mx-auto mb-3 text-zinc-600" />
-        <p className="text-[14px] text-zinc-300 font-medium">No clients yet</p>
+        <p className="text-[14px] text-zinc-300 font-medium">No members yet</p>
         <p className="text-[12px] text-zinc-500 mt-1">
-          Once a client accepts an invite, they&apos;ll appear here.
+          Once a teammate accepts an invite, they&apos;ll appear here.
         </p>
       </div>
     );
@@ -613,16 +600,17 @@ function ClientsSection({ data }: { data: PipelineClientsDataState }) {
             style={{ borderBottom: "1px solid #36363A" }}
           >
             <th className="text-left px-4 py-3 font-medium" colSpan={2}>
-              Client
+              Member
             </th>
+            <th className="text-right px-4 py-3 font-medium">Role</th>
           </tr>
         </thead>
         <tbody>
-          {data.clients.map((c, idx) => (
-            <ClientRow
-              key={c.userId}
-              client={c}
-              isLast={idx === data.clients.length - 1}
+          {data.members.map((m, idx) => (
+            <MemberRow
+              key={m.userId}
+              member={m}
+              isLast={idx === data.members.length - 1}
             />
           ))}
         </tbody>
@@ -631,37 +619,51 @@ function ClientsSection({ data }: { data: PipelineClientsDataState }) {
   );
 }
 
-function ClientRow({
-  client,
+function MemberRow({
+  member,
   isLast,
 }: {
-  client: PipelineClient;
+  member: PipelineMember;
   isLast: boolean;
 }) {
-  const label = client.displayName || client.email;
+  const label = member.displayName || member.email;
   return (
     <tr style={{ borderBottom: isLast ? "none" : "1px solid #2A2A2D" }}>
       <td className="px-4 py-3" style={{ width: "44px" }}>
-        <ClientAvatar
-          email={client.email}
-          displayName={client.displayName}
-          avatarUrl={client.avatarUrl}
+        <MemberAvatar
+          email={member.email}
+          displayName={member.displayName}
+          avatarUrl={member.avatarUrl}
           size={32}
         />
       </td>
       <td className="px-4 py-3">
         <div className="text-zinc-200 truncate max-w-[320px]">{label}</div>
-        {client.displayName && (
+        {member.displayName && (
           <div className="text-[12px] text-zinc-500 truncate max-w-[320px]">
-            {client.email}
+            {member.email}
           </div>
         )}
+      </td>
+      <td className="px-4 py-3 text-right">
+        <RoleBadge role={member.role} />
       </td>
     </tr>
   );
 }
 
-// ─── Avatar + action buttons (mirror the team settings page) ────────────────
+function RoleBadge({ role }: { role: "admin" | "member" }) {
+  const color = role === "admin" ? "text-stages-purple" : "text-zinc-400";
+  return (
+    <span
+      className={`text-[11px] font-medium uppercase tracking-wider ${color}`}
+    >
+      {role}
+    </span>
+  );
+}
+
+// ─── Avatar + action buttons (mirror ClientsBody's helpers) ─────────────────
 
 const AVATAR_COLORS = [
   "#3BA5EE",
@@ -673,7 +675,7 @@ const AVATAR_COLORS = [
   "#F43F5E",
 ];
 
-function ClientAvatar({
+function MemberAvatar({
   email,
   displayName,
   avatarUrl,
@@ -685,10 +687,6 @@ function ClientAvatar({
   size: number;
 }) {
   const [imgFailed, setImgFailed] = useState(false);
-  // Color hashes from email (stable identifier — renaming yourself
-  // doesn't change your avatar color). Initial letter comes from
-  // display_name (human-readable) with email-first-letter fallback.
-  // See resolveInitial in src/lib/display-name.ts for the contract.
   let hash = 0;
   for (let i = 0; i < email.length; i++) {
     hash = email.charCodeAt(i) + ((hash << 5) - hash);
@@ -800,14 +798,6 @@ function CopyButton({ text }: { text: string }) {
       style={{
         background: copied ? "#15B98122" : "transparent",
         color: copied ? "#15B981" : "#71717A",
-      }}
-      onMouseEnter={(e) => {
-        if (copied) return;
-        e.currentTarget.style.color = "#E4E4E7";
-      }}
-      onMouseLeave={(e) => {
-        if (copied) return;
-        e.currentTarget.style.color = "#71717A";
       }}
     >
       {copied ? <Check size={11} /> : <Copy size={11} />}

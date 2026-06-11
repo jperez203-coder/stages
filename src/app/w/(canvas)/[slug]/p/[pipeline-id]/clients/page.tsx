@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { fetchCanvasRouteBundle } from "@/lib/canvas-route-cache";
-import { ClientsBody } from "./ClientsBody";
+import { PeopleBody } from "./PeopleBody";
 
 /**
  * /w/[slug]/p/[pipeline-id]/clients — agency-side client invite UI.
@@ -44,5 +44,10 @@ export default async function PipelineClientsPage({
     redirect(`/w/${encodeURIComponent(slug)}/p/${encodeURIComponent(pipelineId)}`);
   }
 
-  return <ClientsBody />;
+  // PI-6: PeopleBody now hosts the Members | Clients sub-tabs and
+  // switches between MembersBody and ClientsBody based on the ?tab=
+  // URL search param (default "members"). URL stays /clients/ for
+  // backward compat with bookmarks + the email magic-link redirect
+  // target.
+  return <PeopleBody />;
 }

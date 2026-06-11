@@ -4,11 +4,11 @@ import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 /**
- * Pending client invite for the /w/[slug]/p/[pipeline-id]/clients page.
- * Same shape as TeamInvite (agency invites) minus the `role` field —
- * client invites have no role variation, every recipient is a client.
+ * Pending member invite for the /w/[slug]/p/[pipeline-id]/clients page's
+ * Members sub-tab. Same shape as PipelineClientInvite but specifically
+ * for role='member' rows in client_invites (PI-1+ added the role column).
  */
-export type PipelineClientInvite = {
+export type PipelineMemberInvite = {
   token: string;
   email: string;
   createdAt: string;
@@ -19,18 +19,21 @@ export type PipelineClientInvite = {
 };
 
 /**
- * A current client on a pipeline. Filtered to pipeline_memberships rows
- * where role='client' — agency-side members (owner/admin/member) live
- * elsewhere in the UI.
+ * A current team member on a pipeline. Filtered to pipeline_memberships
+ * rows where role IN ('admin', 'member') — clients live in the parallel
+ * usePipelineClientsData hook + Clients sub-tab.
+ *
+ * Carries `role` so the roster row can render an admin / member badge.
  */
-export type PipelineClient = {
+export type PipelineMember = {
   userId: string;
+  role: "admin" | "member";
   displayName: string | null;
   email: string;
   avatarUrl: string | null;
 };
 
-export type PipelineClientsDataState =
+export type PipelineMembersDataState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | {
@@ -38,32 +41,37 @@ export type PipelineClientsDataState =
       pipelineName: string;
       workspaceSlug: string;
       workspaceName: string;
-      invites: PipelineClientInvite[];
-      clients: PipelineClient[];
+      invites: PipelineMemberInvite[];
+      members: PipelineMember[];
       refetch: () => Promise<void>;
     };
 
 /**
- * Batched fetch of pending client_invites + client pipeline_memberships
- * for ONE pipeline, joined client-side with profiles + the pipeline /
- * workspace metadata.
+ * Mirror of usePipelineClientsData for the Members sub-tab. Three queries
+ * in parallel (invites, memberships, pipeline metadata) then a profile
+ * lookup for name + avatar enrichment.
  *
- * Same multi-query strategy as `useTeamData`:
- *   * Three queries in parallel where they can be (invites, memberships,
- *     pipeline metadata), then a fourth profile-lookup query to enrich
- *     names and avatars.
- *   * profile lookup is skipped when no user IDs need enriching (no
- *     pending invites with inviters AND no client members yet).
+ *   * Invites: client_invites WHERE pipeline_id = X AND role = 'member'
+ *              AND accepted_at IS NULL. PI-6: filters on the role column
+ *              added in PI-1 so the Members sub-tab only sees its own
+ *              pending invites (not the Clients sub-tab's).
+ *   * Members: pipeline_memberships WHERE pipeline_id = X AND role IN
+ *              ('admin', 'member'). Both agency-side roles surface in
+ *              the Members roster; 'owner' is workspace-level only,
+ *              never a pipeline_memberships value via the UI invite
+ *              flow, but included in the comparison for defensiveness.
+ *   * Pipeline metadata: same query as the clients hook — gives us
+ *              pipelineName + workspaceSlug + workspaceName for free.
  *
- * The pipeline name + workspace info come from the same pipelines table
- * query, so we get them for free. The hook surfaces them in the ready
- * state so the page can render "Clients of [pipeline] in [workspace]"
- * without an extra round-trip.
+ * 'admin' role is NOT exposed in the invite form picker yet (PI-6 ships
+ * member-only UI per the strategy lock). The roster IS admin-aware —
+ * SQL-side admin assignment is allowed and the UI should reflect any
+ * admins it sees.
  */
-export function usePipelineClientsData(
+export function usePipelineMembersData(
   pipelineId: string | null,
-): PipelineClientsDataState {
-  const [state, setState] = useState<PipelineClientsDataState>({
+): PipelineMembersDataState {
+  const [state, setState] = useState<PipelineMembersDataState>({
     status: "loading",
   });
 
@@ -76,21 +84,18 @@ export function usePipelineClientsData(
     try {
       const [invitesResult, membershipsResult, pipelineResult] =
         await Promise.all([
-          // PI-6: client_invites now stores invites for all three roles
-          // (client / member / admin). Filter to role='client' here so
-          // the Clients sub-tab doesn't surface member-role invites.
           supabase
             .from("client_invites")
             .select("token, email, created_at, expires_at, invited_by")
             .eq("pipeline_id", pipelineId)
-            .eq("role", "client")
+            .eq("role", "member")
             .is("accepted_at", null)
             .order("created_at", { ascending: false }),
           supabase
             .from("pipeline_memberships")
-            .select("user_id")
+            .select("user_id, role")
             .eq("pipeline_id", pipelineId)
-            .eq("role", "client"),
+            .in("role", ["admin", "member"]),
           supabase
             .from("pipelines")
             .select("name, workspace:workspaces(name, slug)")
@@ -98,23 +103,16 @@ export function usePipelineClientsData(
             .maybeSingle(),
         ]);
 
-      if (invitesResult.error) {
-        throw new Error(invitesResult.error.message);
-      }
-      if (membershipsResult.error) {
+      if (invitesResult.error) throw new Error(invitesResult.error.message);
+      if (membershipsResult.error)
         throw new Error(membershipsResult.error.message);
-      }
-      if (pipelineResult.error) {
-        throw new Error(pipelineResult.error.message);
-      }
+      if (pipelineResult.error) throw new Error(pipelineResult.error.message);
       if (!pipelineResult.data) {
-        throw new Error(
-          "Pipeline not found or you don't have access to it",
-        );
+        throw new Error("Pipeline not found or you don't have access to it");
       }
 
-      // The PostgREST nested-select-as-array quirk shows up here too
-      // (same as the route handlers). Handle both shapes defensively.
+      // PostgREST nested-select-as-array quirk — same pattern as
+      // usePipelineClientsData.
       const workspaceRel = pipelineResult.data.workspace as unknown as
         | { name: string; slug: string }
         | { name: string; slug: string }[]
@@ -127,7 +125,7 @@ export function usePipelineClientsData(
       const pipelineName =
         (pipelineResult.data.name as string | null) ?? "this pipeline";
 
-      // Collect every user_id we'll need a profile for (inviters + clients).
+      // Collect every user_id we'll need a profile for (inviters + members).
       const userIds = Array.from(
         new Set([
           ...((invitesResult.data ?? [])
@@ -141,7 +139,11 @@ export function usePipelineClientsData(
 
       const profileMap: Record<
         string,
-        { display_name: string | null; email: string; avatar_url: string | null }
+        {
+          display_name: string | null;
+          email: string;
+          avatar_url: string | null;
+        }
       > = {};
       if (userIds.length > 0) {
         const profilesResult = await supabase
@@ -160,7 +162,7 @@ export function usePipelineClientsData(
         }
       }
 
-      const invites: PipelineClientInvite[] = (invitesResult.data ?? []).map(
+      const invites: PipelineMemberInvite[] = (invitesResult.data ?? []).map(
         (i) => ({
           token: i.token as string,
           email: i.email as string,
@@ -176,18 +178,22 @@ export function usePipelineClientsData(
         }),
       );
 
-      const clients: PipelineClient[] = (membershipsResult.data ?? [])
+      const members: PipelineMember[] = (membershipsResult.data ?? [])
         .map((m) => {
           const userId = m.user_id as string;
           const prof = profileMap[userId];
           return {
             userId,
+            role: m.role as "admin" | "member",
             displayName: prof?.display_name ?? null,
             email: prof?.email ?? "",
             avatarUrl: prof?.avatar_url ?? null,
           };
         })
         .sort((a, b) => {
+          // Admins first, then members. Within group, alphabetical by
+          // display name (falling back to email).
+          if (a.role !== b.role) return a.role === "admin" ? -1 : 1;
           const aName = (a.displayName || a.email).toLowerCase();
           const bName = (b.displayName || b.email).toLowerCase();
           return aName.localeCompare(bName);
@@ -199,7 +205,7 @@ export function usePipelineClientsData(
         workspaceSlug,
         workspaceName,
         invites,
-        clients,
+        members,
         refetch: load,
       });
     } catch (err) {

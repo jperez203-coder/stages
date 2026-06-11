@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -8,10 +7,8 @@ import {
   Activity,
   Folder,
   Users,
-  UserPlus,
   ExternalLink,
 } from "lucide-react";
-import { MembersPopover } from "./MembersPopover";
 import type { ChromeMember } from "@/lib/canvas-chrome-data";
 
 /**
@@ -44,32 +41,36 @@ const RAIL_WIDTH = 56;
 type Props = {
   workspaceSlug: string;
   pipelineId: string;
-  /** Pipeline members — for the Members icon popover. Same data the
-   *  header avatar cluster uses; shared via PipelineChromeShell. */
+  /** Pipeline members. Pre-PI-6 LeftRail rendered its own standalone
+   *  Members popover trigger and consumed this prop directly; PI-6
+   *  moved member viewing into the People tab (sub-tab Members) and
+   *  removed the rail icon. The PipelineHeader avatar-cluster popover
+   *  still shows the same data via its own copy of this prop. Kept on
+   *  the rail's contract for symmetry — PipelineChromeShell passes it
+   *  to both surfaces from one bundle. */
   members: ChromeMember[];
-  /** Workspace owner OR pipeline owner/admin. Gates the +invite icon. */
+  /** Workspace owner OR pipeline owner/admin. Gates the People icon. */
   canEditPipeline: boolean;
   /** WORKSPACE-level owner/admin specifically (NOT pipeline-level admins).
    *  Gates the "View as client" icon — previewing the client portal is a
    *  workspace-operator affordance, narrower than canEditPipeline. */
   isWorkspaceOwnerOrAdmin: boolean;
   /** WT-5: parent workspace category. Personal workspaces have no
-   *  client portal surface, so the "+ Invite client" rail icon and
-   *  "View as client" affordance are hidden on personal. Threaded from
-   *  the canvas layout via PipelineChromeShell. */
+   *  client portal surface, so the People rail icon and "View as
+   *  client" affordance are hidden on personal. Threaded from the
+   *  canvas layout via PipelineChromeShell. */
   workspaceType: "agency" | "personal";
 };
 
 export function LeftRail({
   workspaceSlug,
   pipelineId,
-  members,
+  members: _members,
   canEditPipeline,
   isWorkspaceOwnerOrAdmin,
   workspaceType,
 }: Props) {
   const isPersonal = workspaceType === "personal";
-  const [membersOpen, setMembersOpen] = useState(false);
   const pathname = usePathname();
 
   // Section-icon active state derives from the current pathname:
@@ -132,27 +133,23 @@ export function LeftRail({
           <Folder size={18} />
         </RailIcon>
 
-        {/* Members — LIVE. Opens the same popover as the header
-            avatar cluster (shared component, same data). */}
-        <RailIcon
-          label="Members"
-          onClick={() => setMembersOpen((v) => !v)}
-        >
-          <Users size={18} />
-        </RailIcon>
+        {/* PI-6: the standalone Members popover trigger was removed
+            here — viewing pipeline members now lives in the People
+            tab's Members sub-tab. The PipelineHeader avatar-cluster
+            click still opens the same popover for a quick peek. */}
 
-        {/* + Invite — LIVE for owners/admins. Navigates to the
-            existing /clients invite UI (built phase 3.4). The /clients
-            route is also in the (canvas) route group post-Phase-1, so
-            the chrome stays visible — clicking "Canvas" in the rail
-            from there returns the user here.
-            WT-5: hidden on personal workspaces (no client portal surface). */}
+        {/* People — LIVE for owners/admins. Navigates to the unified
+            /clients route which hosts the People tab with Members |
+            Clients sub-tabs (PI-6). URL stays /clients/ for backward
+            compat with bookmarks + the email magic-link redirect
+            target. WT-5: hidden on personal workspaces (no member
+            invites + no client portal surface). */}
         {canEditPipeline && !isPersonal && (
           <RailIcon
-            label="Invite client"
+            label="People"
             href={`/w/${workspaceSlug}/p/${pipelineId}/clients`}
           >
-            <UserPlus size={18} />
+            <Users size={18} />
           </RailIcon>
         )}
 
@@ -177,21 +174,9 @@ export function LeftRail({
         )}
       </aside>
 
-      {membersOpen && (
-        <MembersPopover
-          members={members}
-          anchorPosition="rail"
-          // Anchored roughly opposite the Members icon in the rail.
-          // The members icon is the 5th icon from the top of the rail
-          // (0-indexed: 4). With 16px top padding + 36px per icon
-          // (32 button + 4 gap) the icon center sits at:
-          //   16 + 4 * 36 + 16 = ~176px from top. Position the popover
-          //   to start at viewport-fixed top corresponding to (header
-          //   52px + 176px - 6px adjustment) ≈ 222.
-          anchorTop={228}
-          onClose={() => setMembersOpen(false)}
-        />
-      )}
+      {/* PI-6: rail-anchored MembersPopover removed alongside the
+          standalone Members icon. PipelineHeader's avatar-cluster
+          popover is the only remaining trigger. */}
     </>
   );
 }
