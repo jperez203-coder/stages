@@ -70,11 +70,20 @@ type Props = {
    *  the appropriate UI and writes the chosen type through to the
    *  create_workspace_with_owner RPC. */
   selectorMode: WorkspaceTypeSelectorMode;
+  /** WT-5: server-computed flag — true when the caller already owns a
+   *  personal workspace (1-per-user cap reached). Renders the Personal
+   *  card in a disabled state with a tooltip. The actual cap is
+   *  enforced by the RPC raising 23505; this prop is the UX affordance
+   *  that prevents the user from hitting that error in the first place.
+   *  Defaults to false because callers without the flag (zero-context
+   *  signups, pre-WT-5 mounts) shouldn't be blocked. */
+  hasPersonalWorkspace?: boolean;
 };
 
 export function CreateWorkspaceForm({
   showCompanyNameField = false,
   selectorMode,
+  hasPersonalWorkspace = false,
 }: Props) {
   const router = useRouter();
   const session = useSession();
@@ -290,6 +299,8 @@ export function CreateWorkspaceForm({
                 selected={workspaceType === "personal"}
                 onSelect={() => setWorkspaceType("personal")}
                 disabled={submitting}
+                atLimit={hasPersonalWorkspace}
+                atLimitTooltip="You already have a personal workspace. Delete it first to create another."
               />
             </div>
             {selectorMode === "show-no-default" && workspaceType === null && (
@@ -415,6 +426,8 @@ function WorkspaceTypeCard({
   selected,
   onSelect,
   disabled,
+  atLimit = false,
+  atLimitTooltip,
 }: {
   kind: "agency" | "personal";
   title: string;
@@ -423,14 +436,27 @@ function WorkspaceTypeCard({
   selected: boolean;
   onSelect: () => void;
   disabled: boolean;
+  /** WT-5: when true, the card is rendered locked at reduced opacity
+   *  with the atLimitTooltip on hover. Distinct from `disabled` (which
+   *  is the global form-submitting lock — applies to both cards). */
+  atLimit?: boolean;
+  atLimitTooltip?: string;
 }) {
+  // Locked overrides the "selectable" affordances. Click is a no-op so
+  // even keyboard activation (Space/Enter) leaves workspaceType
+  // untouched — the at-limit user can never select Personal via the
+  // UI. Server-side RPC raise is the security floor (WT-4).
+  const locked = atLimit || disabled;
+  const handleClick = atLimit ? undefined : onSelect;
   return (
     <button
       type="button"
       role="radio"
       aria-checked={selected}
+      aria-disabled={atLimit || undefined}
       aria-label={`${title} workspace`}
-      onClick={onSelect}
+      title={atLimit ? atLimitTooltip : undefined}
+      onClick={handleClick}
       disabled={disabled}
       className="text-left p-3.5 rounded-lg flex flex-col gap-1.5 transition-colors"
       style={{
@@ -438,16 +464,20 @@ function WorkspaceTypeCard({
         border: selected
           ? "1px solid #108CE9"
           : "1px solid #36363A",
-        opacity: disabled ? 0.5 : 1,
-        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: locked ? 0.5 : 1,
+        cursor: atLimit
+          ? "not-allowed"
+          : disabled
+            ? "not-allowed"
+            : "pointer",
       }}
       onMouseEnter={(e) => {
-        if (!disabled && !selected) {
+        if (!locked && !selected) {
           e.currentTarget.style.borderColor = "#4A4A50";
         }
       }}
       onMouseLeave={(e) => {
-        if (!disabled && !selected) {
+        if (!locked && !selected) {
           e.currentTarget.style.borderColor = "#36363A";
         }
       }}

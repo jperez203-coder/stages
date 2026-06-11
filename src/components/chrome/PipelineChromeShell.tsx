@@ -44,6 +44,11 @@ import type { CanvasChromeData } from "@/lib/canvas-chrome-data";
 
 type Props = {
   workspaceSlug: string;
+  /** WT-5: parent workspace category. Threaded into LeftRail to gate
+   *  the "+ Invite client" + "View as client" affordances on personal
+   *  workspaces. The pipeline canvas itself still renders for both
+   *  categories — only the client-portal-adjacent rail icons hide. */
+  workspaceType: "agency" | "personal";
   chrome: CanvasChromeData;
   /** Aggregated task counts for the header subline. Caller computes
    *  from whatever task data they already have; passed in to avoid
@@ -72,6 +77,7 @@ type Props = {
 
 export function PipelineChromeShell({
   workspaceSlug,
+  workspaceType,
   chrome,
   completedTasks,
   totalTasks,
@@ -113,6 +119,7 @@ export function PipelineChromeShell({
             members={chrome.members}
             canEditPipeline={chrome.canEditPipeline}
             isWorkspaceOwnerOrAdmin={chrome.isWorkspaceOwnerOrAdmin}
+            workspaceType={workspaceType}
           />
           <div className="flex-1 flex flex-col min-w-0 relative">
             {children}

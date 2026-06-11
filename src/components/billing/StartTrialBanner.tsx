@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Sparkles, X, Check, Home, AlertCircle } from "lucide-react";
+import { useUserContexts } from "@/hooks/useUserContexts";
 
 /**
  * Dashboard banner for Track B (non-founder) trial states. Two
@@ -142,6 +143,12 @@ export function StartTrialBanner({
   const router = useRouter();
   const searchParams = useSearchParams();
   const [open, setOpen] = useState(false);
+  // WT-5: self-suppress on personal workspaces. Personal workspaces
+  // don't have a workspace_billing row at all (WT-4 trigger skips
+  // creation) so the dashboard's precedence logic wouldn't normally
+  // mount this banner; the self-suppress is defense in depth against
+  // pre-WT-4 rows or future drift.
+  const contexts = useUserContexts();
 
   // Slice 6 Part F: ?addcard=true email CTA auto-open. The day-12 email's
   // CTA link is `/w/{slug}?addcard=true`. When the user lands here, we
@@ -175,6 +182,15 @@ export function StartTrialBanner({
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [open]);
+
+  // WT-5: personal-workspace self-suppress. Placed after all hook
+  // calls so the rules-of-hooks order stays stable across renders.
+  if (contexts.status === "ready") {
+    const ctx = contexts.contexts.find(
+      (c) => c.type === "agency" && c.workspaceId === workspaceId,
+    );
+    if (ctx?.workspaceType === "personal") return null;
+  }
 
   // Variant-specific visual treatment. Both variants share the same
   // card shape (rounded-lg + p-4 + icon tile + text stack + CTA) but

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useUserContexts } from "@/hooks/useUserContexts";
 
 /**
  * Shared chrome for workspace settings pages.
@@ -48,13 +49,30 @@ export function WorkspaceSettingsTabs({
   slug: string;
   children: React.ReactNode;
 }) {
+  // WT-5: hide the Team tab on personal workspaces. AppShell already
+  // loads useUserContexts at the layout level, so this hook call
+  // re-uses the cached state — no extra fetch. Server-side defense
+  // also exists at /settings/team/layout.tsx (redirect).
+  const contexts = useUserContexts();
+  const isPersonalWorkspace =
+    contexts.status === "ready" &&
+    contexts.contexts.some(
+      (c) =>
+        c.type === "agency" &&
+        c.workspaceSlug === slug &&
+        c.workspaceType === "personal",
+    );
+  const visibleTabs = isPersonalWorkspace
+    ? TABS.filter((t) => t.key !== "team")
+    : TABS;
+
   return (
     <div className="max-w-[960px] mx-auto px-4 sm:px-6 py-8">
       <h1 className="text-[24px] font-semibold mb-6 text-zinc-100">
         Workspace settings
       </h1>
       <nav className="border-b border-zinc-800 flex gap-6 mb-8">
-        {TABS.map((tab) => {
+        {visibleTabs.map((tab) => {
           const isActive = tab.key === activeTab;
           return (
             <Link

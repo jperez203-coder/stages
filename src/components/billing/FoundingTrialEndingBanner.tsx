@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Sparkles, X, Check, Home } from "lucide-react";
+import { useUserContexts } from "@/hooks/useUserContexts";
 
 /**
  * Track A founding member upgrade banner — two visual states, one
@@ -137,6 +138,11 @@ export function FoundingTrialEndingBanner({
   const router = useRouter();
   const searchParams = useSearchParams();
   const [open, setOpen] = useState(false);
+  // WT-5: self-suppress on personal workspaces. Personal workspaces
+  // don't have a workspace_billing row (WT-4 trigger skip) so the
+  // dashboard precedence shouldn't mount this banner — defense in
+  // depth against pre-WT-4 rows or future drift.
+  const contexts = useUserContexts();
 
   // Auto-open on ?founding=upgrade (email CTA target). Strip the param
   // so a refresh doesn't re-trigger.
@@ -164,6 +170,15 @@ export function FoundingTrialEndingBanner({
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [open]);
+
+  // WT-5: personal-workspace self-suppress. Placed after all hook
+  // calls so the rules-of-hooks order stays stable across renders.
+  if (contexts.status === "ready") {
+    const ctx = contexts.contexts.find(
+      (c) => c.type === "agency" && c.workspaceId === workspaceId,
+    );
+    if (ctx?.workspaceType === "personal") return null;
+  }
 
   const isPreExpiry = variant === "pre_expiry";
   const heading = isPreExpiry

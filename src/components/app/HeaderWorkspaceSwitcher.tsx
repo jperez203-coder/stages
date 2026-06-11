@@ -144,26 +144,23 @@ export function HeaderWorkspaceSwitcher({
   const onlyOneWorkspace = workspaces.length <= 1;
   const hasAnyAgencyContext = workspaces.length > 0;
 
-  // MY AGENCY vs PERSONAL classification. The `?? 2` default on
-  // teammates and `?? 0` default on clients are both load-bearing:
-  // missing stats fall toward MY AGENCY, not PERSONAL — see the
-  // component-level doc comment for why.
+  // WT-5: MY AGENCY vs PERSONAL classification now reads workspace.type
+  // (server-side authoritative) instead of the pre-WT-5 stats heuristic
+  // (1 teammate + 0 clients → personal). The stats heuristic
+  // misclassified real agency workspaces that happened to be solo +
+  // empty as "Personal"; switching to type fixes that retroactively the
+  // moment the data lands.
+  //
+  // Defensive fallback when workspaceType is undefined: classify as
+  // MY AGENCY (safer bucket — a real agency briefly labeled Personal
+  // while data is mid-fetch reads as a bug; the inverse self-corrects
+  // when the embed lands).
   const myAgencyContexts = useMemo(
-    () =>
-      workspaces.filter((c) => {
-        const teammates = c.stats?.teammates ?? 2;
-        const clients = c.stats?.clients ?? 0;
-        return teammates > 1 || clients > 0;
-      }),
+    () => workspaces.filter((c) => (c.workspaceType ?? "agency") === "agency"),
     [workspaces],
   );
   const personalContexts = useMemo(
-    () =>
-      workspaces.filter((c) => {
-        const teammates = c.stats?.teammates ?? 2;
-        const clients = c.stats?.clients ?? 0;
-        return teammates === 1 && clients === 0;
-      }),
+    () => workspaces.filter((c) => c.workspaceType === "personal"),
     [workspaces],
   );
 

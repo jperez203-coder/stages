@@ -41,6 +41,13 @@ export type UserContext = {
   workspaceSlug: string;
   workspaceName: string;
 
+  /** WT-5: workspace category. Set for every agency context; undefined
+   *  for client contexts (clients see only their pipeline, never the
+   *  parent workspace as a first-class concept). Drives switcher
+   *  classification, billing UI visibility, settings/team tab
+   *  visibility, and pipeline /clients tab visibility. */
+  workspaceType?: "agency" | "personal";
+
   /** Set when source === 'pipeline'. */
   pipelineId?: string;
   pipelineName?: string;
@@ -75,7 +82,12 @@ export type UserContextsState =
 // manual. Defensive null checks below cover any malformed rows.
 type WorkspaceMembershipRow = {
   role: string;
-  workspace: { id: string; slug: string; name: string } | null;
+  workspace: {
+    id: string;
+    slug: string;
+    name: string;
+    type: "agency" | "personal";
+  } | null;
 };
 
 type PipelineMembershipRow = {
@@ -83,7 +95,12 @@ type PipelineMembershipRow = {
   pipeline: {
     id: string;
     name: string;
-    workspace: { id: string; slug: string; name: string } | null;
+    workspace: {
+      id: string;
+      slug: string;
+      name: string;
+      type: "agency" | "personal";
+    } | null;
   } | null;
 };
 
@@ -114,12 +131,12 @@ export function useUserContexts(): UserContextsState {
       const [wsResult, pmResult, profResult] = await Promise.all([
         supabase
           .from("workspace_memberships")
-          .select("role, workspace:workspaces(id, slug, name)")
+          .select("role, workspace:workspaces(id, slug, name, type)")
           .eq("user_id", userId),
         supabase
           .from("pipeline_memberships")
           .select(
-            "role, pipeline:pipelines(id, name, workspace:workspaces(id, slug, name))",
+            "role, pipeline:pipelines(id, name, workspace:workspaces(id, slug, name, type))",
           )
           .eq("user_id", userId),
         supabase
@@ -148,11 +165,13 @@ export function useUserContexts(): UserContextsState {
           workspaceId: row.workspace.id,
           workspaceSlug: row.workspace.slug,
           workspaceName: row.workspace.name,
+          workspaceType: row.workspace.type,
         });
       }
 
       for (const row of (pmResult.data ?? []) as unknown as PipelineMembershipRow[]) {
         if (!row.pipeline || !row.pipeline.workspace) continue;
+        const isAgencyCtx = row.role !== "client";
         contexts.push({
           type: row.role === "client" ? "client" : "agency",
           source: "pipeline",
@@ -160,6 +179,10 @@ export function useUserContexts(): UserContextsState {
           workspaceId: row.pipeline.workspace.id,
           workspaceSlug: row.pipeline.workspace.slug,
           workspaceName: row.pipeline.workspace.name,
+          // workspaceType is set for agency contexts only — client
+          // contexts don't surface the parent workspace as a first-class
+          // concept in any UI surface (they live in /portal/*).
+          workspaceType: isAgencyCtx ? row.pipeline.workspace.type : undefined,
           pipelineId: row.pipeline.id,
           pipelineName: row.pipeline.name,
         });

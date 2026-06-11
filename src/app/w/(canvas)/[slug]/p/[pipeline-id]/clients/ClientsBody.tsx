@@ -96,6 +96,24 @@ export function ClientsBody() {
     }
   }, [contexts.status, canEdit, slug, router]);
 
+  // WT-5: defensive client-side personal-workspace redirect. The page-
+  // level server redirect in clients/page.tsx catches the direct-URL
+  // case; this effect is the in-app navigation backstop (e.g. someone
+  // who bookmarked the URL or pasted it into a tab where the server
+  // already routed cached HTML). Redirects to the pipeline's canvas
+  // root — that's the default tab for a pipeline.
+  useEffect(() => {
+    if (contexts.status !== "ready" || !slug || !pipelineId) return;
+    const ctx = contexts.contexts.find(
+      (c) =>
+        c.type === "agency" &&
+        c.workspaceSlug === slug,
+    );
+    if (ctx?.workspaceType === "personal") {
+      router.replace(`/w/${slug}/p/${pipelineId}`);
+    }
+  }, [contexts, slug, pipelineId, router]);
+
   const data = usePipelineClientsData(canEdit ? pipelineId : null);
 
   const shouldRenderPage =

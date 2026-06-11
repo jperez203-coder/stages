@@ -53,6 +53,11 @@ type Props = {
    *  Gates the "View as client" icon — previewing the client portal is a
    *  workspace-operator affordance, narrower than canEditPipeline. */
   isWorkspaceOwnerOrAdmin: boolean;
+  /** WT-5: parent workspace category. Personal workspaces have no
+   *  client portal surface, so the "+ Invite client" rail icon and
+   *  "View as client" affordance are hidden on personal. Threaded from
+   *  the canvas layout via PipelineChromeShell. */
+  workspaceType: "agency" | "personal";
 };
 
 export function LeftRail({
@@ -61,7 +66,9 @@ export function LeftRail({
   members,
   canEditPipeline,
   isWorkspaceOwnerOrAdmin,
+  workspaceType,
 }: Props) {
+  const isPersonal = workspaceType === "personal";
   const [membersOpen, setMembersOpen] = useState(false);
   const pathname = usePathname();
 
@@ -138,8 +145,9 @@ export function LeftRail({
             existing /clients invite UI (built phase 3.4). The /clients
             route is also in the (canvas) route group post-Phase-1, so
             the chrome stays visible — clicking "Canvas" in the rail
-            from there returns the user here. */}
-        {canEditPipeline && (
+            from there returns the user here.
+            WT-5: hidden on personal workspaces (no client portal surface). */}
+        {canEditPipeline && !isPersonal && (
           <RailIcon
             label="Invite client"
             href={`/w/${workspaceSlug}/p/${pipelineId}/clients`}
@@ -155,8 +163,9 @@ export function LeftRail({
             a new tab so the agency's canvas tab stays put; the portal
             route accepts workspace owner/admin (portal layout gate
             widened in 20260614120000 / commit 20a6aa1) and shows the
-            "Viewing as client → Switch to agency view" banner there. */}
-        {isWorkspaceOwnerOrAdmin && (
+            "Viewing as client → Switch to agency view" banner there.
+            WT-5: hidden on personal workspaces (no client portal). */}
+        {isWorkspaceOwnerOrAdmin && !isPersonal && (
           <RailIcon
             label="View as client"
             onClick={() =>

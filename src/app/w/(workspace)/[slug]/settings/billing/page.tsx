@@ -71,12 +71,17 @@ export default async function BillingSettingsPage({ params }: PageProps) {
   // dashboard page).
   const wsMemRes = await supa
     .from("workspace_memberships")
-    .select("role, workspace:workspaces!inner(id, name, slug)")
+    .select("role, workspace:workspaces!inner(id, name, slug, type)")
     .eq("user_id", userId)
     .eq("workspace.slug", slug)
     .maybeSingle();
 
-  type WsRow = { id: string; name: string; slug: string };
+  type WsRow = {
+    id: string;
+    name: string;
+    slug: string;
+    type: "agency" | "personal";
+  };
   const wsRaw = wsMemRes.data?.workspace as unknown;
   const ws: WsRow | null = Array.isArray(wsRaw)
     ? ((wsRaw[0] as WsRow | undefined) ?? null)
@@ -87,6 +92,20 @@ export default async function BillingSettingsPage({ params }: PageProps) {
     // the dashboard's not-a-member fallback (deliberate non-disclosure of
     // workspace existence to non-members).
     redirect(`/w/${encodeURIComponent(slug)}`);
+  }
+
+  // WT-5: personal workspaces are free — no plan, no trial, no Stripe.
+  // Render a simple info card explaining that. Placed BEFORE the
+  // owner/admin gate because personal workspaces are solo-by-definition
+  // (only one membership row, always role='owner'), so the role gate
+  // doesn't add anything for the personal case. Anyone who can read the
+  // workspace can read this card.
+  if (ws.type === "personal") {
+    return (
+      <WorkspaceSettingsTabs activeTab="billing" slug={slug}>
+        <PersonalWorkspaceCard />
+      </WorkspaceSettingsTabs>
+    );
   }
 
   const role = wsMemRes.data.role;
@@ -176,6 +195,29 @@ export default async function BillingSettingsPage({ params }: PageProps) {
 // ─────────────────────────────────────────────────────────────────────────
 // State cards
 // ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * WT-5: personal-workspace info card. Plain one-sentence explainer with
+ * the Sparkles icon (matches the EmptyState's visual idiom — same icon
+ * tile, same headline scale). No upgrade CTA — personal workspaces are
+ * a separate category, not a tier to upgrade from.
+ */
+function PersonalWorkspaceCard() {
+  return (
+    <div className="panel-card p-8 text-center max-w-[480px] mx-auto mt-12">
+      <div className="flex justify-center mb-4">
+        <Sparkles size={32} className="text-stages-blue" />
+      </div>
+      <div className="text-[18px] font-semibold text-zinc-100 mb-2">
+        Personal workspace
+      </div>
+      <p className="text-[14px] text-zinc-500 leading-snug">
+        This is a Personal workspace. Personal workspaces are free and
+        don&apos;t require a subscription.
+      </p>
+    </div>
+  );
+}
 
 function RestrictedCard({ workspaceSlug }: { workspaceSlug: string }) {
   return (

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { PlanPickerModal } from "@/components/billing/StartTrialBanner";
 import { FoundingPlanPickerModal } from "@/components/billing/FoundingTrialEndingBanner";
+import { useUserContexts } from "@/hooks/useUserContexts";
 
 /**
  * Manage-billing CTA on /w/[slug]/settings/billing.
@@ -70,6 +71,12 @@ export function ManageBillingButton({
     message: string;
   } | null>(null);
   const [showPlanPicker, setShowPlanPicker] = useState(false);
+  // WT-5: self-suppress on personal workspaces. Defense in depth —
+  // the billing settings page renders a different state for personal
+  // workspaces (the "Personal workspace — free, no subscription" info
+  // card) and wouldn't mount this button. The check here protects
+  // against future mount points that don't gate at the parent.
+  const contexts = useUserContexts();
 
   const handleClick = async () => {
     setError(null);
@@ -140,6 +147,15 @@ export function ManageBillingButton({
       setLoading(false);
     }
   };
+
+  // WT-5: personal-workspace self-suppress. Placed after all hook
+  // calls so the rules-of-hooks order stays stable.
+  if (contexts.status === "ready") {
+    const ctx = contexts.contexts.find(
+      (c) => c.type === "agency" && c.workspaceId === workspaceId,
+    );
+    if (ctx?.workspaceType === "personal") return null;
+  }
 
   return (
     <>

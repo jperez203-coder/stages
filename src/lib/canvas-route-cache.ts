@@ -53,7 +53,15 @@ import { fetchCanvasChromeData, type CanvasChromeData } from "./canvas-chrome-da
 
 export type CanvasRouteBundle = {
   user: { id: string; email: string | null };
-  ws: { id: string; name: string; slug: string; role: string };
+  ws: {
+    id: string;
+    name: string;
+    slug: string;
+    /** WT-5: workspace category. Drives the LeftRail "Clients" tab
+     *  visibility and the /clients page-level server redirect. */
+    type: "agency" | "personal";
+    role: string;
+  };
   chrome: CanvasChromeData;
   callerProfile: {
     display_name: string | null;
@@ -78,14 +86,22 @@ export const fetchCanvasRouteBundle = cache(
     }
 
     // ── 2. Workspace membership check (gated by slug) ─────────────────
+    // WT-5: include workspaces.type so downstream callers (LeftRail
+    // Clients-tab visibility, /clients server-side redirect, /settings
+    // tab visibility) can branch on category without a second round-trip.
     const wsMembershipResult = await supabase
       .from("workspace_memberships")
-      .select(`role, workspace:workspaces!inner(id, name, slug)`)
+      .select(`role, workspace:workspaces!inner(id, name, slug, type)`)
       .eq("user_id", user.id)
       .eq("workspace.slug", slug)
       .maybeSingle();
 
-    type WsRow = { id: string; name: string; slug: string };
+    type WsRow = {
+      id: string;
+      name: string;
+      slug: string;
+      type: "agency" | "personal";
+    };
     const wsRaw = wsMembershipResult.data?.workspace as unknown;
     const wsResolved: WsRow | null = Array.isArray(wsRaw)
       ? ((wsRaw[0] as WsRow | undefined) ?? null)
@@ -154,6 +170,7 @@ export const fetchCanvasRouteBundle = cache(
         id: wsResolved.id,
         name: wsResolved.name,
         slug: wsResolved.slug,
+        type: wsResolved.type,
         role: wsMembershipResult.data.role,
       },
       chrome,

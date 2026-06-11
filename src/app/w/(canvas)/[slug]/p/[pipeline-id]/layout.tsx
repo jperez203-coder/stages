@@ -62,6 +62,7 @@ export default async function CanvasLayout({
   return (
     <PipelineChromeShell
       workspaceSlug={bundle.ws.slug}
+      workspaceType={bundle.ws.type}
       chrome={bundle.chrome}
       completedTasks={bundle.taskCounts.completed}
       totalTasks={bundle.taskCounts.total}
