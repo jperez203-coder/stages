@@ -140,12 +140,17 @@ export type ClientInviteEmailPayload = {
   acceptUrl: string;
   /** Absolute URL to the PNG logo (origin-built in the route). */
   logoUrl: string;
-  /** PI-3: role on the invite. PI-4 will branch the email subject + copy
+  /** Workspace name (workspaces.name). PI-4 uses this for the member/
+   *  admin variants' "join {workspace}" framing. Required because the
+   *  helper builds the subject string from it for those roles; the
+   *  send + resend routes both look it up via the existing workspace
+   *  query. Client-variant emails don't surface it but the field stays
+   *  required so the payload shape doesn't drift across roles. */
+  workspaceName: string;
+  /** PI-3: role on the invite. PI-4 branches the email subject + copy
    *  on this field (member/admin variants vs the existing client copy).
-   *  Until PI-4 lands, the helper body ignores the value — every
-   *  recipient sees today's client-side template. Optional + defaults
-   *  to 'client' so the /resend route (which doesn't yet fetch
-   *  invite.role) keeps working unmodified during the PI-3 window. */
+   *  Optional + defaults to 'client' inside the helper so any unmodified
+   *  pre-PI-3 caller still produces the existing client-side email. */
   role?: ClientInviteRole;
 };
 
@@ -154,23 +159,25 @@ export type ClientInviteEmailPayload = {
  * console-log fallback when RESEND_API_KEY is missing, real Resend send
  * otherwise, structured error returns.
  *
- * PI-3: signature now accepts an optional `role` on the payload. The
- * helper body does NOT branch on it yet — PI-4 ships the subject +
- * template copy variants. During the PI-3 window every recipient
- * regardless of role sees the existing client-side copy. The role-
- * agnostic behavior is intentional: PI-3 is a foundation commit, not
- * a behavior change.
+ * PI-4: builds the subject line per role (client / member / admin) and
+ * threads role + workspaceName through to the React Email render. The
+ * template branches headline / body / CTA on role internally; the
+ * helper's only role-aware responsibility is the subject line, which
+ * Resend assembles outside the React tree.
  */
 export async function sendClientInviteEmail(
   payload: ClientInviteEmailPayload,
 ): Promise<EmailResult> {
   const apiKey = process.env.RESEND_API_KEY;
+  const role: ClientInviteRole = payload.role ?? "client";
 
   if (!apiKey) {
     console.warn(
       [
         "[email] RESEND_API_KEY missing — client invite email NOT sent.",
         `  To:        ${payload.to}`,
+        `  Role:      ${role}`,
+        `  Workspace: ${payload.workspaceName}`,
         `  Pipeline:  ${payload.pipelineName}`,
         `  Company:   ${payload.companyName ?? "(null)"}`,
         `  Inviter:   ${payload.inviterName}`,
@@ -180,7 +187,16 @@ export async function sendClientInviteEmail(
     return { ok: true };
   }
 
-  const subject = `${payload.inviterName} invited you to view ${payload.pipelineName} on Stages`;
+  // PI-4 locked subject lines:
+  //   client → "{inviter} invited you to view {pipeline} on Stages"     (unchanged)
+  //   member → "{inviter} invited you to join {workspace} on Stages"
+  //   admin  → "{inviter} invited you to join {workspace} as an admin on Stages"
+  const subject =
+    role === "client"
+      ? `${payload.inviterName} invited you to view ${payload.pipelineName} on Stages`
+      : role === "admin"
+        ? `${payload.inviterName} invited you to join ${payload.workspaceName} as an admin on Stages`
+        : `${payload.inviterName} invited you to join ${payload.workspaceName} on Stages`;
 
   try {
     const resend = new Resend(apiKey);
@@ -189,7 +205,9 @@ export async function sendClientInviteEmail(
       to: payload.to,
       subject,
       react: createElement(ClientInviteEmail, {
+        role,
         pipelineName: payload.pipelineName,
+        workspaceName: payload.workspaceName,
         inviterName: payload.inviterName,
         companyName: payload.companyName,
         acceptUrl: payload.acceptUrl,

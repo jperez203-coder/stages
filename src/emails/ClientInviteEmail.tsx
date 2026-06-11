@@ -11,34 +11,55 @@ import {
   Section,
   Text,
 } from "@react-email/components";
+import type { ClientInviteRole } from "@/lib/email";
 
 /**
  * Client invite email template.
  *
- * Sent by /api/client-invites/send (step 7b). Different framing from the
- * agency WorkspaceInviteEmail — the recipient is being given access to a
- * specific pipeline, not joining a workspace as a teammate.
+ * Sent by /api/client-invites/send + /api/client-invites/resend. Three
+ * role variants share the same structure (header / body / CTA / footer)
+ * with only the copy strings differing:
+ *
+ *   * 'client' — preserves the pre-PI-4 copy bit-for-bit. Pipeline-
+ *                centric framing; CTA "Open your project".
+ *   * 'member' — workspace-centric framing for internal team members.
+ *                CTA "Join the team".
+ *   * 'admin'  — same shape as member with admin-specific copy.
+ *                CTA "Join the team".
+ *
+ * `role` defaults to 'client' for resilience against any pre-PI-4
+ * caller that wires the template without supplying the new prop. New
+ * callers (the helper + send/resend routes post-PI-4) always pass it
+ * explicitly.
  *
  * The `acceptUrl` prop is the Supabase magic-link URL returned by
  * auth.admin.generateLink — clicking it signs the recipient in AND
  * redirects to /portal/accept/[token] in one round trip. If the email
  * client strips buttons, the plain-text URL fallback still works for
- * copy-paste.
+ * copy-paste. accept_client_invite RPC branches the post-accept
+ * routing on inv.role internally; the email template doesn't need to
+ * know about that.
  *
  * Visual approach mirrors WorkspaceInviteEmail: light card, Stages text
  * wordmark, blue CTA, plain fallback, plain footer. Cross-client safe
- * (Outlook, Apple Mail, Gmail). Branding polish in PHASE_3_4_PLAN.md.
+ * (Outlook, Apple Mail, Gmail).
  */
 
 type Props = {
+  /** PI-4: role variant the recipient is being invited as. Drives
+   *  preview/heading/body/CTA copy. Defaults to 'client' so any pre-PI-4
+   *  caller still produces a valid client-side email. */
+  role?: ClientInviteRole;
   pipelineName: string;
+  /** Workspace name (workspaces.name). Used in member/admin variants for
+   *  the "join {workspace}" copy. The client variant doesn't render it
+   *  but it's required on the prop type so the helper's payload stays
+   *  uniform across roles. */
+  workspaceName: string;
   inviterName: string;
   /** Workspace owner's company name (profiles.company_name). Optional —
-   *  when present, the header reads "{inviter} from {company} invited
-   *  you to your project on Stages:"; when null, the header reads
-   *  "{inviter} invited you to your project on Stages:" (today's
-   *  behavior). The send route fetches this off the inviter's profile
-   *  via the user-scoped supaAsUser client. */
+   *  client variant uses it for "from {company}" inline; member/admin
+   *  variants use workspaceName for the same slot and ignore this field. */
   companyName: string | null;
   acceptUrl: string;
   /** Absolute URL to the PNG logo (built from request origin in the send
@@ -47,13 +68,34 @@ type Props = {
 };
 
 export function ClientInviteEmail({
+  role = "client",
   pipelineName,
+  workspaceName,
   inviterName,
   companyName,
   acceptUrl,
   logoUrl,
 }: Props) {
-  const previewText = `${inviterName} invited you to view ${pipelineName} on Stages`;
+  // PI-4: per-variant copy strings. Locked in strategy chat — see commit
+  // message for the lookup table. Client variant must remain byte-for-byte
+  // identical to the pre-PI-4 template so existing clients see the same
+  // email they always have.
+  const isClient = role === "client";
+  const isAdmin = role === "admin";
+
+  const previewText = isClient
+    ? `${inviterName} invited you to view ${pipelineName} on Stages`
+    : isAdmin
+      ? `${inviterName} invited you to join ${workspaceName} as an admin on Stages`
+      : `${inviterName} invited you to join ${workspaceName} on Stages`;
+
+  const headingText = isClient
+    ? "You're invited"
+    : isAdmin
+      ? "You're invited as an admin"
+      : "You're invited to join the team";
+
+  const ctaText = isClient ? "Open your project" : "Join the team";
 
   return (
     <Html>
@@ -74,29 +116,42 @@ export function ClientInviteEmail({
           </Section>
 
           <Section style={content}>
-            <Text style={heading}>You&apos;re invited</Text>
-            {/* Header reads "{inviter} from {company} invited you …"
-                when companyName is provided, falling back to today's
-                "{inviter} invited you …" when null. Conditional
-                rendered with leading + trailing spaces so the sentence
-                reads naturally either way. */}
-            <Text style={para}>
-              <strong>{inviterName}</strong>
-              {companyName ? (
-                <>
-                  {" "}
-                  from <strong>{companyName}</strong>
-                </>
-              ) : null}{" "}
-              invited you to your project on Stages:
-            </Text>
-            <Text style={pipelineLine}>
-              <strong>{pipelineName}</strong>
-            </Text>
+            <Text style={heading}>{headingText}</Text>
+
+            {isClient ? (
+              <>
+                {/* Client variant: existing copy bit-for-bit. "{inviter}
+                    from {company} invited you to your project on
+                    Stages:" with the pipeline name on a separate line
+                    below. */}
+                <Text style={para}>
+                  <strong>{inviterName}</strong>
+                  {companyName ? (
+                    <>
+                      {" "}
+                      from <strong>{companyName}</strong>
+                    </>
+                  ) : null}{" "}
+                  invited you to your project on Stages:
+                </Text>
+                <Text style={pipelineLine}>
+                  <strong>{pipelineName}</strong>
+                </Text>
+              </>
+            ) : (
+              /* Member / admin variants: workspace-centric framing,
+                 single paragraph, no pipeline line. */
+              <Text style={para}>
+                <strong>{inviterName}</strong> from{" "}
+                <strong>{workspaceName}</strong> invited you to join{" "}
+                {isAdmin ? "as an admin" : "their team"} on Stages. Click
+                the button below to accept and get started.
+              </Text>
+            )}
 
             <Section style={buttonWrapper}>
               <Button href={acceptUrl} style={button}>
-                Open your project
+                {ctaText}
               </Button>
             </Section>
 
@@ -113,6 +168,11 @@ export function ClientInviteEmail({
           <Hr style={hr} />
 
           <Section style={footer}>
+            {/* PI-4 locked decision: footer + branding identical across
+                all three role variants. The pipeline-name mention is
+                still accurate for member/admin since they ARE being
+                added to a specific pipeline, just via a different
+                product framing in the header. */}
             <Text style={footerText}>
               You received this email because {inviterName} gave you access
               to{" "}

@@ -148,7 +148,7 @@ export async function POST(request: Request) {
   // before the WT-5 UI gate landed; this route catches that.
   const { data: wsTypeRow, error: wsTypeErr } = await supaAsUser
     .from("workspaces")
-    .select("type")
+    .select("name, type")
     .eq("id", pipelineWsRes.data.workspace_id)
     .maybeSingle();
   if (wsTypeErr) {
@@ -281,16 +281,21 @@ export async function POST(request: Request) {
   const magicLinkUrl = linkData.properties.action_link;
 
   // ─── Send email ──────────────────────────────────────────────────────────
+  // PI-4: workspaceName drives the member/admin variants' subject + body
+  // copy ("invited you to join {workspace}"). Read from the workspaces
+  // SELECT extended above (name + type). Client-variant emails don't
+  // surface it but the payload shape stays uniform across roles.
+  const workspaceName = (wsTypeRow?.name as string) ?? "";
+
   const sendResult = await sendClientInviteEmail({
     to: trimmedEmail,
     pipelineName,
+    workspaceName,
     inviterName,
     companyName,
     acceptUrl: magicLinkUrl,
     logoUrl: `${origin}/stages-logo.png`,
-    // PI-3: thread role through to the helper. PI-4 ships subject +
-    // template copy branching; until then the helper ignores this
-    // field and every recipient sees the existing client-side copy.
+    // PI-3 added the field; PI-4 makes the helper branch on it.
     role,
   });
 

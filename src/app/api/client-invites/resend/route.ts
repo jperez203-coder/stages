@@ -81,10 +81,14 @@ export async function POST(request: Request) {
   }
 
   // Fetch invite (RLS gates owner/admin via the client_invites_select policy).
+  // PI-4: include `role` so the email helper can build the right subject +
+  // template variant on resend. Pre-PI-1 invites have role='client' via
+  // the column default, so re-sending an old invite continues to ship the
+  // existing client-side email bit-for-bit.
   const inviteResult = await supaAsUser
     .from("client_invites")
     .select(
-      "token, email, accepted_at, expires_at, pipeline_id, invited_by",
+      "token, email, accepted_at, expires_at, pipeline_id, invited_by, role",
     )
     .eq("token", token)
     .maybeSingle();
@@ -109,6 +113,7 @@ export async function POST(request: Request) {
     expires_at: string;
     pipeline_id: string;
     invited_by: string | null;
+    role: "admin" | "member" | "client";
   };
 
   if (invite.accepted_at !== null) {
@@ -128,18 +133,19 @@ export async function POST(request: Request) {
     );
   }
 
-  // Pipeline + inviter for the email body. Workspace name lookup dropped
-  // 2026-05-29 (template stopped using it on 2026-05-28); company_name on
-  // the inviter's profile is what surfaces in the header now. When
+  // Pipeline + inviter for the email body. company_name on the inviter's
+  // profile surfaces in the client-variant header; member/admin variants
+  // use the embedded workspace.name (added in PI-4) instead. When
   // invite.invited_by is null (pre-2026-05-29 invites), profile is null
   // and companyName falls back to null cleanly.
   //
-  // The pipeline SELECT also returns workspace_id so the billing gate
-  // below can run without a second pipeline read.
+  // The pipeline SELECT also returns workspace_id (so the billing gate
+  // below can run without a second pipeline read) AND embeds workspace.name
+  // for the PI-4 member/admin email copy.
   const [pipelineResult, profileResult] = await Promise.all([
     supaAsUser
       .from("pipelines")
-      .select("name, workspace_id")
+      .select("name, workspace_id, workspace:workspaces(name)")
       .eq("id", invite.pipeline_id)
       .maybeSingle(),
     invite.invited_by
@@ -168,6 +174,15 @@ export async function POST(request: Request) {
   if (block) return block;
 
   const pipelineName = pipelineResult.data.name as string;
+  // PI-4: workspace.name from the embed. PostgREST returns nested-select
+  // rows as either object or array depending on codegen heuristic —
+  // normalize through unknown, same pattern used elsewhere in the
+  // codebase (src/app/page.tsx, /w/[slug]/page.tsx).
+  const wsEmbed = (pipelineResult.data as { workspace?: unknown }).workspace;
+  const wsObj = (Array.isArray(wsEmbed) ? wsEmbed[0] : wsEmbed) as
+    | { name?: string }
+    | undefined;
+  const workspaceName = wsObj?.name ?? "";
   const profile = profileResult.data as
     | { display_name: string | null; email: string; company_name: string | null }
     | null;
@@ -206,10 +221,13 @@ export async function POST(request: Request) {
   const sendResult = await sendClientInviteEmail({
     to: invite.email,
     pipelineName,
+    workspaceName,
     inviterName,
     companyName,
     acceptUrl: magicLinkUrl,
     logoUrl: `${origin}/stages-logo.png`,
+    // PI-4: role from the invite row drives subject + template variant.
+    role: invite.role,
   });
 
   if (!sendResult.ok) {
