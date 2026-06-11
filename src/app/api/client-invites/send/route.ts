@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { sendClientInviteEmail } from "@/lib/email";
+import {
+  sendClientInviteEmail,
+  type ClientInviteRole,
+} from "@/lib/email";
 import { assertSubscriptionWritable } from "@/lib/billing-guard";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -54,7 +57,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { pipelineId, email } = parseBody(body);
+  const { pipelineId, email, role } = parseBody(body);
   if (!pipelineId || !UUID_REGEX.test(pipelineId)) {
     return NextResponse.json(
       { error: "pipeline_id must be a UUID" },
@@ -64,6 +67,15 @@ export async function POST(request: Request) {
   if (!email || !EMAIL_REGEX.test(email)) {
     return NextResponse.json(
       { error: "email is missing or invalid" },
+      { status: 400 },
+    );
+  }
+  // PI-3: role validation. parseBody returns null when a supplied role
+  // is outside the allowlist; surface as a 400 with the documented
+  // error message. Omitted role defaults to 'client' inside parseBody.
+  if (role === null) {
+    return NextResponse.json(
+      { error: "role must be 'admin', 'member', or 'client'" },
       { status: 400 },
     );
   }
@@ -172,6 +184,11 @@ export async function POST(request: Request) {
       pipeline_id: pipelineId,
       email: trimmedEmail,
       invited_by: callerId,
+      // PI-3: write the validated role explicitly. Pre-PI-3 the column
+      // default kicked in for unmodified callers; post-PI-3 the route
+      // always supplies a value (defaulted to 'client' inside
+      // parseBody when the body omits the field).
+      role,
     })
     .select("token, expires_at")
     .single();
@@ -271,6 +288,10 @@ export async function POST(request: Request) {
     companyName,
     acceptUrl: magicLinkUrl,
     logoUrl: `${origin}/stages-logo.png`,
+    // PI-3: thread role through to the helper. PI-4 ships subject +
+    // template copy branching; until then the helper ignores this
+    // field and every recipient sees the existing client-side copy.
+    role,
   });
 
   if (!sendResult.ok) {
@@ -294,15 +315,37 @@ export async function POST(request: Request) {
   });
 }
 
+/**
+ * PI-3: extended to surface a `role` field. Tri-state semantics:
+ *   * 'client' — omitted in the request body (default; preserves pre-
+ *                PI-3 behavior for every existing caller including
+ *                ClientsBody.tsx).
+ *   * 'admin' | 'member' | 'client' — explicitly supplied and valid.
+ *   * null — explicitly supplied but invalid (outside the allowlist,
+ *            including 'owner'). Caller converts this to a 400.
+ *
+ * Validating in parseBody keeps the route handler's body shape narrow
+ * and the post-parse checks consistent with the existing pipelineId +
+ * email pattern.
+ */
 function parseBody(body: unknown): {
   pipelineId: string | null;
   email: string | null;
+  role: ClientInviteRole | null;
 } {
   if (typeof body !== "object" || body === null) {
-    return { pipelineId: null, email: null };
+    return { pipelineId: null, email: null, role: "client" };
   }
   const r = body as Record<string, unknown>;
   const pipelineId = typeof r.pipeline_id === "string" ? r.pipeline_id : null;
   const email = typeof r.email === "string" ? r.email : null;
-  return { pipelineId, email };
+  let role: ClientInviteRole | null;
+  if (r.role === undefined || r.role === null) {
+    role = "client";
+  } else if (r.role === "admin" || r.role === "member" || r.role === "client") {
+    role = r.role;
+  } else {
+    role = null;
+  }
+  return { pipelineId, email, role };
 }

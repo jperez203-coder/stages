@@ -105,6 +105,19 @@ export async function sendInviteEmail(
 
 // ─── Client invites ──────────────────────────────────────────────────────────
 
+/**
+ * PI-3: role values the pipeline-invite flow accepts. Exported so the
+ * /api/client-invites/send route can share the same union with the
+ * email payload — both stay in lockstep. PI-4 ships the email copy
+ * branching on this field; until then the helper body ignores the
+ * value (every recipient sees the existing client-side template copy).
+ *
+ * 'owner' is intentionally excluded — pipeline owner is a workspace-
+ * level concept and isn't a valid invite role. Allowlist enforced at
+ * the API + RPC + DB layer (CHECK constraint on client_invites.role).
+ */
+export type ClientInviteRole = "admin" | "member" | "client";
+
 export type ClientInviteEmailPayload = {
   to: string;
   pipelineName: string;
@@ -127,12 +140,26 @@ export type ClientInviteEmailPayload = {
   acceptUrl: string;
   /** Absolute URL to the PNG logo (origin-built in the route). */
   logoUrl: string;
+  /** PI-3: role on the invite. PI-4 will branch the email subject + copy
+   *  on this field (member/admin variants vs the existing client copy).
+   *  Until PI-4 lands, the helper body ignores the value — every
+   *  recipient sees today's client-side template. Optional + defaults
+   *  to 'client' so the /resend route (which doesn't yet fetch
+   *  invite.role) keeps working unmodified during the PI-3 window. */
+  role?: ClientInviteRole;
 };
 
 /**
  * Sends a client invite email. Same shape as `sendInviteEmail` (agency):
  * console-log fallback when RESEND_API_KEY is missing, real Resend send
  * otherwise, structured error returns.
+ *
+ * PI-3: signature now accepts an optional `role` on the payload. The
+ * helper body does NOT branch on it yet — PI-4 ships the subject +
+ * template copy variants. During the PI-3 window every recipient
+ * regardless of role sees the existing client-side copy. The role-
+ * agnostic behavior is intentional: PI-3 is a foundation commit, not
+ * a behavior change.
  */
 export async function sendClientInviteEmail(
   payload: ClientInviteEmailPayload,
