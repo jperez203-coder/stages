@@ -85,16 +85,52 @@ export const fetchCanvasRouteBundle = cache(
       redirect(`/auth/signin?next=${encodeURIComponent(nextPath)}`);
     }
 
-    // ── 2. Workspace membership check (gated by slug) ─────────────────
+    // ── 2. Membership check (workspace-level OR pipeline-level) ───────
+    // PI-5a: widen the gate beyond workspace_memberships. RLS already
+    // grants pipeline-only agency members (admin / member on
+    // pipeline_memberships, no workspace_memberships row) read access
+    // to the pipeline via the pipelines_select policy's
+    // is_pipeline_agency_member clause (20260509130000); the route
+    // gate was the only thing keeping them out.
+    //
+    // Two queries fire in parallel: the existing workspace_memberships
+    // lookup AND a pipeline_memberships lookup keyed to (caller,
+    // pipelineId) with the URL slug verified through the embed. First
+    // hit wins:
+    //
+    //   1. workspace_memberships present  → existing path (real role).
+    //   2. pipeline_memberships role='client' on this pipeline → redirect
+    //      to /portal/[pipelineId] (clients use the portal surface, not
+    //      the canvas; mirrors the case-3 redirect in the workspace
+    //      dashboard page).
+    //   3. pipeline_memberships role IN ('admin','member') → pipeline-
+    //      only path. Workspace info comes from the pipeline → workspace
+    //      embed; workspaceRole is "" so isWorkspaceOwnerOrAdmin
+    //      resolves false in fetchCanvasChromeData and canEditPipeline
+    //      is driven by the pipeline-level role only. Same pattern
+    //      already in use at src/app/portal/[pipeline-id]/chat/page.tsx.
+    //   4. None of the above → redirect "/" (unchanged).
+    //
     // WT-5: include workspaces.type so downstream callers (LeftRail
     // Clients-tab visibility, /clients server-side redirect, /settings
     // tab visibility) can branch on category without a second round-trip.
-    const wsMembershipResult = await supabase
-      .from("workspace_memberships")
-      .select(`role, workspace:workspaces!inner(id, name, slug, type)`)
-      .eq("user_id", user.id)
-      .eq("workspace.slug", slug)
-      .maybeSingle();
+    const [wsMembershipResult, pipMembershipResult] = await Promise.all([
+      supabase
+        .from("workspace_memberships")
+        .select(`role, workspace:workspaces!inner(id, name, slug, type)`)
+        .eq("user_id", user.id)
+        .eq("workspace.slug", slug)
+        .maybeSingle(),
+      supabase
+        .from("pipeline_memberships")
+        .select(
+          `role, pipeline:pipelines!inner(workspace_id, workspace:workspaces!inner(id, name, slug, type))`,
+        )
+        .eq("user_id", user.id)
+        .eq("pipeline_id", pipelineId)
+        .eq("pipeline.workspace.slug", slug)
+        .maybeSingle(),
+    ]);
 
     type WsRow = {
       id: string;
@@ -102,12 +138,44 @@ export const fetchCanvasRouteBundle = cache(
       slug: string;
       type: "agency" | "personal";
     };
-    const wsRaw = wsMembershipResult.data?.workspace as unknown;
-    const wsResolved: WsRow | null = Array.isArray(wsRaw)
-      ? ((wsRaw[0] as WsRow | undefined) ?? null)
-      : ((wsRaw as WsRow | null) ?? null);
 
-    if (!wsMembershipResult.data || !wsResolved) {
+    let wsResolved: WsRow | null = null;
+    let workspaceRole = "";
+
+    if (wsMembershipResult.data) {
+      const wsRaw = wsMembershipResult.data.workspace as unknown;
+      wsResolved = Array.isArray(wsRaw)
+        ? ((wsRaw[0] as WsRow | undefined) ?? null)
+        : ((wsRaw as WsRow | null) ?? null);
+      workspaceRole = wsMembershipResult.data.role as string;
+    } else if (pipMembershipResult.data) {
+      const pipMemRole = pipMembershipResult.data.role as string;
+
+      // Clients arriving at the canvas URL belong on the portal surface.
+      // Mirror the workspace dashboard's case-3 redirect rather than
+      // letting the agency canvas render with a degraded view.
+      if (pipMemRole === "client") {
+        redirect(`/portal/${encodeURIComponent(pipelineId)}`);
+      }
+
+      // Pipeline-only admin / member path: extract workspace info from
+      // the embed. workspaceRole stays "" so the chrome's
+      // isWorkspaceOwnerOrAdmin branch returns false — no privilege
+      // escalation. canEditPipeline is computed downstream from the
+      // pipeline-level role separately.
+      const pipRaw = pipMembershipResult.data.pipeline as unknown;
+      const pipObj = (Array.isArray(pipRaw) ? pipRaw[0] : pipRaw) as
+        | { workspace_id?: string; workspace?: unknown }
+        | undefined;
+      const wsRaw = pipObj?.workspace as unknown;
+      wsResolved = Array.isArray(wsRaw)
+        ? ((wsRaw[0] as WsRow | undefined) ?? null)
+        : ((wsRaw as WsRow | null) ?? null);
+      // workspaceRole stays "" — set explicitly for the reader's benefit.
+      workspaceRole = "";
+    }
+
+    if (!wsResolved) {
       redirect("/");
     }
 
@@ -133,7 +201,7 @@ export const fetchCanvasRouteBundle = cache(
         supabase,
         pipelineId,
         user.id,
-        wsMembershipResult.data.role,
+        workspaceRole,
       ),
       supabase
         .from("profiles")
@@ -171,7 +239,12 @@ export const fetchCanvasRouteBundle = cache(
         name: wsResolved.name,
         slug: wsResolved.slug,
         type: wsResolved.type,
-        role: wsMembershipResult.data.role,
+        // PI-5a: workspaceRole. Real workspace-membership role when the
+        // caller passed via workspace_memberships; "" when they passed
+        // via pipeline_memberships (no workspace-level role exists for
+        // them). Empty string is the same sentinel already used by the
+        // portal/chat surface for chrome calls.
+        role: workspaceRole,
       },
       chrome,
       callerProfile: {

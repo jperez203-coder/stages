@@ -64,26 +64,73 @@ export default async function WorkspaceDashboardPage({
   }
 
   // ── Membership check ───────────────────────────────────────────────────
-  // Single query: joined workspace_memberships → workspaces. Returns null
-  // when the user isn't a workspace member of this slug.
-  const wsMembershipResult = await supabase
-    .from("workspace_memberships")
-    .select(`role, workspace:workspaces!inner(id, name, slug)`)
-    .eq("user_id", user.id)
-    .eq("workspace.slug", slug)
-    .maybeSingle();
+  // PI-5a: two queries in parallel. workspace_memberships is the
+  // existing path; pipeline_memberships(role IN admin/member) is the
+  // new pipeline-only fallback. The latter exists because RLS already
+  // grants pipeline-only agency members visibility (via the
+  // is_pipeline_agency_member clause on pipelines_select added in
+  // 20260509130000), but the dashboard route gate was bouncing them
+  // out — strict bug fix. Clients are NOT included in this widen;
+  // they're handled by the existing case-3 redirect to /portal below
+  // and shouldn't see the agency dashboard either way.
+  //
+  // First hit wins:
+  //   1. workspace_memberships present → existing render path, real role.
+  //   2. pipeline_memberships(role admin|member) present → render the
+  //      dashboard with workspace info derived from the pipeline embed;
+  //      workspaceRole stays "" for downstream gates (no privilege
+  //      escalation — workspace owner/admin affordances stay hidden).
+  //   3. Neither → existing client-pipeline check below, then existing
+  //      last_active / selector fallback chain.
+  const [wsMembershipResult, pipMembershipResult] = await Promise.all([
+    supabase
+      .from("workspace_memberships")
+      .select(`role, workspace:workspaces!inner(id, name, slug)`)
+      .eq("user_id", user.id)
+      .eq("workspace.slug", slug)
+      .maybeSingle(),
+    supabase
+      .from("pipeline_memberships")
+      .select(
+        `role, pipeline:pipelines!inner(workspace:workspaces!inner(id, name, slug))`,
+      )
+      .eq("user_id", user.id)
+      .in("role", ["admin", "member"])
+      .eq("pipeline.workspace.slug", slug)
+      .limit(1)
+      .maybeSingle(),
+  ]);
 
   type WsRow = { id: string; name: string; slug: string };
 
   // PostgREST returns nested-select rows as either object or array
   // depending on codegen heuristic. Cast through unknown + normalize.
-  const wsRaw = wsMembershipResult.data?.workspace as unknown;
-  const ws: WsRow | null = Array.isArray(wsRaw)
-    ? ((wsRaw[0] as WsRow | undefined) ?? null)
-    : ((wsRaw as WsRow | null) ?? null);
+  let ws: WsRow | null = null;
+  if (wsMembershipResult.data) {
+    const wsRaw = wsMembershipResult.data.workspace as unknown;
+    ws = Array.isArray(wsRaw)
+      ? ((wsRaw[0] as WsRow | undefined) ?? null)
+      : ((wsRaw as WsRow | null) ?? null);
+  }
 
-  if (!wsMembershipResult.data || !ws) {
-    // Not a workspace member. Check if they're a client on a pipeline here.
+  if (!ws && pipMembershipResult.data) {
+    // PI-5a pipeline-only fallback. Embed shape:
+    //   pipeline: { workspace: { id, name, slug } }
+    // The .eq("pipeline.workspace.slug", slug) + !inner joins already
+    // verified the pipeline belongs to a workspace with this slug.
+    const pipRaw = pipMembershipResult.data.pipeline as unknown;
+    const pipObj = (Array.isArray(pipRaw) ? pipRaw[0] : pipRaw) as
+      | { workspace?: unknown }
+      | undefined;
+    const wsRaw = pipObj?.workspace as unknown;
+    ws = Array.isArray(wsRaw)
+      ? ((wsRaw[0] as WsRow | undefined) ?? null)
+      : ((wsRaw as WsRow | null) ?? null);
+  }
+
+  if (!ws) {
+    // Not a workspace member, not a pipeline-only agency member.
+    // Check if they're a client on a pipeline here.
     const clientResult = await supabase
       .from("pipeline_memberships")
       .select(
