@@ -1202,6 +1202,22 @@ Carryover items from the workspace-type sprint (WT-1 through WT-7). None blockin
 
 ---
 
+### Pipeline-invite sprint follow-ups (PI-7 close-out)
+
+Five deferred items surfaced during the PI-1 → PI-7 pipeline-invite sprint. None block launch; all are surface-area gaps worth tracking.
+
+- **Admin role picker on Members sub-tab.** The schema + `add_pipeline_member` RPC already accept `role='admin'`, but the picker UI only lets the founder add `'member'`. Promotion to admin is SQL-only today. Wire a small role selector inline with the Add button when there's demand signal (e.g., an agency wants per-pipeline admin delegation without granting workspace-level admin).
+
+- **"Change role" — re-invite-as-different-role.** Currently blocked by the `(pipeline_id, user_id)` PK on `pipeline_memberships`: you can't insert a second row with a different role, so changing someone from member → admin (or vice versa) requires remove-then-add. Future: a single Change Role UI affordance + an `update_pipeline_member_role` RPC that flips the column in place, preserving channel memberships, history, and avoiding the seed-channels trigger re-fire that an add-after-remove cycle would cause.
+
+- **`pipeline_memberships` SELECT recursion in Supabase SQL Editor.** Jordan observed `42P17 infinite recursion detected in policy for relation 'pipeline_memberships'` when running a plain `SELECT * FROM pipeline_memberships` from the Supabase SQL Editor authenticated as a real user. App-facing SELECTs work because they go through PostgREST endpoints that hit different planner paths (or join through pipelines / workspaces first), but direct SELECT-as-authenticated trips it. Suspect: the `pipeline_memberships_select` policy calls `is_pipeline_agency_member`, which queries `pipeline_memberships` — even though the helper is SECURITY DEFINER, certain planner shapes still flag the cycle. Doesn't affect prod app traffic but blocks ad-hoc admin SQL. Investigate whether replacing the helper call in the policy with an inlined join (or splitting agency vs. self into two separate permissive policies) makes the recursion go away without losing correctness.
+
+- **Workspace switcher labeling for pipeline-only members.** A user who is a member of pipelines in workspace W (via `pipeline_memberships`) but NOT a workspace seat (no `workspace_memberships` row) sees workspace W in their `HeaderWorkspaceSwitcher` under MY AGENCY with no indication they're pipeline-scoped, not a full seat. Mirrors the existing "Client of: {workspace}" portal-mode pill — add a similar pipeline-scoped label/badge so the user knows their access is narrow. Low-priority cosmetic; surfaces only when a workspace has both seat-based and pipeline-only members.
+
+- **`/w/[slug]/settings/*` sub-page audit for pipeline-only `workspaceRole` sentinel.** PI-5a widened the `/w/[slug]` and `/w/[slug]/p/[…]` route gates to admit pipeline-only members (workspace_memberships row absent, `workspaceRole` sentinel = `""`). Downstream settings sub-pages — Team, Billing, Privacy, Profile — may not all handle the empty-sentinel case correctly. Either they should hide themselves on the empty sentinel (matching the PI-5a narrowing intent — pipeline-only members shouldn't see Team / Billing), or they should explicitly admit the access with the right read-only treatment. Audit each `/w/[slug]/settings/*` route, decide per-page, and add a self-suppress gate where appropriate.
+
+---
+
 ## v1.1 wishlist
 
 Items intentionally **deferred from MVP** to v1.1. The discipline is to ship the prototype's feature set unchanged, then let real customer signal shape v1.1. Don't act on anything in this list without explicit go-ahead from the founder.

@@ -1,16 +1,23 @@
 "use client";
 
 import { UserPlus } from "lucide-react";
+import { getAvatarColorFromUserId } from "@/lib/avatar-color";
 
-const COLORS = ["#3BA5EE", "#8B5CF6", "#EC4899", "#F59E0B", "#10B981", "#06B6D4", "#F43F5E"];
-
-function colorFor(email: string): string {
-  let hash = 0;
-  for (let i = 0; i < email.length; i++) {
-    hash = email.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  return COLORS[Math.abs(hash) % COLORS.length];
-}
+/**
+ * PI-7: local COLORS palette + colorFor() retired; this surface now
+ * uses the centralized helper. One palette source-of-truth across all
+ * avatar render sites.
+ *
+ * CAVEAT — cross-surface drift on this surface only:
+ * The chat thread layer hands us `emails: string[]`, not user_ids. The
+ * helper's input contract is "always user_id" because user_id is stable
+ * across email changes. Feeding email in still produces a deterministic
+ * color, but a user appearing here (hashed by email) will land in a
+ * different slot than the same user appearing on surfaces hashed by
+ * user_id (UserAvatar, HeaderProfileMenu, MembersBody, ClientsBody,
+ * settings/team). Closing the drift requires threading user_ids through
+ * the chat-thread API to this component — a separate refactor.
+ */
 
 type Props = {
   emails: string[];
@@ -45,7 +52,7 @@ export function MembersAvatarStack({ emails, maxVisible = 3, onClick, title }: P
     >
       <div className="flex -space-x-1.5">
         {visible.map((email) => {
-          const color = colorFor(email);
+          const { text, bg } = getAvatarColorFromUserId(email);
           const initial = (email || "?").charAt(0).toUpperCase();
           return (
             <div
@@ -54,8 +61,8 @@ export function MembersAvatarStack({ emails, maxVisible = 3, onClick, title }: P
               style={{
                 width: 24,
                 height: 24,
-                background: color + "33",
-                color,
+                background: bg,
+                color: text,
                 border: "2px solid #121212",
                 fontSize: 10,
               }}

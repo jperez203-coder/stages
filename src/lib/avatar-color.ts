@@ -24,15 +24,18 @@
 export type AvatarColorPair = { text: string; bg: string };
 
 /**
- * Slot 6 (pink-500) uses a bespoke deeply-muted-pink bg per Jordan's
- * spec; every other slot keeps its bg derived as `text + "33"` (the
- * pre-PI-followup-5 visual is preserved).
+ * Slots 1 and 6 use bespoke text/bg pairs from Jordan's design spec
+ * (PI-7 + PI-followup-5). Every other slot keeps its bg derived as
+ * `text + "33"`, preserving the pre-paired visual treatment.
+ *
+ * Slot 1 swapped from pink → amber in PI-7 so the palette has a single
+ * pink identity (slot 6), not two collision-prone pinks.
  */
 const AVATAR_PALETTE: ReadonlyArray<AvatarColorPair> = [
   { text: "#15B981", bg: "#15B981" + "33" }, // green
-  { text: "#ED4899", bg: "#ED4899" + "33" }, // pink-500 (alpha-tinted bg)
+  { text: "#FBBF24", bg: "#3D2C0E" }, // amber (PI-7: replaced #ED4899 pink-500; collision with slot 6)
   { text: "#3A97D8", bg: "#3A97D8" + "33" }, // blue
-  { text: "#F59E0C", bg: "#F59E0C" + "33" }, // amber
+  { text: "#F59E0C", bg: "#F59E0C" + "33" }, // amber-orange (Tailwind amber-500)
   { text: "#8B5CF6", bg: "#8B5CF6" + "33" }, // purple
   { text: "#06B6D4", bg: "#06B6D4" + "33" }, // cyan
   { text: "#ED4899", bg: "#351E2E" }, // pink-500 on bespoke dark muted pink (Jordan PI-followup-5)

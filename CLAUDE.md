@@ -284,6 +284,35 @@ Gating layers (defense-in-depth):
 
 Source of truth: `workspace.type` column in DB. Client-side surfaced via `useUserContexts.workspaceType`. Server-side `fetchCallerContextSummary` returns `hasAgencyOwnerOrAdminRole` + `hasPersonalWorkspace` for the onboarding selector logic.
 
+## Pipeline Invite + Membership Architecture
+
+Two layers control who can work on a pipeline:
+
+- **`workspace_memberships`** — paid Team-plan seats. Added via Workspace Settings → Team email-invite flow (`/api/invites/send`). The seat-sync cron bills off this table.
+- **`pipeline_memberships`** — narrowing layer that controls which pipelines a workspace seat can work on. Created instantly by the picker on **People → Members sub-tab** (no email round-trip).
+
+### Email invite flow is restricted to clients
+
+The pipeline-invite email path (`client_invites.role`) is hard-restricted to `role='client'` at the API layer. The schema still accepts `'admin' | 'member' | 'client'`, but `/api/client-invites/send` returns 400 `role_not_invitable_by_email` if `role` is `'member'` or `'admin'`. **This closes a Team-plan billing exploit** — pre-fix, an agency owner could add "members" via pipeline invite without ever writing a `workspace_memberships` row, bypassing per-seat billing.
+
+### Add member to pipeline
+
+Picker on Members sub-tab (UI) → `POST /api/pipeline-memberships/add` → `add_pipeline_member(pipeline_id, target_user_id, target_role)` SECURITY DEFINER RPC → `INSERT pipeline_memberships`. Defensive gate: target user MUST already hold a `workspace_memberships` row for the parent workspace. RPC bypasses RLS to sidestep a recursion class involving `pipeline_memberships_seed_channels` (AFTER INSERT trigger seeding `channel_memberships`) and PostgREST RETURNING SELECTs both re-querying `pipeline_memberships` via `can_edit_pipeline` / `is_pipeline_agency_member`.
+
+### Remove member from pipeline
+
+Hover-X on row (UI) → confirm modal → `POST /api/pipeline-memberships/remove` → `remove_pipeline_member(pipeline_id, target_user_id)` SECURITY DEFINER RPC → `DELETE pipeline_memberships`. The `pipeline_memberships_cleanup_channels` AFTER DELETE trigger cascades to `channel_memberships` (purges all this user's `channel_memberships` rows for channels on this pipeline) so removed users lose channel read access too. User-authored content (tasks, messages, files) is NOT cascaded — their data survives.
+
+Defenses inside the RPC: workspace-or-pipeline owner/admin authz (same gate as add), self-removal blocked, pipeline-owner protected, workspace-type='personal' rejected.
+
+### Avatar palette (single source of truth)
+
+`src/lib/avatar-color.ts` is the ONE place avatar colors are derived. `getAvatarColorFromUserId(userId)` returns `{ text, bg }`; hash input is `user_id` (stable across email changes). Every avatar render site (`UserAvatar`, `HeaderProfileMenu`, `MembersBody`, `ClientsBody`, `settings/team`, `MembersAvatarStack`) uses the helper. **Drift caveat:** `MembersAvatarStack` is fed `emails: string[]` from the chat layer, not user_ids — feeding email through the helper gives a deterministic but cross-surface-inconsistent color for that one component until the chat thread API threads user_ids in.
+
+### Route gates honor either membership layer
+
+`/w/[slug]` and `/w/[slug]/p/[pipeline-id]` accept either `workspace_memberships` OR `pipeline_memberships` (PI-5a fix). Pipeline-only members reach the canvas through `pipeline_memberships` alone, with `workspaceRole` sentinel = `""` matching the portal-mode pattern. Downstream sub-pages (e.g. `/w/[slug]/settings/*`) may not all handle the empty sentinel correctly — open WISHLIST item.
+
 ## Reading order for a new session
 
 1. This file.
