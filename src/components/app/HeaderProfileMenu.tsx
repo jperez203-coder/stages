@@ -4,23 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { useParams, useRouter } from "next/navigation";
 import { LogOut, Settings, Users } from "lucide-react";
+import { useSession } from "@/hooks/useSession";
 import { useUserContexts } from "@/hooks/useUserContexts";
+import { getAvatarColorFromUserId } from "@/lib/avatar-color";
 import { resolveInitial } from "@/lib/display-name";
 import { supabase } from "@/lib/supabase";
-
-// Trimmed from a 7-color brand subset to the 4 LETTER colors that
-// mirror UserAvatar.tsx's AVATAR_PALETTE in the same order
-// (green / pink / blue / amber). Modulo-4 in both files so the slot
-// semantics line up. Rendering style here stays as the subtle alpha
-// pill (background = color + "33", text = color) — the dark-fill/
-// vivid-letter chip treatment is UserAvatar's. Keep these two arrays
-// synchronized when adding or reordering palette entries.
-const COLORS = [
-  "#15B981", // green   — pairs with AVATAR_PALETTE[0]
-  "#ED4899", // pink    — pairs with AVATAR_PALETTE[1]
-  "#3A97D8", // blue    — pairs with AVATAR_PALETTE[2]
-  "#F59E0C", // amber   — pairs with AVATAR_PALETTE[3]
-];
 
 type Props = {
   email: string;
@@ -62,6 +50,14 @@ export function HeaderProfileMenu({
   const router = useRouter();
   const params = useParams();
   const contexts = useUserContexts();
+  // PI-followup-1: pull user.id from session so the avatar color is
+  // derived from the same input every avatar surface uses. Pre-PI-
+  // followup-1 this component hashed email locally — different palette
+  // + different input from UserAvatar, so the same user could land in
+  // different color slots across surfaces.
+  const session = useSession();
+  const userId =
+    session.status === "authenticated" ? session.user.id : null;
   const [open, setOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -137,6 +133,7 @@ export function HeaderProfileMenu({
         aria-label="Open profile menu"
       >
         <Avatar
+          userId={userId}
           email={email}
           displayName={displayName}
           avatarUrl={avatarUrl}
@@ -171,6 +168,7 @@ export function HeaderProfileMenu({
         >
           <div className="p-4 border-b border-zinc-800 flex items-center gap-3">
             <Avatar
+              userId={userId}
               email={email}
               displayName={displayName}
               avatarUrl={avatarUrl}
@@ -256,12 +254,19 @@ export function HeaderProfileMenu({
  * to the initials circle via onError.
  */
 function Avatar({
+  userId,
   email,
   displayName,
   avatarUrl,
   size,
   fontSize,
 }: {
+  /** PI-followup-1: user.id is the canonical hash input. Null while the
+   *  session is still loading — in that brief window we fall back to
+   *  hashing the email so the avatar still has SOME color, but the moment
+   *  the session resolves we re-render with the user_id-derived color so
+   *  the cross-surface invariant holds. */
+  userId: string | null;
   email: string;
   displayName: string | null;
   avatarUrl: string | null;
@@ -270,17 +275,12 @@ function Avatar({
 }) {
   const [imgFailed, setImgFailed] = useState(false);
 
-  // Deterministic colour from email hash so the same user always gets the
-  // same colour. Same algorithm as the legacy ProfileMenu so users who saw
-  // a particular colour before keep seeing it. Note: color hashes from
-  // EMAIL (stable identifier) while the initial letter comes from
-  // display_name (human-readable) — intentional split so a user renaming
-  // themselves doesn't change their avatar color.
-  let hash = 0;
-  for (let i = 0; i < email.length; i++) {
-    hash = email.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  const color = COLORS[Math.abs(hash) % COLORS.length];
+  // PI-followup-1: centralized via getAvatarColorFromUserId. Falls back
+  // to email hashing only during the brief loading window before the
+  // session resolves — the steady-state input is user.id everywhere.
+  const color = userId
+    ? getAvatarColorFromUserId(userId)
+    : getAvatarColorFromUserId(email);
   // Initial: display_name's first letter, falling back to email's first
   // letter, then "?". Matches UserAvatar's chain — see resolveInitial in
   // src/lib/display-name.ts for the canonical contract.

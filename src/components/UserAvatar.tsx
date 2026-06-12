@@ -1,56 +1,22 @@
 import Image from "next/image";
+import { getAvatarColorFromUserId } from "@/lib/avatar-color";
 
 /**
- * Shared avatar component introduced in Phase 4a step 2 (dashboard).
- * Dashboard-only scope for now — the existing ~10 inline / Avatar.tsx usages
- * elsewhere in the codebase stay untouched. A follow-up commit will migrate
- * those call sites. Until then, two avatar implementations coexist:
+ * Shared avatar component. PI-followup-1: color derivation centralized
+ * via getAvatarColorFromUserId — same user gets the same color on
+ * every surface that uses the helper (header profile menu, member
+ * popover, pipeline People tab, settings/team list). Pre-PI-followup-1
+ * each surface had its own palette + hash, so a user could land in
+ * different slots across surfaces; that drift is now closed.
  *
- *   * `src/components/Avatar.tsx` — legacy, email-keyed, used by
- *     ClientCard, ClientPortal, chat components, etc.
- *   * `src/components/UserAvatar.tsx` (this file) — user-object-keyed,
- *     used by dashboard My Tasks rows, Activity rows, and pipeline member
- *     clusters.
+ * Background style: flat alpha-tinted fill (color + "33") behind the
+ * vivid letter. Replaced the prior paired (hand-tuned dark fill /
+ * vivid letter) palette so all avatars across the app render the
+ * same shape regardless of where they appear.
  *
- * Color algorithm matches HeaderProfileMenu's exactly (same hash math,
- * same brand-palette modulo) so a given user gets the same color across
- * every surface — dashboard, profile menu, future migrated call sites.
- * The palette here is the small dashboard-specific subset; HeaderProfileMenu
- * uses the wider 7-color palette. Different surfaces, intentionally
- * different palettes — but the hash math is identical so consistency
- * within a surface holds.
+ * Ring around photo avatars: never present. The previously-supported
+ * `bordered` variant was dropped in the 2026-05-22 polish pass.
  */
-
-// Hash → palette. Same hash math as HeaderProfileMenu.tsx so the modulo
-// produces stable color per user across surfaces (within the same palette
-// size; cross-palette identity isn't a goal).
-//
-// 2026-05-22 polish: switched from a 4-color single-tone palette
-// (saturated fill + white letter) to a paired palette where each slot
-// has a DARK muted fill + a VIVID letter color. Matches the figma
-// reference for the header member cluster (#192526/#15B981,
-// #351E2E/#ED4899, #293C4D/#3A97D8). The vivid letter color is the
-// "user's brand color" identity-wise; the muted fill is the tile bg
-// behind it. Photo avatars always render flat (no colored ring) —
-// the previously-supported `bordered` variant was dropped in the
-// 2026-05-22 polish pass alongside the HeaderProfileMenu stroke
-// removal; ring-around-photo is no longer used on any surface.
-//
-// 4 pairs (bumped from 3 on 2026-05-22 polish — added amber for
-// better differentiation in larger member rosters). The letter
-// colors here MUST stay in sync with HeaderProfileMenu.tsx's COLORS
-// array, in this exact order, so the modulo-N slot semantics line up
-// across surfaces. Note: cross-surface color stability for the SAME
-// user requires that both surfaces also hash the same input — they
-// don't today (UserAvatar hashes user.id, HeaderProfileMenu hashes
-// email), so a user may land in different slots on the two surfaces.
-// Flagged but not fixed in this polish.
-const AVATAR_PALETTE: ReadonlyArray<{ fill: string; letter: string }> = [
-  { fill: "#192526", letter: "#15B981" }, // green
-  { fill: "#351E2E", letter: "#ED4899" }, // pink
-  { fill: "#293C4D", letter: "#3A97D8" }, // blue
-  { fill: "#2B221E", letter: "#F59E0C" }, // amber
-];
 
 export type AvatarUser = {
   id: string;
@@ -74,20 +40,12 @@ type Props = {
 };
 
 export function UserAvatar({ user, size }: Props) {
-  // Deterministic color from user.id so the same person gets the same
-  // color across renders, sessions, devices. id is a uuid string;
-  // charCodeAt over the whole string gives enough entropy to spread
-  // evenly across the 3-pair palette. The assignment LOOKS random to
-  // an observer (no obvious letter→color relationship) but is stable
-  // per-user — Casey always gets her hash slot, Taylor always gets
-  // hers, etc. Locked behavior 2026-05-22 (rolled back a brief
-  // letter-based experiment because the spec is "random per user with
-  // no photo," not "color follows letter").
-  let hash = 0;
-  for (let i = 0; i < user.id.length; i++) {
-    hash = user.id.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  const palette = AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length];
+  // PI-followup-1: color derived via the shared helper. user.id is the
+  // input — same person, same color, on every surface that uses the
+  // helper. Pre-PI-followup-1 this component had its own paired
+  // palette; the shared single-color palette + alpha-tinted bg
+  // unifies the visual treatment across surfaces.
+  const color = getAvatarColorFromUserId(user.id);
 
   // Initial fallback chain: avatar_url (handled below) → display_name → email → "?"
   // Email is used only for the initial char; never exposed to alt/aria.
@@ -152,11 +110,11 @@ export function UserAvatar({ user, size }: Props) {
       style={{
         width: `${size}px`,
         height: `${size}px`,
-        // Paired palette: muted dark fill behind a vivid letter — the
-        // letter color is the user's identity color. Matches the figma
-        // member-cluster reference and the chunky chip aesthetic.
-        background: palette.fill,
-        color: palette.letter,
+        // PI-followup-1: alpha-tinted background derived from the
+        // central color, letter renders in the vivid identity color.
+        // No ring; flat treatment across every surface.
+        background: color + "33",
+        color,
         borderRadius: cornerRadius,
         fontSize: `${fontSize}px`,
         lineHeight: 1,

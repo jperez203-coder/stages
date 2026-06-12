@@ -79,6 +79,24 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+  // PI-followup-1: close the billing exploit by hard-rejecting member /
+  // admin invites at the email path. The schema still accepts those role
+  // values (PI-1 column + check constraint) and the accept-page still
+  // branches routing on them (PI-5b), but no email-invite UI surface
+  // exists for them anymore. Team members go through the workspace seat
+  // flow (Workspace Settings → Team) and then get added to specific
+  // pipelines via /api/pipeline-memberships/add. Pipeline_memberships is
+  // a NARROWING layer over workspace seats, not an additive substitute.
+  if (role === "member" || role === "admin") {
+    return NextResponse.json(
+      {
+        error: "role_not_invitable_by_email",
+        message:
+          "Team members must be added through the workspace seat flow. Use the team-picker on the pipeline People tab for existing workspace members.",
+      },
+      { status: 400 },
+    );
+  }
   const trimmedEmail = email.trim();
 
   // ─── Auth ────────────────────────────────────────────────────────────────

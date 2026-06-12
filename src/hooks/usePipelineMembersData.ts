@@ -5,8 +5,10 @@ import { supabase } from "@/lib/supabase";
 
 /**
  * Pending member invite for the /w/[slug]/p/[pipeline-id]/clients page's
- * Members sub-tab. Same shape as PipelineClientInvite but specifically
- * for role='member' rows in client_invites (PI-1+ added the role column).
+ * Members sub-tab. Defensively rendered post-PI-followup-1 — no new
+ * member-role email invites can be created (API hard-rejects them),
+ * but rows that landed from the PI-6 window still need to render so
+ * Jordan can Resend / Revoke them.
  */
 export type PipelineMemberInvite = {
   token: string;
@@ -20,14 +22,29 @@ export type PipelineMemberInvite = {
 
 /**
  * A current team member on a pipeline. Filtered to pipeline_memberships
- * rows where role IN ('admin', 'member') — clients live in the parallel
- * usePipelineClientsData hook + Clients sub-tab.
- *
- * Carries `role` so the roster row can render an admin / member badge.
+ * rows where role IN ('admin', 'member').
  */
 export type PipelineMember = {
   userId: string;
   role: "admin" | "member";
+  displayName: string | null;
+  email: string;
+  avatarUrl: string | null;
+};
+
+/**
+ * PI-followup-1: an existing workspace seat that's NOT yet on this
+ * pipeline. The Members sub-tab's picker enumerates these so the agency
+ * owner can click-to-add. Source: workspace_memberships for the parent
+ * workspace MINUS anyone already in pipeline_memberships for this
+ * pipeline (regardless of role — clients are also excluded so a
+ * client-on-this-pipeline isn't accidentally promoted to member; that's
+ * a server-side error anyway since pipeline_memberships PK is
+ * (pipeline_id, user_id) and the row already exists).
+ */
+export type PipelineAddableMember = {
+  userId: string;
+  workspaceRole: "owner" | "admin" | "member";
   displayName: string | null;
   email: string;
   avatarUrl: string | null;
@@ -43,30 +60,19 @@ export type PipelineMembersDataState =
       workspaceName: string;
       invites: PipelineMemberInvite[];
       members: PipelineMember[];
+      addable: PipelineAddableMember[];
       refetch: () => Promise<void>;
     };
 
 /**
- * Mirror of usePipelineClientsData for the Members sub-tab. Three queries
- * in parallel (invites, memberships, pipeline metadata) then a profile
- * lookup for name + avatar enrichment.
+ * Hook for the Members sub-tab. Queries in three rounds:
+ *   1. Parallel: pending member invites + pipeline_memberships +
+ *      pipeline metadata (incl. workspace_id).
+ *   2. workspace_memberships for the parent workspace — needs round 1
+ *      to resolve so we know the workspace_id.
+ *   3. profiles enrichment for every user_id referenced.
  *
- *   * Invites: client_invites WHERE pipeline_id = X AND role = 'member'
- *              AND accepted_at IS NULL. PI-6: filters on the role column
- *              added in PI-1 so the Members sub-tab only sees its own
- *              pending invites (not the Clients sub-tab's).
- *   * Members: pipeline_memberships WHERE pipeline_id = X AND role IN
- *              ('admin', 'member'). Both agency-side roles surface in
- *              the Members roster; 'owner' is workspace-level only,
- *              never a pipeline_memberships value via the UI invite
- *              flow, but included in the comparison for defensiveness.
- *   * Pipeline metadata: same query as the clients hook — gives us
- *              pipelineName + workspaceSlug + workspaceName for free.
- *
- * 'admin' role is NOT exposed in the invite form picker yet (PI-6 ships
- * member-only UI per the strategy lock). The roster IS admin-aware —
- * SQL-side admin assignment is allowed and the UI should reflect any
- * admins it sees.
+ * Addable list = wsMembers MINUS pipeline_memberships' user_ids.
  */
 export function usePipelineMembersData(
   pipelineId: string | null,
@@ -98,7 +104,7 @@ export function usePipelineMembersData(
             .in("role", ["admin", "member"]),
           supabase
             .from("pipelines")
-            .select("name, workspace:workspaces(name, slug)")
+            .select("name, workspace_id, workspace:workspaces(id, name, slug)")
             .eq("id", pipelineId)
             .maybeSingle(),
         ]);
@@ -111,27 +117,45 @@ export function usePipelineMembersData(
         throw new Error("Pipeline not found or you don't have access to it");
       }
 
-      // PostgREST nested-select-as-array quirk — same pattern as
-      // usePipelineClientsData.
+      // PostgREST nested-select-as-array quirk — same normalize pattern as
+      // elsewhere.
       const workspaceRel = pipelineResult.data.workspace as unknown as
-        | { name: string; slug: string }
-        | { name: string; slug: string }[]
+        | { id: string; name: string; slug: string }
+        | { id: string; name: string; slug: string }[]
         | null;
       const workspace = Array.isArray(workspaceRel)
         ? workspaceRel[0]
         : workspaceRel;
       const workspaceName = workspace?.name ?? "this workspace";
       const workspaceSlug = workspace?.slug ?? "";
+      const workspaceId = workspace?.id ?? null;
       const pipelineName =
         (pipelineResult.data.name as string | null) ?? "this pipeline";
 
-      // Collect every user_id we'll need a profile for (inviters + members).
+      // Round 2: workspace_memberships. Skipped defensively when
+      // workspaceId is somehow null (shouldn't happen — pipeline FK
+      // requires workspace_id NOT NULL).
+      const wsMembershipsResult = workspaceId
+        ? await supabase
+            .from("workspace_memberships")
+            .select("user_id, role")
+            .eq("workspace_id", workspaceId)
+        : { data: [], error: null };
+      if (wsMembershipsResult.error) {
+        throw new Error(wsMembershipsResult.error.message);
+      }
+
+      // ALL user_ids needing a profile fetch: inviters + pipeline members
+      // + workspace members. Single round-3 batch.
       const userIds = Array.from(
         new Set([
           ...((invitesResult.data ?? [])
             .map((i) => i.invited_by as string | null)
             .filter(Boolean) as string[]),
           ...((membershipsResult.data ?? []).map(
+            (m) => m.user_id as string,
+          )),
+          ...((wsMembershipsResult.data ?? []).map(
             (m) => m.user_id as string,
           )),
         ]),
@@ -191,9 +215,34 @@ export function usePipelineMembersData(
           };
         })
         .sort((a, b) => {
-          // Admins first, then members. Within group, alphabetical by
-          // display name (falling back to email).
           if (a.role !== b.role) return a.role === "admin" ? -1 : 1;
+          const aName = (a.displayName || a.email).toLowerCase();
+          const bName = (b.displayName || b.email).toLowerCase();
+          return aName.localeCompare(bName);
+        });
+
+      // Addable = workspace_memberships MINUS pipeline_memberships.
+      // PI-followup-1: this is the picker's source. Workspace owners +
+      // admins + members all show up — Jordan picks which to scope to
+      // this pipeline.
+      const pipelineMemberUserIds = new Set(
+        (membershipsResult.data ?? []).map((m) => m.user_id as string),
+      );
+      const addable: PipelineAddableMember[] = (wsMembershipsResult.data ?? [])
+        .filter((wm) => !pipelineMemberUserIds.has(wm.user_id as string))
+        .map((wm) => {
+          const userId = wm.user_id as string;
+          const prof = profileMap[userId];
+          return {
+            userId,
+            workspaceRole: wm.role as "owner" | "admin" | "member",
+            displayName: prof?.display_name ?? null,
+            email: prof?.email ?? "",
+            avatarUrl: prof?.avatar_url ?? null,
+          };
+        })
+        .sort((a, b) => {
+          // Alphabetical by display name, falling back to email.
           const aName = (a.displayName || a.email).toLowerCase();
           const bName = (b.displayName || b.email).toLowerCase();
           return aName.localeCompare(bName);
@@ -206,6 +255,7 @@ export function usePipelineMembersData(
         workspaceName,
         invites,
         members,
+        addable,
         refetch: load,
       });
     } catch (err) {

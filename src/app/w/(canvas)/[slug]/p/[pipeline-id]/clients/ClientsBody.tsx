@@ -24,6 +24,7 @@ import {
   type PipelineClient,
   type PipelineClientsDataState,
 } from "@/hooks/usePipelineClientsData";
+import { getAvatarColorFromUserId } from "@/lib/avatar-color";
 import { resolveInitial } from "@/lib/display-name";
 import { supabase } from "@/lib/supabase";
 
@@ -643,6 +644,7 @@ function ClientRow({
     <tr style={{ borderBottom: isLast ? "none" : "1px solid #2A2A2D" }}>
       <td className="px-4 py-3" style={{ width: "44px" }}>
         <ClientAvatar
+          userId={client.userId}
           email={client.email}
           displayName={client.displayName}
           avatarUrl={client.avatarUrl}
@@ -661,39 +663,28 @@ function ClientRow({
   );
 }
 
-// ─── Avatar + action buttons (mirror the team settings page) ────────────────
+// ─── Avatar + action buttons ───────────────────────────────────────────────
 
-const AVATAR_COLORS = [
-  "#3BA5EE",
-  "#8B5CF6",
-  "#EC4899",
-  "#F59E0B",
-  "#10B981",
-  "#06B6D4",
-  "#F43F5E",
-];
-
+/**
+ * PI-followup-1: color derivation centralized via getAvatarColorFromUserId;
+ * 2px ring removed (was border: `2px solid ${color}66`). Same flat avatar
+ * shape now everywhere — header cluster, popover, MembersBody, settings/team.
+ */
 function ClientAvatar({
+  userId,
   email,
   displayName,
   avatarUrl,
   size,
 }: {
+  userId: string;
   email: string;
   displayName: string | null;
   avatarUrl: string | null;
   size: number;
 }) {
   const [imgFailed, setImgFailed] = useState(false);
-  // Color hashes from email (stable identifier — renaming yourself
-  // doesn't change your avatar color). Initial letter comes from
-  // display_name (human-readable) with email-first-letter fallback.
-  // See resolveInitial in src/lib/display-name.ts for the contract.
-  let hash = 0;
-  for (let i = 0; i < email.length; i++) {
-    hash = email.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  const color = AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+  const color = getAvatarColorFromUserId(userId);
   const initial = resolveInitial({ display_name: displayName, email });
 
   if (avatarUrl && !imgFailed) {
@@ -710,7 +701,6 @@ function ClientAvatar({
           height: `${size}px`,
           borderRadius: "8px",
           objectFit: "cover",
-          border: `2px solid ${color}66`,
           display: "block",
         }}
       />
@@ -724,7 +714,6 @@ function ClientAvatar({
         height: `${size}px`,
         background: color + "33",
         color,
-        border: `2px solid ${color}66`,
         borderRadius: "8px",
         fontSize: "13px",
       }}

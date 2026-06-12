@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { useParams, useRouter } from "next/navigation";
 import {
@@ -10,8 +10,9 @@ import {
   Copy,
   Inbox,
   Mail,
+  Plus,
   RefreshCw,
-  Send,
+  Search,
   Trash2,
   UserPlus,
   Users,
@@ -20,33 +21,39 @@ import { useSession } from "@/hooks/useSession";
 import { useUserContexts } from "@/hooks/useUserContexts";
 import {
   usePipelineMembersData,
+  type PipelineAddableMember,
   type PipelineMemberInvite,
   type PipelineMember,
   type PipelineMembersDataState,
 } from "@/hooks/usePipelineMembersData";
+import { getAvatarColorFromUserId } from "@/lib/avatar-color";
 import { resolveInitial } from "@/lib/display-name";
 import { supabase } from "@/lib/supabase";
 
 /**
- * PI-6: Members sub-tab body. Mirrors ClientsBody's three-section
- * structure for the 'member' role:
- *   1. "Invite a team member" form (POSTs role='member' to
- *      /api/client-invites/send).
- *   2. Pending member invites table — Copy / Resend / Revoke actions
- *      mirror the Clients sub-tab.
- *   3. Current members roster — admin + member rows, role badge shown
- *      inline.
+ * PI-followup-1: Members sub-tab body. Reworked from the PI-6 email-
+ * invite form into a PICKER ONLY surface — the only path to add a team
+ * member to a pipeline now is "pick from existing workspace seats."
  *
- * The 'admin' role is NOT exposed in the invite form (Q5 strategy
- * lock — SQL-only assignment for MVP). The roster shows admins when
- * they exist in pipeline_memberships, so SQL-side promotions surface
- * cleanly in the UI.
+ * Why: PI-6's email form let agency owners invite "members" without
+ * creating workspace_memberships rows, which are what the seat-sync
+ * cron counts. That bypassed Team-plan per-seat pricing. The fix is
+ * structural: members exist as workspace seats first, then get scoped
+ * to specific pipelines via the picker.
  *
- * Permission gate, anonymous redirect, personal-workspace redirect all
- * mirror ClientsBody bit-for-bit.
+ * Sections (top to bottom):
+ *   1. "Add from your team" picker — workspace_memberships minus
+ *      existing pipeline_memberships. Searchable. Click to add via
+ *      /api/pipeline-memberships/add.
+ *   2. Pending invites — defensively rendered for any pre-followup
+ *      member-role invites still in the DB. No new ones can be created
+ *      (API hard-rejects role='member' / 'admin' at /api/client-invites/
+ *      send).
+ *   3. Current members roster — admin + member rows with role badge.
+ *
+ * Avatars: getAvatarColorFromUserId hashes user_id stably (cross-surface
+ * color consistency), no ring/border per the PI-followup-1 polish lock.
  */
-
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function MembersBody() {
   const params = useParams();
@@ -60,10 +67,6 @@ export function MembersBody() {
   const session = useSession();
   const contexts = useUserContexts();
 
-  // Same can_edit_pipeline-mirroring gate as ClientsBody: workspace owner
-  // of the parent workspace OR pipeline owner/admin of this pipeline.
-  // Pipeline-level admin can invite teammates too — matches the API
-  // route's can_edit_pipeline gate.
   const canEdit =
     contexts.status === "ready" && slug && pipelineId
       ? contexts.contexts.some(
@@ -89,10 +92,7 @@ export function MembersBody() {
     }
   }, [contexts.status, canEdit, slug, router]);
 
-  // WT-5 defensive client-side personal-workspace redirect (matches
-  // ClientsBody). Page-level server gate in clients/page.tsx catches
-  // direct URL navigation; this effect is the in-app navigation
-  // backstop.
+  // WT-5 defensive client-side personal-workspace redirect.
   useEffect(() => {
     if (contexts.status !== "ready" || !slug || !pipelineId) return;
     const ctx = contexts.contexts.find(
@@ -121,29 +121,34 @@ export function MembersBody() {
       <section className="mb-10 panel-card p-6">
         <div className="flex items-center gap-2 mb-4">
           <UserPlus size={16} className="text-zinc-400" />
-          <h2 className="text-[15px] font-semibold">Invite a team member</h2>
+          <h2 className="text-[15px] font-semibold">Add from your team</h2>
         </div>
-        <InviteMemberForm
+        <AddFromTeamPicker
           pipelineId={pipelineId ?? ""}
-          onSent={data.status === "ready" ? data.refetch : async () => {}}
+          workspaceSlug={slug ?? ""}
+          data={data}
+          onAdded={data.status === "ready" ? data.refetch : async () => {}}
         />
       </section>
 
-      <section className="mb-10">
-        <div className="flex items-center gap-2 mb-4">
-          <Mail size={16} className="text-zinc-400" />
-          <h2 className="text-[15px] font-semibold">Pending invites</h2>
-          {data.status === "ready" && data.invites.length > 0 && (
+      {/* Defensive render for any pre-PI-followup-1 member-role invites
+          still sitting in the DB. No new ones can be created. Section
+          hides itself when there are zero pending — strategy direction. */}
+      {data.status === "ready" && data.invites.length > 0 && (
+        <section className="mb-10">
+          <div className="flex items-center gap-2 mb-4">
+            <Mail size={16} className="text-zinc-400" />
+            <h2 className="text-[15px] font-semibold">Pending invites</h2>
             <span className="text-[12px] text-zinc-500">
               {data.invites.length}
             </span>
-          )}
-        </div>
-        <PendingMemberInvitesSection
-          data={data}
-          refetch={data.status === "ready" ? data.refetch : async () => {}}
-        />
-      </section>
+          </div>
+          <PendingMemberInvitesSection
+            data={data}
+            refetch={data.status === "ready" ? data.refetch : async () => {}}
+          />
+        </section>
+      )}
 
       <section>
         <div className="flex items-center gap-2 mb-4">
@@ -161,47 +166,53 @@ export function MembersBody() {
   );
 }
 
-// ─── Invite form ────────────────────────────────────────────────────────────
+// ─── Add-from-team picker ───────────────────────────────────────────────────
 
-function InviteMemberForm({
+function AddFromTeamPicker({
   pipelineId,
-  onSent,
+  workspaceSlug,
+  data,
+  onAdded,
 }: {
   pipelineId: string;
-  onSent: () => Promise<void>;
+  workspaceSlug: string;
+  data: PipelineMembersDataState;
+  onAdded: () => Promise<void>;
 }) {
-  const [email, setEmail] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<ReactNode | null>(null);
-  const [success, setSuccess] = useState<{
-    email: string;
-    acceptUrl: string;
-  } | null>(null);
+  const [query, setQuery] = useState("");
+  const [pendingUserId, setPendingUserId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const trimmed = email.trim();
-  const isValidEmail = EMAIL_REGEX.test(trimmed);
-  const canSubmit = isValidEmail && !submitting;
-  const emailLooksInvalid =
-    trimmed.length > 0 && trimmed.includes("@") && !isValidEmail;
+  const addable = data.status === "ready" ? data.addable : [];
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!canSubmit) return;
-    setSubmitting(true);
+  // Show search input once the list is long enough to warrant filtering.
+  const showSearch = addable.length > 5;
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return addable;
+    return addable.filter((m) => {
+      const name = (m.displayName ?? "").toLowerCase();
+      const email = m.email.toLowerCase();
+      return name.includes(q) || email.includes(q);
+    });
+  }, [addable, query]);
+
+  const add = async (userId: string) => {
+    setPendingUserId(userId);
     setError(null);
-    setSuccess(null);
 
     const sessionResult = await supabase.auth.getSession();
     const jwt = sessionResult.data.session?.access_token;
     if (!jwt) {
       setError("Your session expired. Sign in again.");
-      setSubmitting(false);
+      setPendingUserId(null);
       return;
     }
 
     let response: Response;
     try {
-      response = await fetch("/api/client-invites/send", {
+      response = await fetch("/api/pipeline-memberships/add", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -209,106 +220,186 @@ function InviteMemberForm({
         },
         body: JSON.stringify({
           pipeline_id: pipelineId,
-          email: trimmed,
-          // PI-6: only difference from the Clients form. The shared
-          // route gates on can_edit_pipeline regardless of role.
+          user_id: userId,
           role: "member",
         }),
       });
     } catch {
       setError("Network error. Try again.");
-      setSubmitting(false);
+      setPendingUserId(null);
       return;
     }
 
-    let body: { ok?: boolean; error?: string; accept_url?: string };
+    let body: { ok?: boolean; error?: string; message?: string };
     try {
       body = (await response.json()) as typeof body;
     } catch {
       setError(`Request failed (${response.status})`);
-      setSubmitting(false);
+      setPendingUserId(null);
       return;
     }
 
     if (!response.ok || !body.ok) {
-      setError(body.error || `Request failed (${response.status})`);
-      setSubmitting(false);
+      setError(body.message || body.error || `Request failed (${response.status})`);
+      setPendingUserId(null);
       return;
     }
 
-    setSuccess({ email: trimmed, acceptUrl: body.accept_url ?? "" });
-    setEmail("");
-    setSubmitting(false);
-    await onSent();
+    setPendingUserId(null);
+    await onAdded();
   };
+
+  if (data.status === "loading") {
+    return <div className="text-[13px] text-zinc-500">Loading…</div>;
+  }
+  if (data.status === "error") {
+    return (
+      <div className="flex items-start gap-2 text-[13px] text-stages-red">
+        <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
+        <span>Couldn&apos;t load your team: {data.message}</span>
+      </div>
+    );
+  }
+
+  if (addable.length === 0) {
+    return (
+      <div className="text-center py-6">
+        <Users size={22} className="mx-auto mb-3 text-zinc-600" />
+        <p className="text-[14px] text-zinc-300 font-medium">
+          Everyone on your team is already on this pipeline.
+        </p>
+        <p className="text-[12px] text-zinc-500 mt-1 leading-relaxed">
+          To invite new teammates, go to{" "}
+          <a
+            href={`/w/${encodeURIComponent(workspaceSlug)}/settings/team`}
+            className="text-stages-blue hover:underline"
+          >
+            Workspace Settings → Team
+          </a>
+          .
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div>
-      <form onSubmit={submit}>
-        <div className="flex flex-col sm:flex-row gap-3">
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="teammate@yourcompany.com"
-            className="field flex-1"
-            autoComplete="off"
-            disabled={submitting}
+      {showSearch && (
+        <div className="relative mb-4">
+          <Search
+            size={14}
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500"
           />
-          <button
-            type="submit"
-            disabled={!canSubmit}
-            className="btn-primary justify-center sm:w-auto"
-          >
-            <Send size={14} />
-            {submitting ? "Sending…" : "Send invite"}
-          </button>
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search by name or email"
+            className="field w-full"
+            style={{ paddingLeft: "36px" }}
+          />
         </div>
-        {emailLooksInvalid && (
-          <p className="text-[12px] text-stages-amber mt-2 flex items-center gap-1.5">
-            <AlertCircle size={11} className="flex-shrink-0" />
-            That doesn&apos;t look like a valid email address.
-          </p>
-        )}
-      </form>
+      )}
 
       {error && (
-        <div className="mt-4 p-3 rounded-lg border border-stages-red/40 bg-stages-red/10 text-[13px] text-stages-red leading-snug flex items-start gap-2">
+        <div className="mb-4 p-3 rounded-lg border border-stages-red/40 bg-stages-red/10 text-[13px] text-stages-red leading-snug flex items-start gap-2">
           <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
           <span>{error}</span>
         </div>
       )}
 
-      {success && (
-        <div className="mt-4 p-3 rounded-lg border border-stages-green/40 bg-stages-green/10">
-          <div className="flex items-start gap-2 text-[13px] text-stages-green leading-snug mb-2">
-            <Check size={14} className="flex-shrink-0 mt-0.5" />
-            <span>
-              Invite sent to <strong>{success.email}</strong>. They&apos;ll
-              receive an email with a sign-in link.
-            </span>
-          </div>
-          {success.acceptUrl && (
-            <div className="flex items-center gap-2 mt-2">
-              <code className="text-[11px] text-zinc-400 truncate flex-1 px-2 py-1.5 rounded bg-stages-card border border-stages-border">
-                {success.acceptUrl}
-              </code>
-              <CopyButton text={success.acceptUrl} />
-              <button
-                onClick={() => setSuccess(null)}
-                className="text-[12px] text-zinc-500 hover:text-zinc-300 transition-colors"
-              >
-                Dismiss
-              </button>
-            </div>
-          )}
+      {filtered.length === 0 ? (
+        <div className="text-[13px] text-zinc-500 py-4 text-center">
+          No teammates match &ldquo;{query}&rdquo;.
         </div>
+      ) : (
+        <ul className="space-y-1">
+          {filtered.map((m) => (
+            <AddablePersonRow
+              key={m.userId}
+              member={m}
+              pending={pendingUserId === m.userId}
+              disabled={pendingUserId !== null && pendingUserId !== m.userId}
+              onAdd={() => add(m.userId)}
+            />
+          ))}
+        </ul>
       )}
     </div>
   );
 }
 
-// ─── Pending invites ────────────────────────────────────────────────────────
+function AddablePersonRow({
+  member,
+  pending,
+  disabled,
+  onAdd,
+}: {
+  member: PipelineAddableMember;
+  pending: boolean;
+  disabled: boolean;
+  onAdd: () => void;
+}) {
+  const label = member.displayName || member.email;
+  return (
+    <li
+      className="flex items-center gap-3 p-2 rounded-lg transition-colors"
+      style={{
+        background: "transparent",
+      }}
+      onMouseEnter={(e) => {
+        if (!disabled && !pending) e.currentTarget.style.background = "#1F1F22";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "transparent";
+      }}
+    >
+      <PersonAvatar
+        userId={member.userId}
+        displayName={member.displayName}
+        email={member.email}
+        avatarUrl={member.avatarUrl}
+        size={32}
+      />
+      <div className="flex-1 min-w-0">
+        <div className="text-[13px] text-zinc-200 truncate">{label}</div>
+        {member.displayName && (
+          <div className="text-[12px] text-zinc-500 truncate">
+            {member.email}
+          </div>
+        )}
+      </div>
+      <span
+        className={`text-[11px] font-medium uppercase tracking-wider ${
+          member.workspaceRole === "owner"
+            ? "text-stages-blue"
+            : member.workspaceRole === "admin"
+              ? "text-stages-purple"
+              : "text-zinc-500"
+        }`}
+      >
+        {member.workspaceRole}
+      </span>
+      <button
+        type="button"
+        onClick={onAdd}
+        disabled={disabled || pending}
+        className="btn-primary inline-flex"
+        style={{
+          padding: "6px 12px",
+          fontSize: "12px",
+          opacity: disabled ? 0.5 : 1,
+          cursor: disabled ? "not-allowed" : "pointer",
+        }}
+      >
+        <Plus size={12} />
+        {pending ? "Adding…" : "Add"}
+      </button>
+    </li>
+  );
+}
+
+// ─── Pending invites (defensive — no new ones created post-PI-followup-1) ──
 
 function PendingMemberInvitesSection({
   data,
@@ -317,28 +408,13 @@ function PendingMemberInvitesSection({
   data: PipelineMembersDataState;
   refetch: () => Promise<void>;
 }) {
-  if (data.status === "loading") {
-    return (
-      <div className="panel-card p-6 text-[13px] text-zinc-500">Loading…</div>
-    );
-  }
-  if (data.status === "error") {
-    return (
-      <div className="panel-card p-6 flex items-start gap-2 text-[13px] text-stages-red">
-        <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
-        <span>Couldn&apos;t load invites: {data.message}</span>
-      </div>
-    );
-  }
+  if (data.status !== "ready") return null;
   if (data.invites.length === 0) {
     return (
       <div className="panel-card p-8 text-center">
         <Inbox size={22} className="mx-auto mb-3 text-zinc-600" />
         <p className="text-[14px] text-zinc-300 font-medium">
           No pending invites
-        </p>
-        <p className="text-[12px] text-zinc-500 mt-1">
-          Use the form above to invite a team member.
         </p>
       </div>
     );
@@ -586,7 +662,7 @@ function MembersSection({ data }: { data: PipelineMembersDataState }) {
         <Users size={22} className="mx-auto mb-3 text-zinc-600" />
         <p className="text-[14px] text-zinc-300 font-medium">No members yet</p>
         <p className="text-[12px] text-zinc-500 mt-1">
-          Once a teammate accepts an invite, they&apos;ll appear here.
+          Use the picker above to add teammates from your workspace.
         </p>
       </div>
     );
@@ -630,9 +706,10 @@ function MemberRow({
   return (
     <tr style={{ borderBottom: isLast ? "none" : "1px solid #2A2A2D" }}>
       <td className="px-4 py-3" style={{ width: "44px" }}>
-        <MemberAvatar
-          email={member.email}
+        <PersonAvatar
+          userId={member.userId}
           displayName={member.displayName}
+          email={member.email}
           avatarUrl={member.avatarUrl}
           size={32}
         />
@@ -663,35 +740,27 @@ function RoleBadge({ role }: { role: "admin" | "member" }) {
   );
 }
 
-// ─── Avatar + action buttons (mirror ClientsBody's helpers) ─────────────────
+// ─── Shared avatar + action button helpers ─────────────────────────────────
 
-const AVATAR_COLORS = [
-  "#3BA5EE",
-  "#8B5CF6",
-  "#EC4899",
-  "#F59E0B",
-  "#10B981",
-  "#06B6D4",
-  "#F43F5E",
-];
-
-function MemberAvatar({
-  email,
+/**
+ * PI-followup-1: centralized via getAvatarColorFromUserId. Ring/border
+ * removed; avatars render flat across all surfaces.
+ */
+function PersonAvatar({
+  userId,
   displayName,
+  email,
   avatarUrl,
   size,
 }: {
-  email: string;
+  userId: string;
   displayName: string | null;
+  email: string;
   avatarUrl: string | null;
   size: number;
 }) {
   const [imgFailed, setImgFailed] = useState(false);
-  let hash = 0;
-  for (let i = 0; i < email.length; i++) {
-    hash = email.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  const color = AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+  const color = getAvatarColorFromUserId(userId);
   const initial = resolveInitial({ display_name: displayName, email });
 
   if (avatarUrl && !imgFailed) {
@@ -708,7 +777,6 @@ function MemberAvatar({
           height: `${size}px`,
           borderRadius: "8px",
           objectFit: "cover",
-          border: `2px solid ${color}66`,
           display: "block",
         }}
       />
@@ -716,13 +784,12 @@ function MemberAvatar({
   }
   return (
     <div
-      className="flex items-center justify-center font-semibold"
+      className="flex items-center justify-center font-semibold flex-shrink-0"
       style={{
         width: `${size}px`,
         height: `${size}px`,
         background: color + "33",
         color,
-        border: `2px solid ${color}66`,
         borderRadius: "8px",
         fontSize: "13px",
       }}
@@ -776,32 +843,6 @@ function ActionIconButton({
       }}
     >
       {children}
-    </button>
-  );
-}
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      window.prompt("Copy this link:", text);
-    }
-  };
-  return (
-    <button
-      onClick={copy}
-      className="text-[12px] flex items-center gap-1 px-2 py-1.5 rounded transition-colors"
-      style={{
-        background: copied ? "#15B98122" : "transparent",
-        color: copied ? "#15B981" : "#71717A",
-      }}
-    >
-      {copied ? <Check size={11} /> : <Copy size={11} />}
-      {copied ? "Copied" : "Copy"}
     </button>
   );
 }
