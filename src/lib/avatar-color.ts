@@ -1,47 +1,55 @@
 /**
- * Centralized avatar color helper. PI-followup-1.
+ * Centralized avatar color helper. PI-followup-1; revised PI-followup-5
+ * to return a paired (text, bg) tuple instead of a single hex.
  *
- * Replaces the per-component AVATAR_COLORS arrays + ad-hoc hash math
- * that had drifted across ClientsBody, MembersBody, settings/team
- * page, HeaderProfileMenu, UserAvatar, and the chat MembersAvatarStack.
+ * Why the shape change: Jordan's design spec for the pink slot specified
+ * an explicit dark-muted-pink background (#351E2E) that doesn't equal
+ * the alpha-tint of the foreground (#ED4899 over the canvas bg). The
+ * old `color + "33"` derive-the-bg pattern only worked when bg was a
+ * faithful alpha of fg; one bespoke pairing breaks that invariant.
  *
- * Source of truth for "what color is this user's avatar":
- *   1. ONE palette (8 colors, dark-theme-friendly, white text contrast).
+ * Source of truth for "what colors are this user's avatar":
+ *   1. ONE palette (8 paired text/bg entries, dark-theme-friendly).
  *   2. ONE hash function (character-sum-then-modulo over the user_id).
- *   3. Hash input is ALWAYS user_id (auth.users.id / profiles.id). The
- *      pre-PI-followup-1 codebase had some surfaces hashing email; user_id
- *      is stable across email changes, email isn't, and using one input
- *      everywhere is the only way the cross-surface invariant
- *      ("Taylor is always teal") actually holds.
+ *   3. Hash input is ALWAYS user_id (auth.users.id / profiles.id). Some
+ *      pre-PI-followup-1 surfaces hashed email; user_id is stable across
+ *      email changes, email isn't, and using one input everywhere is
+ *      the only way the cross-surface invariant ("Taylor is always
+ *      teal") actually holds.
  *
  * Pure function — no React, no Supabase, no DOM. Safe to call in any
  * render path, including server components.
  */
 
-const AVATAR_PALETTE: ReadonlyArray<string> = [
-  "#15B981", // green
-  "#ED4899", // pink-500
-  "#3A97D8", // blue
-  "#F59E0C", // amber
-  "#8B5CF6", // purple
-  "#06B6D4", // cyan
-  "#F472B6", // pink-400 (PI-followup-3: replaced #F43F5E rose; off-brand red)
-  "#FB923C", // orange
+export type AvatarColorPair = { text: string; bg: string };
+
+/**
+ * Slot 6 (pink-500) uses a bespoke deeply-muted-pink bg per Jordan's
+ * spec; every other slot keeps its bg derived as `text + "33"` (the
+ * pre-PI-followup-5 visual is preserved).
+ */
+const AVATAR_PALETTE: ReadonlyArray<AvatarColorPair> = [
+  { text: "#15B981", bg: "#15B981" + "33" }, // green
+  { text: "#ED4899", bg: "#ED4899" + "33" }, // pink-500 (alpha-tinted bg)
+  { text: "#3A97D8", bg: "#3A97D8" + "33" }, // blue
+  { text: "#F59E0C", bg: "#F59E0C" + "33" }, // amber
+  { text: "#8B5CF6", bg: "#8B5CF6" + "33" }, // purple
+  { text: "#06B6D4", bg: "#06B6D4" + "33" }, // cyan
+  { text: "#ED4899", bg: "#351E2E" }, // pink-500 on bespoke dark muted pink (Jordan PI-followup-5)
+  { text: "#FB923C", bg: "#FB923C" + "33" }, // orange
 ];
 
 /**
- * Returns a stable hex color for a given user id. Same userId always
- * returns the same color; different userIds spread evenly (within
- * palette-size limits) across the palette via a simple character-sum
- * hash.
+ * Returns a stable `{ text, bg }` pair for a given user id. Same userId
+ * always returns the same pair; different userIds spread evenly (within
+ * palette-size limits) across the palette via a simple character-sum hash.
  *
- * Callers typically use the returned hex as BOTH the letter color and
- * the source of a tinted background (`color + "33"` for the alpha 33
- * tint, or `color + "22"` for the lighter variant). The exact tint is
- * a per-component visual choice; this helper only commits to the seed
- * color.
+ * Callers should use `text` as the letter / icon color and `bg` as the
+ * tile background, without any further tint math. The old "single-hex
+ * + caller-side alpha tint" contract was retired in PI-followup-5; the
+ * helper now commits to both halves of the pair.
  */
-export function getAvatarColorFromUserId(userId: string): string {
+export function getAvatarColorFromUserId(userId: string): AvatarColorPair {
   let hash = 0;
   for (let i = 0; i < userId.length; i++) {
     hash = userId.charCodeAt(i) + ((hash << 5) - hash);

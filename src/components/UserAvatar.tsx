@@ -40,12 +40,12 @@ type Props = {
 };
 
 export function UserAvatar({ user, size }: Props) {
-  // PI-followup-1: color derived via the shared helper. user.id is the
-  // input — same person, same color, on every surface that uses the
-  // helper. Pre-PI-followup-1 this component had its own paired
-  // palette; the shared single-color palette + alpha-tinted bg
-  // unifies the visual treatment across surfaces.
-  const color = getAvatarColorFromUserId(user.id);
+  // PI-followup-1/5: paired text/bg derived via the shared helper.
+  // user.id is the input — same person, same colors, on every surface.
+  // PI-followup-5 moved bg into the palette (was caller-derived as
+  // `color + "33"`) so a bespoke slot bg could diverge from the alpha
+  // tint without breaking the contract.
+  const { text: text, bg: bg } = getAvatarColorFromUserId(user.id);
 
   // Initial fallback chain: avatar_url (handled below) → display_name → email → "?"
   // Email is used only for the initial char; never exposed to alt/aria.
@@ -110,11 +110,11 @@ export function UserAvatar({ user, size }: Props) {
       style={{
         width: `${size}px`,
         height: `${size}px`,
-        // PI-followup-1: alpha-tinted background derived from the
-        // central color, letter renders in the vivid identity color.
-        // No ring; flat treatment across every surface.
-        background: color + "33",
-        color,
+        // PI-followup-5: bg comes from the palette pair directly
+        // (was caller-derived alpha tint). Letter in the vivid text
+        // color. No ring; flat treatment across every surface.
+        background: bg,
+        color: text,
         borderRadius: cornerRadius,
         fontSize: `${fontSize}px`,
         lineHeight: 1,

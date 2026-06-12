@@ -996,7 +996,7 @@ function PersonAvatar({
   size: number;
 }) {
   const [imgFailed, setImgFailed] = useState(false);
-  const color = getAvatarColorFromUserId(userId);
+  const { text, bg } = getAvatarColorFromUserId(userId);
   const initial = resolveInitial({ display_name: displayName, email });
 
   if (avatarUrl && !imgFailed) {
@@ -1024,8 +1024,8 @@ function PersonAvatar({
       style={{
         width: `${size}px`,
         height: `${size}px`,
-        background: color + "33",
-        color,
+        background: bg,
+        color: text,
         borderRadius: "8px",
         fontSize: "13px",
       }}

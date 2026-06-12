@@ -275,10 +275,11 @@ function Avatar({
 }) {
   const [imgFailed, setImgFailed] = useState(false);
 
-  // PI-followup-1: centralized via getAvatarColorFromUserId. Falls back
-  // to email hashing only during the brief loading window before the
-  // session resolves — the steady-state input is user.id everywhere.
-  const color = userId
+  // PI-followup-1/5: centralized via getAvatarColorFromUserId (now
+  // returning a paired text/bg). Falls back to email hashing only
+  // during the brief loading window before the session resolves —
+  // the steady-state input is user.id everywhere.
+  const { text, bg } = userId
     ? getAvatarColorFromUserId(userId)
     : getAvatarColorFromUserId(email);
   // Initial: display_name's first letter, falling back to email's first
@@ -335,8 +336,8 @@ function Avatar({
         width: `${size}px`,
         height: `${size}px`,
         boxSizing: "border-box",
-        background: color + "33",
-        color,
+        background: bg,
+        color: text,
         // Stroke removed 2026-05-22 — see comment on the photo branch above.
         border: "none",
         borderRadius: "6px",
