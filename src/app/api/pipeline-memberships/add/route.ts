@@ -47,10 +47,25 @@ const UUID_REGEX =
  * AUTHZ
  * ─────
  *   1. Bearer JWT (anonymous → 401).
- *   2. RLS on pipeline_memberships_insert gates the INSERT: workspace
- *      owner OR can_edit_pipeline AND role != 'owner'. This endpoint
- *      pre-validates the same conditions for clean error messages but
- *      RLS is the authoritative floor.
+ *   2. The actual INSERT runs inside the add_pipeline_member RPC
+ *      (PI-followup-2), a SECURITY DEFINER function. The RPC re-checks
+ *      auth, workspace type, and authz inline. This route still does
+ *      a pre-flight read to produce clean HTTP error envelopes ahead
+ *      of the RPC, but the RPC is the authoritative floor.
+ *
+ * RPC RATIONALE (PI-followup-2)
+ * ─────────────────────────────
+ * The first cut of this endpoint did a direct PostgREST INSERT into
+ * pipeline_memberships. That triggered postgres 42P17 ("infinite
+ * recursion detected in policy for relation 'pipeline_memberships'")
+ * via the pipeline_memberships_seed_channels AFTER INSERT trigger
+ * (which inserts into channel_memberships whose INSERT policy reads
+ * pipeline_memberships) and via the RETURNING SELECT (which re-evaluates
+ * is_pipeline_agency_member, also reading pipeline_memberships).
+ *
+ * The fix is the same pattern as create_workspace_with_owner and
+ * accept_client_invite: a SECURITY DEFINER RPC that bypasses every
+ * RLS policy on every table it touches.
  *
  * VALIDATIONS
  * ───────────
@@ -238,44 +253,94 @@ export async function POST(request: Request) {
     );
   }
 
-  // ── INSERT ─────────────────────────────────────────────────────────────
-  // RLS gates the write: workspace owner OR (can_edit_pipeline AND role
-  // != 'owner'). 42501 means the caller's role didn't pass — clean 403.
-  const inserted = await supaAsUser
-    .from("pipeline_memberships")
-    .insert({
-      pipeline_id: pipelineId,
-      user_id: userId,
-      role,
-    })
-    .select("user_id, role")
-    .single();
-  if (inserted.error) {
-    if (inserted.error.code === "42501") {
+  // ── INSERT via SECURITY DEFINER RPC (PI-followup-2) ────────────────────
+  // The RPC does its own auth + workspace-type + authz + seat-membership
+  // checks inline. Pre-flight checks above already produced cleaner HTTP
+  // envelopes, but the RPC is the floor — and it bypasses the RLS
+  // recursion that surfaced with a direct PostgREST INSERT.
+  const rpcRes = await supaAsUser.rpc("add_pipeline_member", {
+    pipeline_id: pipelineId,
+    target_user_id: userId,
+    target_role: role,
+  });
+  if (rpcRes.error) {
+    // PostgREST surfaces postgres SQLSTATEs via `code`. Map to HTTP.
+    const sqlstate = rpcRes.error.code;
+    const msg = rpcRes.error.message || "";
+
+    if (sqlstate === "42501") {
+      // 42501 = insufficient_privilege. Three sub-cases by message:
+      //   "Not authenticated"        → 401
+      //   "Personal workspaces..."   → 403 (members_not_available_on_personal)
+      //   "Target user is not..."    → 400 (target_user_not_workspace_member)
+      //   "Not authorized..."        → 403 (not_authorized)
+      if (msg.startsWith("Not authenticated")) {
+        return NextResponse.json(
+          { error: "Not authenticated" },
+          { status: 401 },
+        );
+      }
+      if (msg.startsWith("Personal workspaces")) {
+        return NextResponse.json(
+          {
+            error: "members_not_available_on_personal",
+            message: msg,
+          },
+          { status: 403 },
+        );
+      }
+      if (msg.startsWith("Target user is not a workspace member")) {
+        return NextResponse.json(
+          {
+            error: "target_user_not_workspace_member",
+            message: msg,
+          },
+          { status: 400 },
+        );
+      }
+      // Default 42501 → not_authorized.
       return NextResponse.json(
         {
           error: "not_authorized",
-          message:
-            "You don't have permission to add members to this pipeline.",
+          message: msg || "You don't have permission to add members to this pipeline.",
         },
         { status: 403 },
       );
     }
-    if (inserted.error.code === "23505") {
-      // Unique violation — raced against another concurrent add.
+
+    if (sqlstate === "22023") {
+      // Invalid argument: pipeline not found OR invalid role.
+      if (msg.startsWith("Pipeline not found")) {
+        return NextResponse.json(
+          { error: "Pipeline not found or no permission" },
+          { status: 404 },
+        );
+      }
       return NextResponse.json(
-        { error: "already_member" },
+        { error: msg || "Invalid argument" },
+        { status: 400 },
+      );
+    }
+
+    if (sqlstate === "23505") {
+      // Already a pipeline member.
+      return NextResponse.json(
+        {
+          error: "already_member",
+          message: msg,
+        },
         { status: 409 },
       );
     }
+
     console.error(
-      "[pipeline-memberships/add] insert failed:",
-      inserted.error.message,
+      "[pipeline-memberships/add] rpc failed:",
+      msg,
       "code:",
-      inserted.error.code,
+      sqlstate,
     );
     return NextResponse.json(
-      { error: inserted.error.message },
+      { error: msg || "Add failed" },
       { status: 500 },
     );
   }
@@ -283,8 +348,8 @@ export async function POST(request: Request) {
   return NextResponse.json({
     ok: true,
     membership: {
-      user_id: inserted.data.user_id as string,
-      role: inserted.data.role as "member" | "admin",
+      user_id: userId,
+      role,
     },
   });
 }
