@@ -16,6 +16,7 @@ import {
   Trash2,
   UserPlus,
   Users,
+  X,
 } from "lucide-react";
 import { useSession } from "@/hooks/useSession";
 import { useUserContexts } from "@/hooks/useUserContexts";
@@ -160,7 +161,14 @@ export function MembersBody() {
             </span>
           )}
         </div>
-        <MembersSection data={data} />
+        <MembersSection
+          data={data}
+          pipelineId={pipelineId ?? ""}
+          actorUserId={
+            session.status === "authenticated" ? session.user.id : null
+          }
+          onRemoved={data.status === "ready" ? data.refetch : async () => {}}
+        />
       </section>
     </div>
   );
@@ -642,7 +650,84 @@ function ExpiresCell({
 
 // ─── Members roster ─────────────────────────────────────────────────────────
 
-function MembersSection({ data }: { data: PipelineMembersDataState }) {
+function MembersSection({
+  data,
+  pipelineId,
+  actorUserId,
+  onRemoved,
+}: {
+  data: PipelineMembersDataState;
+  pipelineId: string;
+  actorUserId: string | null;
+  onRemoved: () => Promise<void>;
+}) {
+  // Confirm modal state lives at the section level so a single instance
+  // renders, avoiding row-level z-index / portal complications.
+  const [confirmTarget, setConfirmTarget] = useState<PipelineMember | null>(
+    null,
+  );
+  const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+
+  const closeConfirm = () => {
+    setConfirmTarget(null);
+    setRemoveError(null);
+    setRemoving(false);
+  };
+
+  const confirmRemove = async () => {
+    if (!confirmTarget) return;
+    setRemoving(true);
+    setRemoveError(null);
+
+    const sessionResult = await supabase.auth.getSession();
+    const jwt = sessionResult.data.session?.access_token;
+    if (!jwt) {
+      setRemoveError("Your session expired. Sign in again.");
+      setRemoving(false);
+      return;
+    }
+
+    let response: Response;
+    try {
+      response = await fetch("/api/pipeline-memberships/remove", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${jwt}`,
+        },
+        body: JSON.stringify({
+          pipeline_id: pipelineId,
+          target_user_id: confirmTarget.userId,
+        }),
+      });
+    } catch {
+      setRemoveError("Network error. Try again.");
+      setRemoving(false);
+      return;
+    }
+
+    let body: { ok?: boolean; error?: string; message?: string };
+    try {
+      body = (await response.json()) as typeof body;
+    } catch {
+      setRemoveError(`Request failed (${response.status})`);
+      setRemoving(false);
+      return;
+    }
+
+    if (!response.ok || !body.ok) {
+      setRemoveError(
+        body.message || body.error || `Request failed (${response.status})`,
+      );
+      setRemoving(false);
+      return;
+    }
+
+    closeConfirm();
+    await onRemoved();
+  };
+
   if (data.status === "loading") {
     return (
       <div className="panel-card p-6 text-[13px] text-zinc-500">Loading…</div>
@@ -668,43 +753,82 @@ function MembersSection({ data }: { data: PipelineMembersDataState }) {
     );
   }
   return (
-    <div className="panel-card overflow-hidden">
-      <table className="w-full text-[13px]">
-        <thead>
-          <tr
-            className="text-[11px] uppercase tracking-wider text-zinc-500"
-            style={{ borderBottom: "1px solid #36363A" }}
-          >
-            <th className="text-left px-4 py-3 font-medium" colSpan={2}>
-              Member
-            </th>
-            <th className="text-right px-4 py-3 font-medium">Role</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.members.map((m, idx) => (
-            <MemberRow
-              key={m.userId}
-              member={m}
-              isLast={idx === data.members.length - 1}
-            />
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <>
+      <div className="panel-card overflow-hidden">
+        <table className="w-full text-[13px]">
+          <thead>
+            <tr
+              className="text-[11px] uppercase tracking-wider text-zinc-500"
+              style={{ borderBottom: "1px solid #36363A" }}
+            >
+              <th className="text-left px-4 py-3 font-medium" colSpan={2}>
+                Member
+              </th>
+              <th className="text-right px-4 py-3 font-medium">Role</th>
+              {/* Empty header above the remove-X column — kept narrow + unlabeled. */}
+              <th
+                className="px-4 py-3"
+                style={{ width: "40px" }}
+                aria-hidden="true"
+              />
+            </tr>
+          </thead>
+          <tbody>
+            {data.members.map((m, idx) => (
+              <MemberRow
+                key={m.userId}
+                member={m}
+                isLast={idx === data.members.length - 1}
+                isSelf={actorUserId !== null && m.userId === actorUserId}
+                onRequestRemove={() => setConfirmTarget(m)}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {confirmTarget && (
+        <RemoveMemberConfirm
+          member={confirmTarget}
+          removing={removing}
+          error={removeError}
+          onCancel={closeConfirm}
+          onConfirm={confirmRemove}
+        />
+      )}
+    </>
   );
 }
 
 function MemberRow({
   member,
   isLast,
+  isSelf,
+  onRequestRemove,
 }: {
   member: PipelineMember;
   isLast: boolean;
+  isSelf: boolean;
+  onRequestRemove: () => void;
 }) {
   const label = member.displayName || member.email;
+  // Row-scoped hover so the X reveals only on this row. Local state is
+  // simpler than CSS group-hover when we also need to gate the cursor
+  // shape on isSelf.
+  const [hover, setHover] = useState(false);
+
+  // PipelineMember.role is already filtered to admin|member by the hook
+  // (owners are excluded at the query level), but render the X defensively
+  // only when the row is NOT the actor. Owner protection is enforced at
+  // the API layer in any case.
+  const showRemove = !isSelf;
+
   return (
-    <tr style={{ borderBottom: isLast ? "none" : "1px solid #2A2A2D" }}>
+    <tr
+      style={{ borderBottom: isLast ? "none" : "1px solid #2A2A2D" }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
       <td className="px-4 py-3" style={{ width: "44px" }}>
         <PersonAvatar
           userId={member.userId}
@@ -725,7 +849,119 @@ function MemberRow({
       <td className="px-4 py-3 text-right">
         <RoleBadge role={member.role} />
       </td>
+      <td className="px-4 py-3" style={{ width: "40px" }}>
+        {showRemove && (
+          <button
+            type="button"
+            onClick={onRequestRemove}
+            title={`Remove ${label} from this pipeline`}
+            aria-label={`Remove ${label} from this pipeline`}
+            className="p-1.5 rounded-md transition-opacity transition-colors"
+            style={{
+              opacity: hover ? 1 : 0,
+              color: "#71717A",
+              background: "transparent",
+              cursor: "pointer",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "#2A2A2D";
+              e.currentTarget.style.color = "#F472B6";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.color = "#71717A";
+            }}
+          >
+            <X size={14} />
+          </button>
+        )}
+      </td>
     </tr>
+  );
+}
+
+function RemoveMemberConfirm({
+  member,
+  removing,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  member: PipelineMember;
+  removing: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const label = member.displayName || member.email;
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: "rgba(0,0,0,0.6)" }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !removing) onCancel();
+      }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="remove-member-title"
+    >
+      <div
+        className="panel-card p-6 w-full"
+        style={{ maxWidth: "420px" }}
+      >
+        <h3
+          id="remove-member-title"
+          className="text-[16px] font-semibold text-zinc-100 mb-2"
+        >
+          Remove {label} from this pipeline?
+        </h3>
+        <p className="text-[13px] text-zinc-400 leading-relaxed mb-5">
+          They&apos;ll lose access to this pipeline immediately. Their
+          workspace seat and any content they&apos;ve already created stay
+          in place.
+        </p>
+
+        {error && (
+          <div className="mb-4 p-3 rounded-lg border border-stages-red/40 bg-stages-red/10 text-[13px] text-stages-red leading-snug flex items-start gap-2">
+            <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={removing}
+            className="btn-ghost"
+            style={{
+              padding: "8px 14px",
+              fontSize: "13px",
+              opacity: removing ? 0.5 : 1,
+              cursor: removing ? "not-allowed" : "pointer",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={removing}
+            className="inline-flex items-center gap-1.5 rounded-lg font-medium transition-colors"
+            style={{
+              padding: "8px 14px",
+              fontSize: "13px",
+              background: "#F43F5E",
+              color: "#FFFFFF",
+              opacity: removing ? 0.7 : 1,
+              cursor: removing ? "not-allowed" : "pointer",
+            }}
+          >
+            {removing ? "Removing…" : "Remove"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

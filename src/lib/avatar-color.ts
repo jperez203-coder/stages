@@ -20,12 +20,12 @@
 
 const AVATAR_PALETTE: ReadonlyArray<string> = [
   "#15B981", // green
-  "#ED4899", // pink
+  "#ED4899", // pink-500
   "#3A97D8", // blue
   "#F59E0C", // amber
   "#8B5CF6", // purple
   "#06B6D4", // cyan
-  "#F43F5E", // rose
+  "#F472B6", // pink-400 (PI-followup-3: replaced #F43F5E rose; off-brand red)
   "#FB923C", // orange
 ];
 
