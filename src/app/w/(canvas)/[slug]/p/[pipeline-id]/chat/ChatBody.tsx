@@ -212,22 +212,48 @@ export function ChatBody({
     return channelMessages.filter((m) => !m.is_internal);
   }, [messagesByChannel, activeChannelId, viewerIsAgencySide]);
 
-  // NF-2.2: narrow the picker audience to the ACTIVE channel via
-  // channel_memberships. Pipeline-wide `members` is the upper bound;
-  // we intersect with the channel's member set so clients don't
-  // appear in #general (and vice-versa for any future channel split).
+  // NF-2.2 → NF-2.3: narrow the picker audience to the ACTIVE channel.
+  // The rule differs by channel type because the seed trigger asymmetry:
+  //   * is_client=false ("general"): channel_memberships is canonical —
+  //     the seed trigger (20260525120000) auto-joins every agency user.
+  //     Clients have no rows here; intersecting members with channel_-
+  //     memberships drops them, which is what we want.
+  //   * is_client=true ("client"): channel_memberships explicitly
+  //     contains only the pipeline creator + clients (the seed trigger
+  //     adds clients only). Agency members at large can still talk to
+  //     the client and need to be picker-mentionable, so we UNION the
+  //     explicit channel members with every agency-role pipeline
+  //     member. This matches the UX expectation while leaving server-
+  //     side mention resolution (RPC) unchanged.
   //
-  // Fallback: if the lookup hasn't loaded a row for the active channel
-  // yet (shouldn't happen post-fetch but defensive), fall back to the
-  // full roster — better to over-show than to silently break the
-  // picker mid-mount.
+  // Caveat flagged for follow-up: mentioning a non-channel-member
+  // agency user creates a notification, but click-through to the
+  // source message would 403 via channel_messages_select (which
+  // requires is_channel_member). The proper fix is at the
+  // channel_memberships seed/access layer, not here — out of scope.
   const mentionablePeopleForActiveChannel = useMemo(() => {
     if (!activeChannelId) return members;
-    const allowed = data.channelMemberIdsByChannelId[activeChannelId];
-    if (!allowed || allowed.length === 0) return members;
-    const allowedSet = new Set(allowed);
-    return members.filter((m) => allowedSet.has(m.user.id));
-  }, [activeChannelId, members, data.channelMemberIdsByChannelId]);
+    const channel = data.channels.find((c) => c.id === activeChannelId);
+    if (!channel) return members;
+
+    const explicit = data.channelMemberIdsByChannelId[activeChannelId] ?? [];
+    const explicitSet = new Set(explicit);
+
+    if (channel.is_client) {
+      // Union: explicit channel members + every agency-role pipeline
+      // member (workspace seats + pipeline owners/admins/members).
+      const agencyRoles = new Set(["owner", "admin", "member"]);
+      return members.filter(
+        (m) => explicitSet.has(m.user.id) || agencyRoles.has(m.role),
+      );
+    }
+
+    // Defensive fallback: if the lookup is empty (race / pre-fetch
+    // window), surface the full roster rather than silently breaking
+    // the picker for a frame.
+    if (explicit.length === 0) return members;
+    return members.filter((m) => explicitSet.has(m.user.id));
+  }, [activeChannelId, members, data.channelMemberIdsByChannelId, data.channels]);
 
   // ── Async profile fetch for realtime cache misses ────────────────────
   // Slice 4a takes channelId explicitly so the patch targets the right

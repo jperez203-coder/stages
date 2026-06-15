@@ -98,8 +98,18 @@ export function PipelineChromeShell({
 
   return (
     <EditModeProvider canEditPipeline={chrome.canEditPipeline}>
+      {/* NF-2.3: h-screen + overflow-hidden replace NF-2.2's min-h-0
+          attempt. The root cause of NF-2.2's no-op: with min-h-screen
+          (floor, not ceiling) on this outer div, content can still
+          push the chrome past viewport — min-h-0 on a descendant only
+          lets that descendant shrink, it doesn't bound the ancestor.
+          h-screen caps the chrome to exactly viewport height;
+          overflow-hidden insures against any residual growth.
+          Sibling tabbed children (PipelineCanvas, FilesBody, etc.)
+          already clip their own contents (overflow:hidden inside);
+          this change just stops the page itself from scrolling. */}
       <div
-        className="min-h-screen flex flex-col"
+        className="h-screen overflow-hidden flex flex-col"
         style={{ background: "#212124" }}
       >
         <PipelineHeader
