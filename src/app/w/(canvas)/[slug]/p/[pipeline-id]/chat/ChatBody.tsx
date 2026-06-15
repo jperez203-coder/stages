@@ -66,6 +66,10 @@ type ChannelMessageRow = {
   author_id: string;
   text: string;
   is_internal: boolean;
+  // NF-2: present on every realtime payload (Supabase Realtime sends
+  // every column of the inserted row). May be empty array for messages
+  // without mentions; never undefined post-NF-1.
+  mentions: string[] | null;
   created_at: string;
 };
 
@@ -259,6 +263,7 @@ export function ChatBody({
         is_internal: row.is_internal,
         created_at: row.created_at,
         author: cached,
+        mentions: row.mentions ?? [],
       };
 
       setMessagesByChannel((prev) => {
@@ -381,6 +386,11 @@ export function ChatBody({
         is_internal: isInternal,
         created_at: new Date().toISOString(),
         author: viewer,
+        // NF-2: client-side, we don't know which @tokens resolved until
+        // the RPC returns. Show plain text optimistically; the reconcile
+        // below replaces with the server-resolved mentions[] (cyan
+        // styling appears ~1 frame after send completes).
+        mentions: [],
       };
 
       setMessagesByChannel((prev) => ({
@@ -450,6 +460,9 @@ export function ChatBody({
         is_internal: inserted.is_internal as boolean,
         created_at: inserted.created_at as string,
         author: viewer,
+        // NF-2: server-resolved mentions from the send_channel_message
+        // RPC return value. Drives the cyan styling at render time.
+        mentions: (inserted.mentions as string[] | null) ?? [],
       };
 
       setMessagesByChannel((prev) => {
@@ -522,6 +535,14 @@ export function ChatBody({
             messages={visibleMessages}
             viewerEmail={viewer.email ?? ""}
             onSend={sendMessage}
+            // NF-2: the authorCacheRef is seeded at mount with every
+            // pipeline member's profile (line 179) — exactly the pool
+            // the send_channel_message RPC resolved mentions against.
+            // Pass it through as the mention-lookup map. Any mention
+            // user_id not in the cache renders as plain text (rare —
+            // would require a workspace seat not on the chrome members
+            // roster).
+            mentionedProfileById={authorCacheRef.current!}
             allowInternalToggle={allowInternalToggle}
             // Slice 4a follow-up: needed to gate the per-message
             // "Internal" badge in the client channel. MessageThread

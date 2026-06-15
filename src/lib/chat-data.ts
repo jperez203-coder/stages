@@ -53,6 +53,11 @@ export type ChatMessage = {
   created_at: string;
   /** Null when the author's auth.users row was deleted (FK set null). */
   author: ChatMessageAuthor | null;
+  /** NF-2: uuid[] of resolved @mentioned users. Empty array for messages
+   *  with no mentions (or pre-NF-1 historical rows where the column was
+   *  always empty). Display-time rendering uses this to decide which
+   *  `@token` substrings get cyan styling — see chat-mention-render.tsx. */
+  mentions: string[];
 };
 
 export type PipelineChatData = {
@@ -119,12 +124,16 @@ export async function fetchPipelineChatData(
   // PostgREST nested-join forever-rule (see file header): we do NOT
   // attempt `author:profiles!inner(...)` here. Profiles join happens
   // separately in step 3 with a batched .in("id", authorIds) query.
+  // NF-2: mentions is `uuid[] not null default '{}'` on channel_messages.
+  // Selected here so display-time rendering can decide which `@token`
+  // substrings to style — see chat-mention-render.tsx.
   type RawMessageRow = {
     id: string;
     channel_id: string;
     author_id: string | null;
     text: string;
     is_internal: boolean;
+    mentions: string[] | null;
     created_at: string;
   };
 
@@ -133,7 +142,7 @@ export async function fetchPipelineChatData(
       ? supabase
           .from("channel_messages")
           .select(
-            "id, channel_id, author_id, text, is_internal, created_at",
+            "id, channel_id, author_id, text, is_internal, mentions, created_at",
           )
           .eq("channel_id", generalChannel.id)
           .order("created_at", { ascending: true })
@@ -142,7 +151,7 @@ export async function fetchPipelineChatData(
       ? supabase
           .from("channel_messages")
           .select(
-            "id, channel_id, author_id, text, is_internal, created_at",
+            "id, channel_id, author_id, text, is_internal, mentions, created_at",
           )
           .eq("channel_id", clientChannel.id)
           .order("created_at", { ascending: true })
@@ -184,6 +193,7 @@ export async function fetchPipelineChatData(
     is_internal: m.is_internal,
     created_at: m.created_at,
     author: m.author_id ? (profileById.get(m.author_id) ?? null) : null,
+    mentions: m.mentions ?? [],
   });
 
   return {

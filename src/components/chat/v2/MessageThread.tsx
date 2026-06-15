@@ -11,6 +11,10 @@ import { EyeOff } from "lucide-react";
 import { UserAvatar } from "@/components/UserAvatar";
 import { resolveDisplayName } from "@/lib/display-name";
 import type { ChatChannel, ChatMessage } from "@/lib/chat-data";
+import {
+  renderMessageWithMentions,
+  type MentionedProfile,
+} from "@/lib/chat-mention-render";
 
 /**
  * Right pane of the chat surface — channel header + message list +
@@ -79,6 +83,12 @@ type Props = {
    *  instead of "# client" for client-mode viewing. When null or
    *  undefined, default rendering applies. */
   channelHeaderLabel?: string | null;
+  /** NF-2: lookup map for the `mentions[]` user_ids on each message.
+   *  ChatBody sources this from its existing authorCacheRef, which is
+   *  pre-seeded with every pipeline member's profile at mount. A miss
+   *  on this map falls through to plain-text rendering for that one
+   *  mention — see renderMessageWithMentions. */
+  mentionedProfileById: Map<string, MentionedProfile>;
 };
 
 export function MessageThread({
@@ -89,6 +99,7 @@ export function MessageThread({
   allowInternalToggle,
   viewerIsAgencySide,
   channelHeaderLabel,
+  mentionedProfileById,
 }: Props) {
   // Channel-level gate for the per-message internal badge:
   //   * client channel ONLY — in #general the badge would be meaningless
@@ -169,6 +180,7 @@ export function MessageThread({
                   key={m.id}
                   message={m}
                   showInternalBadge={showInternalBadge}
+                  mentionedProfileById={mentionedProfileById}
                 />
               ))}
             </div>
@@ -313,12 +325,15 @@ function DateDivider({ label }: { label: string }) {
 function MessageRow({
   message,
   showInternalBadge,
+  mentionedProfileById,
 }: {
   message: ChatMessage;
   /** Channel + viewer gate from the parent. The badge only ever renders
    *  on a row when this is true AND the row's own `is_internal` flag is
    *  true — both required. */
   showInternalBadge: boolean;
+  /** NF-2: profile lookup for cyan @mention rendering. */
+  mentionedProfileById: Map<string, MentionedProfile>;
 }) {
   // Two distinct missing cases: author === null means the user record
   // is gone (FK set null on delete) → "Deleted user"; author present
@@ -420,7 +435,11 @@ function MessageRow({
             wordBreak: "break-word",
           }}
         >
-          {message.text}
+          {renderMessageWithMentions(
+            message.text,
+            message.mentions,
+            mentionedProfileById,
+          )}
         </div>
       </div>
     </article>
