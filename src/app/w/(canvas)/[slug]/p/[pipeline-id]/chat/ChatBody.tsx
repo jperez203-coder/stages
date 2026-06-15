@@ -388,16 +388,36 @@ export function ChatBody({
         [channelId]: [...(prev[channelId] ?? []), optimisticMessage],
       }));
 
-      const { data: inserted, error } = await supabase
-        .from("channel_messages")
-        .insert({
-          channel_id: channelId,
-          author_id: viewer.id,
-          text: trimmed,
-          is_internal: isInternal,
-        })
-        .select("id, channel_id, author_id, text, is_internal, created_at")
-        .single();
+      // NF-1: send via SECURITY DEFINER RPC. The RPC parses @token
+      // mentions, resolves them against the pipeline audience (workspace
+      // seats + pipeline memberships including clients), and writes
+      // channel_messages.mentions[] before insert. Direct PostgREST
+      // INSERT is no longer the write path — keeping it would mean
+      // mentions never get populated, which silences the mention
+      // notifications branch the NF-1 trigger relies on.
+      //
+      // RPC returns the whole channel_messages row (returns
+      // public.channel_messages); we read it back as a typed object
+      // — no .select()/.single() chain on rpc() in supabase-js.
+      const { data: rpcRes, error } = await supabase.rpc(
+        "send_channel_message",
+        {
+          p_channel_id: channelId,
+          p_text: trimmed,
+          p_is_internal: isInternal,
+        },
+      );
+      const inserted = rpcRes as
+        | {
+            id: string;
+            channel_id: string;
+            author_id: string | null;
+            text: string;
+            is_internal: boolean;
+            mentions: string[] | null;
+            created_at: string;
+          }
+        | null;
 
       if (error || !inserted) {
         // Log PostgrestError fields explicitly — logging the bare object
