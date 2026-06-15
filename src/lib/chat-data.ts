@@ -78,6 +78,16 @@ export type PipelineChatData = {
    *  array when clientChannel is null. Slice 4a: fetched at mount so
    *  switching is instant. */
   clientMessages: ChatMessage[];
+  /** NF-2.2: channel_memberships keyed by channel_id → set of
+   *  user_ids. Used by the @mention picker so candidates are scoped
+   *  to the ACTIVE channel, not the pipeline-wide roster. (Pipeline
+   *  has clients but the #general channel doesn't — clients shouldn't
+   *  appear in the #general picker.)
+   *
+   *  Pure read-only snapshot; no realtime subscription. New
+   *  channel members added mid-session won't appear until the chat
+   *  surface remounts, which is acceptable for v1. */
+  channelMemberIdsByChannelId: Record<string, string[]>;
 };
 
 /**
@@ -196,6 +206,30 @@ export async function fetchPipelineChatData(
     mentions: m.mentions ?? [],
   });
 
+  // ── Step 4 (NF-2.2): channel_memberships per channel ──────────────────
+  // Single batched query for every channel in the pipeline. Under the
+  // caller's JWT, RLS only returns rows for channels they can see —
+  // for clients, that's the client channel only. The picker uses
+  // this lookup so candidates are scoped to the ACTIVE channel.
+  const channelIds = channels.map((c) => c.id);
+  const channelMemberIdsByChannelId: Record<string, string[]> = {};
+  for (const id of channelIds) channelMemberIdsByChannelId[id] = [];
+
+  if (channelIds.length > 0) {
+    const channelMembershipsRes = await supabase
+      .from("channel_memberships")
+      .select("channel_id, user_id")
+      .in("channel_id", channelIds);
+
+    for (const row of (channelMembershipsRes.data ?? []) as Array<{
+      channel_id: string;
+      user_id: string;
+    }>) {
+      const bucket = channelMemberIdsByChannelId[row.channel_id];
+      if (bucket) bucket.push(row.user_id);
+    }
+  }
+
   return {
     channels,
     generalChannel,
@@ -203,5 +237,6 @@ export async function fetchPipelineChatData(
     pipelineHasClient,
     generalMessages: generalRaw.map(toChatMessage),
     clientMessages: clientRaw.map(toChatMessage),
+    channelMemberIdsByChannelId,
   };
 }

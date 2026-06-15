@@ -212,6 +212,23 @@ export function ChatBody({
     return channelMessages.filter((m) => !m.is_internal);
   }, [messagesByChannel, activeChannelId, viewerIsAgencySide]);
 
+  // NF-2.2: narrow the picker audience to the ACTIVE channel via
+  // channel_memberships. Pipeline-wide `members` is the upper bound;
+  // we intersect with the channel's member set so clients don't
+  // appear in #general (and vice-versa for any future channel split).
+  //
+  // Fallback: if the lookup hasn't loaded a row for the active channel
+  // yet (shouldn't happen post-fetch but defensive), fall back to the
+  // full roster — better to over-show than to silently break the
+  // picker mid-mount.
+  const mentionablePeopleForActiveChannel = useMemo(() => {
+    if (!activeChannelId) return members;
+    const allowed = data.channelMemberIdsByChannelId[activeChannelId];
+    if (!allowed || allowed.length === 0) return members;
+    const allowedSet = new Set(allowed);
+    return members.filter((m) => allowedSet.has(m.user.id));
+  }, [activeChannelId, members, data.channelMemberIdsByChannelId]);
+
   // ── Async profile fetch for realtime cache misses ────────────────────
   // Slice 4a takes channelId explicitly so the patch targets the right
   // bucket (previously a flat array; now we need to know which channel's
@@ -543,10 +560,13 @@ export function ChatBody({
             // would require a workspace seat not on the chrome members
             // roster).
             mentionedProfileById={authorCacheRef.current!}
-            // NF-2.1: ChromeMember[] feeds the autocomplete picker;
-            // viewerId drops self from candidates. Same source the
-            // send_channel_message RPC resolves against.
-            mentionablePeople={members}
+            // NF-2.1 → NF-2.2: picker audience is now scoped to the
+            // ACTIVE channel via channel_memberships, not the pipeline-
+            // wide roster. Prevents clients from showing up in the
+            // #general picker (they have no channel_memberships row
+            // there). Falls back to the full roster if the lookup
+            // hasn't loaded a row for the channel yet.
+            mentionablePeople={mentionablePeopleForActiveChannel}
             viewerId={viewer.id}
             allowInternalToggle={allowInternalToggle}
             // Slice 4a follow-up: needed to gate the per-message

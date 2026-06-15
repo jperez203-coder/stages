@@ -121,7 +121,14 @@ export function PipelineChromeShell({
             isWorkspaceOwnerOrAdmin={chrome.isWorkspaceOwnerOrAdmin}
             workspaceType={workspaceType}
           />
-          <div className="flex-1 flex flex-col min-w-0 relative">
+          {/* NF-2.2: `min-h-0` is mandatory on a flex-col child that
+              hosts an internally-scrolling page (the chat surface in
+              particular). Without it, ChatLayout's flex:1 children
+              overflow this column, the overflow leaks to the page,
+              and scrolling the messages list scrolls the LeftRail +
+              ChatSidebar with it. min-w-0 already shipped for
+              horizontal containment; this is its vertical sibling. */}
+          <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
             {children}
           </div>
         </div>
