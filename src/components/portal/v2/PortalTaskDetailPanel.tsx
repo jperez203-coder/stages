@@ -5,6 +5,7 @@ import { Check, X } from "lucide-react";
 import type { VisibleTask } from "@/lib/portal-canvas-data";
 import { PortalChecklistSection } from "./PortalChecklistSection";
 import { PortalTaskAttachmentsSection } from "./PortalTaskAttachmentsSection";
+import { TaskNotesSection } from "@/components/tasks/TaskNotesSection";
 
 /**
  * Slim, client-mode task detail panel for the portal canvas.
@@ -330,6 +331,31 @@ export function PortalTaskDetailPanel({
               RLS already permits client inserts (client_visible forced
               true). No visibility toggle; delete is own-rows-only. */}
           <PortalTaskAttachmentsSection taskId={task.id} />
+
+          {/* Notes — TN-1. Shared with agency canvas. Clients can post
+              + delete their own notes; the create_task_note RPC re-
+              checks portal-side visibility (task.client_visible AND
+              parent stage.client_visible). viewerIsWorkspaceAdmin
+              always false on portal — clients are never workspace
+              admins by definition. */}
+          <section>
+            <h3
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                color: "rgba(255,255,255,0.5)",
+                textTransform: "uppercase",
+                letterSpacing: 0.6,
+                margin: "0 0 8px",
+              }}
+            >
+              Notes
+            </h3>
+            <TaskNotesSection
+              taskId={task.id}
+              viewerIsWorkspaceAdmin={false}
+            />
+          </section>
         </div>
       </aside>
     </>

@@ -24,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import { UserAvatar } from "@/components/UserAvatar";
+import { TaskNotesSection } from "@/components/tasks/TaskNotesSection";
 import { DatePickerPopover } from "@/components/my-tasks/DatePickerPopover";
 import { AddLinkModal } from "@/components/files/AddLinkModal";
 import { FilePreview } from "@/components/files/FilePreview";
@@ -595,6 +596,20 @@ export function TaskDetailPanel({
               taskId={task.id}
               canEdit={canEditPipeline}
               viewerId={currentUserId}
+            />
+          </PanelSection>
+
+          {/* Notes — TN-1. Task-scoped multi-author notes. RPC-gated:
+              agency members + clients (on visible tasks) can post; the
+              author + workspace owners/admins can delete. viewerIs-
+              WorkspaceAdmin is conservatively false here — canEdit-
+              Pipeline includes pipeline-scoped admins who the RPC will
+              reject for non-author deletes. Threading the precise
+              workspace-role signal is on WISHLIST. */}
+          <PanelSection label="Notes">
+            <TaskNotesSection
+              taskId={task.id}
+              viewerIsWorkspaceAdmin={false}
             />
           </PanelSection>
 
