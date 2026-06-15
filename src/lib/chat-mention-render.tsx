@@ -54,17 +54,58 @@ function normalizeToken(raw: string): string {
   return raw.toLowerCase();
 }
 
+/**
+ * NF-2.1: identifiers a profile is mentionable by. Exported for the
+ * composer's autocomplete picker so the picker's filter rule and the
+ * render-time match rule stay aligned.
+ *
+ * Output: a small array (1-2 entries) of normalized strings, both
+ * lowercased: the email-local-part and the spaceless display_name.
+ * Either entry is a valid @-token the picker can present + the RPC
+ * can resolve.
+ *
+ * If a profile has both display_name "Aliyah Lee" and email
+ * "aliyah@acme.com", the array is ["aliyah", "aliyahlee"].
+ */
+export function normalizedIdentifiersFor(
+  profile: { display_name: string | null; email: string | null },
+): string[] {
+  const out: string[] = [];
+  if (profile.email) {
+    const local = profile.email.split("@")[0]?.toLowerCase();
+    if (local) out.push(local);
+  }
+  if (profile.display_name) {
+    const spaceless = profile.display_name.replace(/\s+/g, "").toLowerCase();
+    if (spaceless) out.push(spaceless);
+  }
+  return out;
+}
+
+/**
+ * The single canonical token to insert when a picker row is selected.
+ * Prefers the spaceless display_name (reads better, "@aliyahlee" over
+ * "@aliyah") and falls back to the email-local-part. Returns null if
+ * neither is available — caller should hide the row in that case.
+ */
+export function pickInsertableMentionToken(
+  profile: { display_name: string | null; email: string | null },
+): string | null {
+  if (profile.display_name) {
+    const spaceless = profile.display_name.replace(/\s+/g, "").toLowerCase();
+    if (spaceless) return spaceless;
+  }
+  if (profile.email) {
+    const local = profile.email.split("@")[0]?.toLowerCase();
+    if (local) return local;
+  }
+  return null;
+}
+
 function buildIdentifierSet(profiles: MentionedProfile[]): Set<string> {
   const set = new Set<string>();
   for (const p of profiles) {
-    if (p.email) {
-      const local = p.email.split("@")[0]?.toLowerCase();
-      if (local) set.add(local);
-    }
-    if (p.display_name) {
-      const spaceless = p.display_name.replace(/\s+/g, "").toLowerCase();
-      if (spaceless) set.add(spaceless);
-    }
+    for (const id of normalizedIdentifiersFor(p)) set.add(id);
   }
   return set;
 }

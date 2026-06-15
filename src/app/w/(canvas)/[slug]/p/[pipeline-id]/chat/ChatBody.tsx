@@ -543,6 +543,11 @@ export function ChatBody({
             // would require a workspace seat not on the chrome members
             // roster).
             mentionedProfileById={authorCacheRef.current!}
+            // NF-2.1: ChromeMember[] feeds the autocomplete picker;
+            // viewerId drops self from candidates. Same source the
+            // send_channel_message RPC resolves against.
+            mentionablePeople={members}
+            viewerId={viewer.id}
             allowInternalToggle={allowInternalToggle}
             // Slice 4a follow-up: needed to gate the per-message
             // "Internal" badge in the client channel. MessageThread

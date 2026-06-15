@@ -11,10 +11,19 @@ import { EyeOff } from "lucide-react";
 import { UserAvatar } from "@/components/UserAvatar";
 import { resolveDisplayName } from "@/lib/display-name";
 import type { ChatChannel, ChatMessage } from "@/lib/chat-data";
+import type { ChromeMember } from "@/lib/canvas-chrome-data";
 import {
   renderMessageWithMentions,
+  normalizedIdentifiersFor,
+  pickInsertableMentionToken,
   type MentionedProfile,
 } from "@/lib/chat-mention-render";
+import {
+  MentionPicker,
+  detectActiveMentionToken,
+  buildMentionCandidates,
+  type MentionCandidate,
+} from "./MentionPicker";
 
 /**
  * Right pane of the chat surface — channel header + message list +
@@ -89,6 +98,14 @@ type Props = {
    *  on this map falls through to plain-text rendering for that one
    *  mention — see renderMessageWithMentions. */
   mentionedProfileById: Map<string, MentionedProfile>;
+  /** NF-2.1: audience pool the @mention picker offers in autocomplete.
+   *  Same source the send_channel_message RPC resolves against
+   *  (workspace seats + pipeline memberships). ChatBody passes the
+   *  ChromeMember[] from canvas-chrome-data. */
+  mentionablePeople: ChromeMember[];
+  /** NF-2.1: the viewer's auth.users.id. Used to drop self from the
+   *  picker — no self-mention via autocomplete. */
+  viewerId: string;
 };
 
 export function MessageThread({
@@ -100,6 +117,8 @@ export function MessageThread({
   viewerIsAgencySide,
   channelHeaderLabel,
   mentionedProfileById,
+  mentionablePeople,
+  viewerId,
 }: Props) {
   // Channel-level gate for the per-message internal badge:
   //   * client channel ONLY — in #general the badge would be meaningless
@@ -193,6 +212,8 @@ export function MessageThread({
         viewerEmail={viewerEmail}
         onSend={onSend}
         allowInternalToggle={allowInternalToggle}
+        mentionablePeople={mentionablePeople}
+        viewerId={viewerId}
       />
     </section>
   );
@@ -473,11 +494,15 @@ function Composer({
   viewerEmail,
   onSend,
   allowInternalToggle,
+  mentionablePeople,
+  viewerId,
 }: {
   channelName: string;
   viewerEmail: string;
   onSend: (text: string, isInternal: boolean) => Promise<boolean>;
   allowInternalToggle: boolean;
+  mentionablePeople: ChromeMember[];
+  viewerId: string;
 }) {
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -486,6 +511,29 @@ function Composer({
   // the value is moot (gated to false at the call site).
   const [isInternal, setIsInternal] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // NF-2.1: @mention picker state. activeMention tracks the @-token
+  // the cursor is currently inside (null when no active token).
+  // highlightedIdx is the keyboard-navigable selection.
+  const [activeMention, setActiveMention] = useState<{
+    startIndex: number;
+    partial: string;
+  } | null>(null);
+  const [highlightedIdx, setHighlightedIdx] = useState(0);
+
+  // Re-derive candidates whenever text/mention state changes. Cheap
+  // enough to do inline; memoization can come later if pipelines get
+  // huge rosters (flagged for later, not pre-optimized).
+  const candidates: MentionCandidate[] = activeMention
+    ? buildMentionCandidates(
+        mentionablePeople,
+        activeMention.partial,
+        viewerId,
+        pickInsertableMentionToken,
+        normalizedIdentifiersFor,
+      )
+    : [];
+  const pickerOpen = activeMention !== null && candidates.length > 0;
 
   // True when the amber visual signal should render (toggle is on AND
   // gating allows it). Defensive belt-and-suspenders against any future
@@ -521,7 +569,84 @@ function Composer({
     }
   }, [text, onSend, allowInternalToggle, isInternal]);
 
+  // NF-2.1: redetect the active @-token at the current cursor on
+  // every text/cursor change. Called from onChange and onSelect (the
+  // latter catches arrow-key cursor moves without typing).
+  const redetectMention = useCallback(
+    (nextText: string, cursor: number) => {
+      const detected = detectActiveMentionToken(nextText, cursor);
+      // Reset highlight when transitioning closed → open or the
+      // partial changes (a new partial may produce a totally
+      // different candidate set).
+      setActiveMention((prev) => {
+        if (!detected) return null;
+        if (!prev || prev.partial !== detected.partial) {
+          setHighlightedIdx(0);
+        }
+        return detected;
+      });
+    },
+    [],
+  );
+
+  // NF-2.1: insert the picked candidate's canonical token at the @-
+  // partial position, append a trailing space, and move the cursor to
+  // after the space.
+  const applyMention = useCallback(
+    (cand: MentionCandidate) => {
+      if (!activeMention) return;
+      const ta = textareaRef.current;
+      if (!ta) return;
+
+      const cursor = ta.selectionStart ?? text.length;
+      const before = text.slice(0, activeMention.startIndex);
+      const after = text.slice(cursor);
+      const insertion = `@${cand.token} `;
+      const nextText = before + insertion + after;
+      setText(nextText);
+      setActiveMention(null);
+      setHighlightedIdx(0);
+
+      // Restore cursor + focus after React applies the value change.
+      const nextCursor = before.length + insertion.length;
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(nextCursor, nextCursor);
+      });
+    },
+    [activeMention, text],
+  );
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // NF-2.1: when the picker is open, intercept navigation +
+    // selection keys before the Enter→submit branch fires. Sending a
+    // message while picking would lose the user's in-flight selection.
+    if (pickerOpen) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setHighlightedIdx((i) => Math.min(i + 1, candidates.length - 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setHighlightedIdx((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        const chosen = candidates[highlightedIdx];
+        if (chosen) applyMention(chosen);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setActiveMention(null);
+        return;
+      }
+    }
+
     // Enter (without Shift) → submit.
     // Shift+Enter → default textarea behavior (insert a newline).
     if (e.key === "Enter" && !e.shiftKey) {
@@ -543,6 +668,18 @@ function Composer({
         gap: 6,
       }}
     >
+      {/* NF-2.1: @mention autocomplete picker. Anchored above the
+          entire composer via bottom: 100% + offset. Hides when no
+          active mention OR zero matches. */}
+      {pickerOpen && (
+        <MentionPicker
+          candidates={candidates}
+          highlightedIndex={highlightedIdx}
+          onHover={setHighlightedIdx}
+          onSelect={applyMention}
+        />
+      )}
+
       {/* Slice 4a: Internal-note toggle chip. Renders only when
           allowInternalToggle is true (the active channel is the client
           channel AND the viewer is agency-side). OFF = subtle outline;
@@ -610,8 +747,25 @@ function Composer({
           rows={1}
           value={text}
           onChange={(e) => {
-            setText(e.target.value);
+            const next = e.target.value;
+            setText(next);
             if (error) setError(null);
+            // NF-2.1: redetect on every keystroke. selectionStart is
+            // already the post-input position when onChange fires.
+            redetectMention(next, e.target.selectionStart ?? next.length);
+          }}
+          onSelect={(e) => {
+            // NF-2.1: arrow-key cursor moves don't fire onChange, but
+            // they DO move us in/out of an @-token. Redetect on every
+            // selection change.
+            const ta = e.currentTarget;
+            redetectMention(ta.value, ta.selectionStart ?? ta.value.length);
+          }}
+          onBlur={() => {
+            // NF-2.1: close the picker on blur. The MentionPicker's
+            // row uses onMouseDown (preventDefault) to fire selection
+            // BEFORE blur, so click-to-select still works.
+            setActiveMention(null);
           }}
           onKeyDown={onKeyDown}
           placeholder={`Message #${channelName}…`}
