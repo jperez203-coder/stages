@@ -1218,6 +1218,16 @@ Five deferred items surfaced during the PI-1 → PI-7 pipeline-invite sprint. No
 
 ---
 
+### NF-2.4 follow-ups
+
+Two cleanup items unlocked by the channel-membership symmetry fix.
+
+- **Simplify the NF-2.3 picker UI union after NF-2.4 verifies in prod.** `ChatBody.tsx`'s `mentionablePeopleForActiveChannel` currently branches on `channel.is_client` and UNIONs `channel_memberships` with every agency-role pipeline member for client channels. That branch was a UI band-aid for the seed-trigger asymmetry. Once NF-2.4 lands and the backfill is verified (every agency pipeline_memberships user now has a `channel_memberships` row for every channel on the pipeline), the union is redundant — `channel_memberships` alone is canonical for both channel types. Collapse the branch back to the pre-NF-2.3 shape: `members.filter(m => allowedSet.has(m.user.id))`. Low-risk simplification, one block of code, ~15 lines removed.
+
+- **Parallel gap: no AFTER INSERT trigger on `public.channels`.** Today every channel is created inside `create_pipeline_with_channels`, which manually inserts `channel_memberships` for the pipeline creator only — and now (post-NF-2.4) the seed-on-pipeline-membership-INSERT trigger covers everyone else for THAT moment. But there's no equivalent for the inverse direction: if/when an "add channel later" UI/RPC ships (a per-pipeline "+ New channel" affordance), existing pipeline members would miss `channel_memberships` rows for the new channel and silently lose access to it. Fix at that time: either bake the seed-everyone INSERT into the new "add channel" RPC, or add an `AFTER INSERT ON public.channels` trigger that mirrors `seed_channel_memberships_on_pipeline_join` from the channel's side. Pure forward gap — no broken behavior today.
+
+---
+
 ## v1.1 wishlist
 
 Items intentionally **deferred from MVP** to v1.1. The discipline is to ship the prototype's feature set unchanged, then let real customer signal shape v1.1. Don't act on anything in this list without explicit go-ahead from the founder.
