@@ -18,8 +18,12 @@ import { UserAvatar, type AvatarUser } from "@/components/UserAvatar";
  * member-avatar cluster intercepts clicks to open its popover instead of
  * navigating.
  *
- * The "unread" red dot uses the 7-day activity proxy passed in via the
- * unreadCount prop. Heuristic — see page.tsx for the limitations.
+ * The "unread" red dot now reflects real notification read-state
+ * (NF-4): count of notifications.read_at IS NULL rows scoped to this
+ * pipeline + the caller. Replaces the prior 7-day activity_events
+ * proxy. Dot disappears the moment the caller marks the notifications
+ * read — via the activity page, the dashboard preview row, or the
+ * chat surface (NF-3.2 deep-link).
  */
 
 export type PipelineMember = {

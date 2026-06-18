@@ -38,8 +38,10 @@ import type { StageState } from "@/lib/current-stage";
  *     and the My Tasks card
  *   * pipeline_memberships + profiles join — for the member cluster on
  *     each pipeline card (single query, no N+1)
- *   * activity_events — top 5 for the Activity card + 7-day proxy for
- *     per-pipeline unread red dots
+ *   * notifications — top 5 for the Activity card (NF-5) AND unread
+ *     row list for per-pipeline red-dot indicators (NF-4). Previously
+ *     both consumed activity_events (mention-less placeholder + 7-day
+ *     proxy); now both use real notification read-state.
  *
  * Per-card error states: each card receives its own error prop; if one
  * query fails, the rest of the dashboard still renders. No top-level
@@ -175,14 +177,6 @@ export default async function WorkspaceDashboardPage({
   // second-pass filter. Per-query failure is captured in per-card error
   // props rather than crashing the page.
   //
-  // Date.now() in a server component is fine — this is an async function
-  // that runs once per request, not a client component subject to
-  // re-render rules. react-hooks/purity is overly aggressive here.
-  const sevenDaysAgoIso = new Date(
-    // eslint-disable-next-line react-hooks/purity
-    Date.now() - 7 * 24 * 60 * 60 * 1000,
-  ).toISOString();
-
   const [
     profileRes,
     pipelinesRes,
@@ -191,7 +185,7 @@ export default async function WorkspaceDashboardPage({
     myTasksRes,
     membershipsRes,
     activityRes,
-    recentActivityRes,
+    pipelineUnreadRes,
     billingRes,
   ] = await Promise.all([
     supabase
@@ -279,17 +273,29 @@ export default async function WorkspaceDashboardPage({
       .order("created_at", { ascending: false })
       .limit(5),
 
-    // Per-pipeline unread proxy: count of activity events in the last
-    // 7 days where the user wasn't the actor. Coarse heuristic — false
-    // positives if the user viewed the pipeline already, false negatives
-    // if they were offline 8+ days. Documented in spec; revisit with a
-    // profiles.last_dashboard_seen_at column if it becomes painful.
+    // NF-4: per-pipeline unread indicator — now sourced from the
+    // notifications table (NF-1) instead of the prototype 7-day
+    // activity_events proxy. Real read-state semantics: the dot fires
+    // only when the caller has unread notifications scoped to that
+    // pipeline, and disappears the moment they mark them read (whether
+    // via the activity page's per-item click, the Mark all read button,
+    // or the dashboard preview's row click).
+    //
+    // Self-exclusion is implicit: NF-1's trigger never creates rows
+    // where recipient_id = actor_id (client_message fan-out skips the
+    // actor; mention fan-out skips self-mentions). So no `.neq` filter
+    // needed here.
+    //
+    // recipient_id RLS already constrains to auth.uid(); the explicit
+    // .eq below is belt-and-suspenders + lines up with
+    // notifications_recipient_pipeline_unread_idx (the partial index
+    // on read_at IS NULL).
     supabase
-      .from("activity_events")
-      .select(`pipeline_id, pipeline:pipelines!inner(workspace_id)`)
-      .eq("pipeline.workspace_id", ws.id)
-      .neq("actor_id", user.id)
-      .gte("created_at", sevenDaysAgoIso),
+      .from("notifications")
+      .select("pipeline_id")
+      .eq("recipient_id", user.id)
+      .eq("workspace_id", ws.id)
+      .is("read_at", null),
 
     // Workspace billing status — drives the StartTrialBanner AND
     // FoundingTrialEndingBanner mount decisions below. RLS lets owner +
@@ -411,7 +417,20 @@ export default async function WorkspaceDashboardPage({
   const stages = stagesRes.data ?? [];
   const workspaceTasks = workspaceTasksRes.data ?? [];
   const memberships = membershipsRes.data ?? [];
-  const recentActivity = recentActivityRes.data ?? [];
+  const pipelineUnreadRows = pipelineUnreadRes.data ?? [];
+  if (pipelineUnreadRes.error) {
+    const err = pipelineUnreadRes.error;
+    console.error(
+      "[dashboard/pipeline-unread] notifications fetch failed:",
+      err.message,
+      "code:",
+      err.code,
+      "details:",
+      err.details,
+      "hint:",
+      err.hint,
+    );
+  }
 
   const stageToPipeline = new Map<string, string>();
   for (const s of stages) stageToPipeline.set(s.id, s.pipeline_id);
@@ -449,13 +468,16 @@ export default async function WorkspaceDashboardPage({
     list.sort((a, b) => a.position - b.position);
   }
 
-  // Unread counts (7-day proxy).
+  // NF-4: per-pipeline unread counts from notifications. Each row in
+  // pipelineUnreadRows represents one unread notification addressed to
+  // the caller scoped to a pipeline in this workspace. Tally client-
+  // side — PostgREST doesn't expose GROUP BY, but the partial index
+  // notifications_recipient_pipeline_unread_idx keeps the count
+  // bounded so the row-list is cheap to iterate.
   const unreadCountByPipeline = new Map<string, number>();
-  for (const r of recentActivity) {
-    unreadCountByPipeline.set(
-      r.pipeline_id,
-      (unreadCountByPipeline.get(r.pipeline_id) ?? 0) + 1,
-    );
+  for (const r of pipelineUnreadRows) {
+    const pid = r.pipeline_id as string;
+    unreadCountByPipeline.set(pid, (unreadCountByPipeline.get(pid) ?? 0) + 1);
   }
 
   // Members per pipeline, agency before clients, joined_at asc within group.
