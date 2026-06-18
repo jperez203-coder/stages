@@ -1,37 +1,49 @@
 "use client";
 
-// next/link import removed alongside the "See all activity →" footer
-// (2026-05-26). Re-add when /w/[slug]/activity ships.
+import { useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AlertCircle } from "lucide-react";
 import { UserAvatar, type AvatarUser } from "@/components/UserAvatar";
+import { supabase } from "@/lib/supabase";
 
 /**
- * Activity card on the workspace dashboard. Phase 4a step 2.
+ * Activity card on the workspace dashboard.
  *
- * Renders up to 5 events from activity_events filtered to the four types
- * we can render with the current schema (member_joined, stage_advanced,
- * pipeline_submitted, pipeline_created). Mentions, replies, assignments,
- * and completions are NOT here — they need writer triggers + schema
- * expansion that arrive in 4b.
+ * NF-5: data source swapped from the prototype `activity_events` table
+ * (member_joined / stage_advanced / pipeline_submitted / pipeline_created
+ * — pipeline-feed events) to the per-user `notifications` table from
+ * NF-1 (mention + client_message — inbox events). The dashboard now
+ * surfaces the same event stream the workspace activity page renders,
+ * trimmed to the 5 most recent.
  *
- * Subtitle is "Recent updates from your team" (NOT "Recent mentions and
- * reminders") because we don't surface mentions yet; don't promise what
- * we can't deliver. Mentions copy returns in 4b once the data does.
+ * Each row click navigates to the chat surface with deep-link query
+ * params (NF-3.2): ?channel=...&message=... — ChatBody scrolls the
+ * message into view and the row optimistically marks itself read via
+ * the mark_notification_read RPC.
+ *
+ * "See all activity →" footer link re-added (removed 2026-05-26 when
+ * /w/[slug]/activity didn't exist; landed in NF-3). Points at the
+ * workspace activity page; same visual styling as the MyTasksCard
+ * "See all N →" link.
+ *
+ * NOTE: the prototype activity_events table is still being read at
+ * /w/[slug]/page.tsx for the per-pipeline 7-day red-dot proxy (lines
+ * ~285). NF-5 didn't touch that consumer; cleanup tracked separately.
  */
 
 type ActivityEvent = {
   id: string;
-  type:
-    | "member_joined"
-    | "stage_advanced"
-    | "pipeline_submitted"
-    | "pipeline_created";
-  actorId: string | null;
-  actorName: string;
+  kind: "mention" | "client_message";
+  read: boolean;
   actorUser: AvatarUser;
-  stageName: string | null;
+  actorName: string;
   pipelineId: string;
-  pipelineName: string;
+  channelId: string;
+  channelName: string;
+  channelIsClient: boolean;
+  messageId: string;
+  messageText: string;
   createdAt: string;
 };
 
@@ -41,36 +53,40 @@ type Props = {
   error: string | null;
 };
 
-const TIMESTAMP_FMT = new Intl.DateTimeFormat("en-US", {
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-});
-
-function formatContent(e: ActivityEvent): string {
-  switch (e.type) {
-    case "member_joined":
-      return `${e.actorName} joined ${e.pipelineName}`;
-    case "stage_advanced":
-      return `${e.actorName} moved ${e.pipelineName} to ${
-        e.stageName ?? "the next stage"
-      }`;
-    case "pipeline_submitted":
-      return `${e.actorName} marked ${e.pipelineName} as complete`;
-    case "pipeline_created":
-      return `${e.actorName} created ${e.pipelineName}`;
-  }
-}
-
-// workspaceSlug is currently unused inside the component (the "See all
-// activity →" footer that consumed it was removed 2026-05-26 — full
-// activity view is deferred-not-built; see comment near the former
-// footer location). Keeping the prop on Props so the page.tsx call
-// site stays untouched and the link can be re-added in one place when
-// /w/[slug]/activity ships.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function ActivityCard({ workspaceSlug, events, error }: Props) {
+  const router = useRouter();
+  // Optimistic local copy so a row click can flip read state immediately.
+  const [localEvents, setLocalEvents] = useState<ActivityEvent[]>(events);
+
+  const onRowClick = (event: ActivityEvent) => {
+    const href =
+      `/w/${workspaceSlug}/p/${event.pipelineId}/chat` +
+      `?channel=${event.channelId}&message=${event.messageId}`;
+
+    // Optimistic mark-read; revert on RPC failure.
+    if (!event.read) {
+      const before = localEvents;
+      setLocalEvents((prev) =>
+        prev.map((e) => (e.id === event.id ? { ...e, read: true } : e)),
+      );
+      void supabase
+        .rpc("mark_notification_read", { p_event_id: event.id })
+        .then(({ error: rpcError }) => {
+          if (rpcError) {
+            console.error(
+              "[dashboard/activity] mark_notification_read failed:",
+              rpcError.message,
+              "code:",
+              rpcError.code,
+            );
+            setLocalEvents(before);
+          }
+        });
+    }
+
+    router.push(href);
+  };
+
   return (
     <div
       className="rounded-2xl flex flex-col"
@@ -114,11 +130,10 @@ export function ActivityCard({ workspaceSlug, events, error }: Props) {
             <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
             <span>Couldn&apos;t load activity — refresh to try again.</span>
           </div>
-        ) : events.length === 0 ? (
+        ) : localEvents.length === 0 ? (
           // Empty state: vertical-center the emoji + copy. 🔕 (bell with
           // slash) matches the figma reference — visually echoes the
           // header bell while signaling "no notifications right now."
-          // 48px emoji + 16px gap, same proportions as MyTasksCard.
           <div className="flex-1 flex flex-col items-center justify-center text-center px-4">
             <span
               aria-hidden
@@ -135,28 +150,13 @@ export function ActivityCard({ workspaceSlug, events, error }: Props) {
           </div>
         ) : (
           <ul className="space-y-0">
-            {events.map((event) => (
+            {localEvents.map((event) => (
               <li key={event.id}>
                 <button
                   type="button"
-                  onClick={() => {
-                    console.log(
-                      "[step 2 stub] activity row clicked. routing arrives in step 4/5/4b.",
-                      {
-                        eventId: event.id,
-                        eventType: event.type,
-                        source: "dashboard_activity",
-                      },
-                    );
-                  }}
+                  onClick={() => onRowClick(event)}
                   className="w-full flex items-center gap-3 transition-colors text-left"
                   style={{
-                    // Hover pill matches MyTasksCard task rows (negative
-                    // horizontal margin + internal padding pattern). Extra
-                    // 8px on the left padding (20 vs 12) so the 32px row
-                    // avatar's CENTER lines up with the 48px bell box's
-                    // center in the header above — without the bump, the
-                    // smaller avatar looks visually offset-left.
                     padding: "12px 12px 12px 20px",
                     margin: "0 -12px",
                     borderRadius: 10,
@@ -178,20 +178,61 @@ export function ActivityCard({ workspaceSlug, events, error }: Props) {
                       <span className="text-[14px] font-medium text-white truncate">
                         {event.actorName}
                       </span>
+                      {event.kind === "client_message" && (
+                        <span
+                          style={{
+                            fontSize: 10,
+                            fontWeight: 600,
+                            color: "#22D3EE",
+                            background: "rgba(34,211,238,0.10)",
+                            padding: "2px 6px",
+                            borderRadius: 4,
+                            textTransform: "uppercase",
+                            letterSpacing: 0.4,
+                            flexShrink: 0,
+                          }}
+                        >
+                          Client
+                        </span>
+                      )}
                       <span
                         className="text-[13px] flex-shrink-0"
                         style={{ color: "rgba(255,255,255,0.4)" }}
                       >
-                        {TIMESTAMP_FMT.format(new Date(event.createdAt))}
+                        {formatRelative(event.createdAt)}
                       </span>
                     </span>
                     <span
-                      className="block text-[14px] truncate mt-0.5"
-                      style={{ color: "rgba(255,255,255,0.85)" }}
+                      className="block text-[13px] truncate mt-0.5"
+                      style={{ color: "rgba(255,255,255,0.7)" }}
                     >
-                      {formatContent(event)}
+                      {event.kind === "mention"
+                        ? "mentioned you in"
+                        : "sent a message in"}{" "}
+                      <span style={{ color: "#22D3EE", fontWeight: 600 }}>
+                        #{event.channelName}
+                      </span>
+                      {event.messageText ? (
+                        <span style={{ color: "rgba(255,255,255,0.45)" }}>
+                          {" · "}
+                          {event.messageText}
+                        </span>
+                      ) : null}
                     </span>
                   </span>
+                  {!event.read && (
+                    <span
+                      aria-label="Unread"
+                      style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: "50%",
+                        background: "#F43F5E",
+                        display: "inline-block",
+                        flexShrink: 0,
+                      }}
+                    />
+                  )}
                 </button>
               </li>
             ))}
@@ -199,27 +240,44 @@ export function ActivityCard({ workspaceSlug, events, error }: Props) {
         )}
       </div>
 
-      {/* "See all activity →" footer link REMOVED 2026-05-26 — the
-          /w/[slug]/activity full-view route was never built and the
-          link 404'd. Same posture as the Team chat strip removal:
-          hide deferred-not-built surfaces rather than show broken
-          promises. The 5-most-recent feed above is fully functional.
-          To re-add when /w/[slug]/activity ships:
-            1. Re-import `Link from "next/link"` at the top of this file.
-            2. Restore the footer block here, using the workspaceSlug
-               prop (still in Props, still passed by page.tsx — see
-               comment above the component definition):
-                 <div className="mt-4 pt-4"
-                      style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-                   <Link href={`/w/${workspaceSlug}/activity`}
-                         className="text-[14px] font-medium"
-                         style={{ color: events.length > 0 ? "#7FA7D9" : "#979393" }}>
-                     See all activity →
-                   </Link>
-                 </div>
-            3. Remove the eslint-disable on the destructure line.
-          Nothing else (events query, RLS, ActivityCard renderer) needs
-          to change. */}
+      {/* NF-5: "See all activity →" footer restored. Mirrors the
+          MyTasksCard "See all N →" footer style for visual consistency.
+          Active link color when there's anything to drill into, muted
+          when the list is empty (still clickable, the activity page
+          renders its own empty state). */}
+      <div
+        className="mt-4 pt-4"
+        style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}
+      >
+        <Link
+          href={`/w/${workspaceSlug}/activity`}
+          className="text-[14px] font-medium"
+          style={{
+            color: localEvents.length > 0 ? "#7FA7D9" : "#979393",
+          }}
+        >
+          See all activity →
+        </Link>
+      </div>
     </div>
   );
+}
+
+function formatRelative(iso: string): string {
+  const then = new Date(iso).getTime();
+  const now = Date.now();
+  const seconds = Math.max(0, Math.floor((now - then) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 5) return `${weeks}w ago`;
+  return new Date(iso).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
 }

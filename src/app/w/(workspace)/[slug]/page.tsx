@@ -256,23 +256,26 @@ export default async function WorkspaceDashboardPage({
       )
       .eq("pipeline.workspace_id", ws.id),
 
-    // Activity feed: top 5 cross-pipeline events filtered to the 4 types
-    // we can render with current schema (mentions/assignments are 4b).
-    // actor_id != current user excludes self-actions.
+    // NF-5: Activity feed swapped from prototype activity_events to the
+    // per-user notifications table (NF-1). Top 5 events directed at the
+    // caller in this workspace, newest first. RLS already scopes to
+    // recipient_id = auth.uid(); we add workspace_id for clarity +
+    // index alignment with notifications_recipient_created_idx.
+    //
+    // No PostgREST embeds — NF-3.1 lesson: notifications.actor_id FKs to
+    // auth.users(id), not profiles(id); embedding profiles!actor_id
+    // could fail with PGRST20x relationship-ambiguity and nuke the
+    // whole select. All joined data (actor profile, pipeline name,
+    // message text + channel) is fetched in follow-up batched IN(...)
+    // queries below.
     supabase
-      .from("activity_events")
+      .from("notifications")
       .select(
-        `id, type, actor_id, actor_name, stage_name, pipeline_id, created_at,
-         pipeline:pipelines!inner(id, name, workspace_id)`,
+        `id, kind, source_kind, source_id, read_at, created_at,
+         actor_id, pipeline_id`,
       )
-      .eq("pipeline.workspace_id", ws.id)
-      .neq("actor_id", user.id)
-      .in("type", [
-        "member_joined",
-        "stage_advanced",
-        "pipeline_submitted",
-        "pipeline_created",
-      ])
+      .eq("recipient_id", user.id)
+      .eq("workspace_id", ws.id)
       .order("created_at", { ascending: false })
       .limit(5),
 
@@ -306,6 +309,70 @@ export default async function WorkspaceDashboardPage({
       .eq("workspace_id", ws.id)
       .maybeSingle(),
   ]);
+
+  // ── NF-5: resolve source channel_messages for the notifications feed ──
+  // Embeds channels (FK is explicit + RLS-safe). Same pattern as NF-3.1
+  // on /w/[slug]/activity.
+  const sourceMessageIds = (activityRes.data ?? [])
+    .filter((n) => n.source_kind === "channel_message")
+    .map((n) => n.source_id as string);
+
+  type ChannelMessageRow = {
+    id: string;
+    text: string;
+    channel:
+      | { id: string; name: string; is_client: boolean }
+      | Array<{ id: string; name: string; is_client: boolean }>;
+  };
+
+  const sourceMessagesResult = sourceMessageIds.length
+    ? await supabase
+        .from("channel_messages")
+        .select(
+          `id, text,
+           channel:channels!channel_id(id, name, is_client)`,
+        )
+        .in("id", sourceMessageIds)
+    : { data: [], error: null };
+
+  if (sourceMessagesResult.error) {
+    // NF-3.1 lesson: log PostgrestError fields explicitly — bare
+    // console.error(err) serializes to `{}`.
+    const err = sourceMessagesResult.error;
+    console.error(
+      "[dashboard/activity] source messages fetch failed:",
+      err.message,
+      "code:",
+      err.code,
+      "details:",
+      err.details,
+      "hint:",
+      err.hint,
+    );
+  }
+
+  const sourceMessagesById = new Map<
+    string,
+    {
+      text: string;
+      channelId: string;
+      channelName: string;
+      channelIsClient: boolean;
+    }
+  >();
+  for (const m of (sourceMessagesResult.data ?? []) as ChannelMessageRow[]) {
+    const chEmbed = m.channel as unknown;
+    const chObj = (Array.isArray(chEmbed) ? chEmbed[0] : chEmbed) as
+      | { id: string; name: string; is_client: boolean }
+      | undefined;
+    if (!chObj) continue;
+    sourceMessagesById.set(m.id, {
+      text: m.text,
+      channelId: chObj.id,
+      channelName: chObj.name,
+      channelIsClient: chObj.is_client,
+    });
+  }
 
   // ── Resolve secondary profiles (members + activity actors) ────────────
   const memberUserIds = new Set<string>(
@@ -590,40 +657,51 @@ export default async function WorkspaceDashboardPage({
 
   const myTasksTopFive = myTasksSorted.slice(0, 5);
 
-  // ── Activity events enrichment ───────────────────────────────────────
-  const activityEnriched = (activityRes.data ?? []).map((e) => {
-    const pipelineJoin = Array.isArray(e.pipeline)
-      ? e.pipeline[0]
-      : e.pipeline;
-    const actorProfile = e.actor_id ? profilesById.get(e.actor_id) : null;
-    return {
-      id: e.id,
-      type: e.type as
-        | "member_joined"
-        | "stage_advanced"
-        | "pipeline_submitted"
-        | "pipeline_created",
-      actorId: e.actor_id,
-      actorName: e.actor_name,
-      actorUser: actorProfile
-        ? {
-            id: actorProfile.id,
-            display_name: actorProfile.display_name,
-            avatar_url: actorProfile.avatar_url,
-            email: actorProfile.email,
-          }
-        : {
-            id: e.actor_id ?? "",
-            display_name: e.actor_name,
-            avatar_url: null,
-            email: null,
-          },
-      stageName: e.stage_name,
-      pipelineId: e.pipeline_id,
-      pipelineName: pipelineJoin?.name ?? "",
-      createdAt: e.created_at as string,
-    };
-  });
+  // ── NF-5: notification enrichment for the ActivityCard ────────────────
+  // Reshape each notifications row into the compact view-model the
+  // ActivityCard consumes. Skips events whose source message was
+  // deleted (cascade) — we can't render "Sam sent a message in #?"
+  // without the channel context.
+  const activityEnriched = (activityRes.data ?? [])
+    .map((n) => {
+      const message = sourceMessagesById.get(n.source_id as string);
+      if (!message) return null;
+      const actorProfile = n.actor_id
+        ? profilesById.get(n.actor_id as string) ?? null
+        : null;
+      return {
+        id: n.id as string,
+        kind: n.kind as "mention" | "client_message",
+        read: Boolean(n.read_at),
+        actorUser: actorProfile
+          ? {
+              id: actorProfile.id,
+              display_name: actorProfile.display_name,
+              avatar_url: actorProfile.avatar_url,
+              email: actorProfile.email,
+            }
+          : {
+              // Source message author was deleted (FK set null) → render
+              // a neutral placeholder. Matches the convention used in
+              // MessageRow and the activity-page event card.
+              id: `deleted:${n.id as string}`,
+              display_name: null,
+              avatar_url: null,
+              email: null,
+            },
+        actorName: actorProfile
+          ? actorProfile.display_name ?? actorProfile.email ?? "Pending member"
+          : "Deleted user",
+        pipelineId: n.pipeline_id as string,
+        channelId: message.channelId,
+        channelName: message.channelName,
+        channelIsClient: message.channelIsClient,
+        messageId: n.source_id as string,
+        messageText: message.text,
+        createdAt: n.created_at as string,
+      };
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null);
 
   // ── Greeting first-name parsing ──────────────────────────────────────
   // display_name might be stored lowercase (email-signup users on
