@@ -164,6 +164,18 @@ export function HeaderWorkspaceSwitcher({
     [workspaces],
   );
 
+  // WL-3b: workspace-cap detection for the "+ New workspace" footer
+  // affordance below. at-cap = caller has at least 1 agency AND at
+  // least 1 personal workspace. Both caps land at 1 per WL-1 + WT-4,
+  // so this matches "no room for a new workspace of either type."
+  // Uses myAgencyContexts (which falls back to 'agency' when type is
+  // undefined) — a misclassified in-flight workspace would briefly
+  // disable the button, self-correcting on the next render. The
+  // inverse (false-positive enable while data lands) would let the
+  // user submit a doomed RPC, which is worse.
+  const isAtWorkspaceCap =
+    myAgencyContexts.length >= 1 && personalContexts.length >= 1;
+
   // Portal-mode detection: when the current route is /portal/[pipelineId],
   // figure out which client context owns that pipeline so we can prefix
   // the trigger pill with the agency name + tint the tile from the agency
@@ -701,19 +713,36 @@ export function HeaderWorkspaceSwitcher({
             </div>
 
             {/* + New workspace global footer. Hidden for pure-client
-                users — they get the CTA card at the top instead. */}
+                users — they get the CTA card at the top instead.
+                WL-3b: disabled when isAtWorkspaceCap (1 agency + 1
+                personal already exist). Disabled-with-tooltip rather
+                than hidden so discoverability stays — the user sees
+                the affordance exists and learns why they can't use it. */}
             {hasAnyAgencyContext && (
               <div className="border-t border-zinc-800 p-1">
                 <button
-                  onClick={createNew}
+                  onClick={isAtWorkspaceCap ? undefined : createNew}
+                  disabled={isAtWorkspaceCap}
+                  title={
+                    isAtWorkspaceCap
+                      ? "You're at the workspace limit (1 agency, 1 personal). Delete one to create another."
+                      : undefined
+                  }
+                  aria-disabled={isAtWorkspaceCap}
                   className="w-full flex items-center gap-3 px-2 py-2 rounded-lg text-[13px] font-medium text-zinc-400 transition-colors"
-                  onMouseEnter={(e) =>
-                    (e.currentTarget.style.background = "#1F1F22")
-                  }
-                  onMouseLeave={(e) =>
-                    (e.currentTarget.style.background = "transparent")
-                  }
-                  style={{ background: "transparent" }}
+                  onMouseEnter={(e) => {
+                    if (!isAtWorkspaceCap)
+                      e.currentTarget.style.background = "#1F1F22";
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isAtWorkspaceCap)
+                      e.currentTarget.style.background = "transparent";
+                  }}
+                  style={{
+                    background: "transparent",
+                    opacity: isAtWorkspaceCap ? 0.4 : 1,
+                    cursor: isAtWorkspaceCap ? "not-allowed" : "pointer",
+                  }}
                 >
                   <div
                     style={{

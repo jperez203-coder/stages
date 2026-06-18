@@ -59,6 +59,22 @@ export type CallerContextSummary = {
    *  raising 23505, so this flag is a UX nicety rather than a
    *  security floor. */
   hasPersonalWorkspace: boolean;
+  /** WL-3b: true iff the caller has ANY workspace_memberships row
+   *  (role owner/admin/member) joined on workspaces.type='agency'.
+   *  Drives the "Agency option disabled with tooltip" treatment on
+   *  the create-workspace form AND the accept-invite preflight that
+   *  blocks a 2nd-agency acceptance. Underlying limit is enforced by
+   *  create_workspace_with_owner + accept_workspace_invite raising
+   *  23505 (WL-1).
+   *
+   *  PREDICATE ASYMMETRY (intentional): hasPersonalWorkspace requires
+   *  role='owner' to match the WT-4 1-personal cap shape (which only
+   *  counts personal workspaces the caller OWNS). hasAgencyWorkspace
+   *  counts ANY role to match the WL-1 1-agency cap shape (being a
+   *  teammate in someone else's agency consumes the slot too). The
+   *  two flags drive UI affordances for the two RPCs respectively;
+   *  the role-filter difference mirrors what the RPCs themselves check. */
+  hasAgencyWorkspace: boolean;
   /** Exactly-one-client case: pipelineId for a direct /portal/<id>
    *  redirect on a blocked client. Null when the caller has zero or
    *  multiple client memberships. Callers with multiple clients should
@@ -138,6 +154,19 @@ export const fetchCallerContextSummary = cache(
       return wsObj?.type === "personal";
     });
 
+    // hasAgencyWorkspace (WL-3b → WL-1 alignment): ANY role on an agency-
+    // type workspace. Predicate-asymmetry from hasPersonalWorkspace is
+    // intentional — the underlying RPCs differ (WT-4 personal cap is
+    // owner-only; WL-1 agency cap counts any role since being a
+    // teammate consumes the slot too). Same PostgREST embed normalization.
+    const hasAgencyWorkspace = wsRows.some((r) => {
+      const w = (r as { workspace?: unknown }).workspace;
+      const wsObj = (Array.isArray(w) ? w[0] : w) as
+        | { type?: string }
+        | undefined;
+      return wsObj?.type === "agency";
+    });
+
     // WL-3a: hasOnlyAutoPersonal. Reshape workspace_memberships rows
     // into the AutoPersonalContextShape the shared predicate consumes,
     // then call it. Pipeline memberships count as "additional contexts"
@@ -169,6 +198,7 @@ export const fetchCallerContextSummary = cache(
       hasClient: clientPipelineRows.length > 0,
       hasAgencyOwnerOrAdminRole: hasOwnerOrAdminWs || hasOwnerOrAdminPipeline,
       hasPersonalWorkspace,
+      hasAgencyWorkspace,
       singleClientPipelineId:
         clientPipelineRows.length === 1
           ? clientPipelineRows[0].pipeline_id

@@ -85,12 +85,22 @@ type Props = {
    *  Defaults to false because callers without the flag (zero-context
    *  signups, pre-WT-5 mounts) shouldn't be blocked. */
   hasPersonalWorkspace?: boolean;
+  /** WL-3b: server-computed flag — true when the caller already
+   *  belongs to ANY agency workspace (1-agency cap reached per WL-1).
+   *  Renders the Agency card in the same disabled-with-tooltip
+   *  treatment as Personal. Cap is enforced by create_workspace_with_-
+   *  owner raising 23505; this is the UX affordance. Force-agency
+   *  mode (WL-3a, Flow A signup) never coexists with hasAgencyWorkspace
+   *  =true — the auto-personal-only predicate requires zero agency
+   *  memberships, so the cap couldn't be reached. */
+  hasAgencyWorkspace?: boolean;
 };
 
 export function CreateWorkspaceForm({
   showCompanyNameField = false,
   selectorMode,
   hasPersonalWorkspace = false,
+  hasAgencyWorkspace = false,
 }: Props) {
   const router = useRouter();
   const session = useSession();
@@ -305,6 +315,8 @@ export function CreateWorkspaceForm({
                 selected={workspaceType === "agency"}
                 onSelect={() => setWorkspaceType("agency")}
                 disabled={submitting}
+                atLimit={hasAgencyWorkspace}
+                atLimitTooltip="You already have an agency workspace. Each user is limited to one."
               />
               <WorkspaceTypeCard
                 kind="personal"

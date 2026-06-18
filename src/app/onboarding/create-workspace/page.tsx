@@ -153,16 +153,21 @@ export default async function CreateWorkspacePage() {
           ? "show-with-agency-default"
           : "hide-force-personal";
 
-  // WT-5: pass-through for the at-limit Personal-card disabled state.
-  // The 1-personal-per-user cap is enforced server-side by
-  // create_workspace_with_owner (WT-4); this prop is purely a UX
-  // affordance so the user sees the disabled card + tooltip BEFORE
-  // they submit and hit the RPC raise.
+  // WT-5 + WL-3b: pass-through for the at-limit card disabled states.
+  // The underlying caps are enforced server-side by
+  // create_workspace_with_owner raising 23505 — WT-4 for personal,
+  // WL-1 for agency. These props are UX affordances so the user sees
+  // the disabled card + tooltip BEFORE they submit and hit the raise.
+  // When both flags are true (Jordan's at-cap-both state) BOTH cards
+  // disable, the form's workspaceType stays null, and the submit
+  // button stays disabled — the user can't accidentally submit a
+  // doomed request.
   return (
     <CreateWorkspaceForm
       showCompanyNameField={isFirstWorkspace}
       selectorMode={selectorMode}
       hasPersonalWorkspace={summary.hasPersonalWorkspace}
+      hasAgencyWorkspace={summary.hasAgencyWorkspace}
     />
   );
 }

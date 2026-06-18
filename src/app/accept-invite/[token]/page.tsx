@@ -181,6 +181,40 @@ export default function AcceptInvitePage() {
     return <AlreadyMemberState preview={preview} />;
   }
 
+  // WL-3b: 1-agency-cap preflight. If the user already belongs to any
+  // agency workspace_membership AND this invite is for an agency
+  // (every pending invite today, since WT-4 blocks personal-target
+  // invites at the accept RPC), render an info state instead of the
+  // accept button. The user can leave their current agency or
+  // decline. The accept_workspace_invite RPC raises 23505 from the
+  // WL-1 cap as the security floor; this preflight is purely UX so
+  // the user doesn't click Accept and get a raw error message.
+  //
+  // Predicate: any workspace-sourced agency context. workspaceType
+  // is set for every agency context post-WT-5; the defensive
+  // fallback `?? "agency"` here keeps in-flight contexts (type
+  // undefined for a frame) from sneaking past, since the accept RPC
+  // would still raise on them.
+  const existingAgencyContext =
+    contexts.status === "ready"
+      ? contexts.contexts.find(
+          (c) =>
+            c.type === "agency" &&
+            c.source === "workspace" &&
+            (c.workspaceType ?? "agency") === "agency",
+        )
+      : null;
+
+  if (existingAgencyContext) {
+    return (
+      <AlreadyInAgencyState
+        preview={preview}
+        existingAgencyName={existingAgencyContext.workspaceName}
+        existingAgencySlug={existingAgencyContext.workspaceSlug}
+      />
+    );
+  }
+
   return (
     <ReadyToAcceptState
       preview={preview}
@@ -524,6 +558,62 @@ function AlreadyMemberState({ preview }: { preview: InvitePreview }) {
     </AuthShell>
   );
 }
+
+// ─── Already in an agency (WL-3b preflight for the 1-agency cap) ──────────
+
+/**
+ * WL-3b: rendered when the actor already belongs to an agency
+ * workspace and tries to accept an invite to a (different) agency.
+ * The accept_workspace_invite RPC raises 23505 (WL-1 cap) as the
+ * security floor; this state is purely UX so the user sees a clear
+ * explanation BEFORE hitting Accept and getting a raw error.
+ *
+ * Names render the invited agency + the existing agency so the user
+ * can identify the trade-off. No auto-decline — the user chooses
+ * between staying in their current agency (do nothing here) or
+ * leaving the current agency first (handled separately in workspace
+ * settings; not linked from here to avoid drive-by decisions).
+ */
+function AlreadyInAgencyState({
+  preview,
+  existingAgencyName,
+  existingAgencySlug,
+}: {
+  preview: InvitePreview;
+  existingAgencyName: string;
+  existingAgencySlug: string;
+}) {
+  const invitedName = preview.workspace_name ?? "another agency";
+  return (
+    <AuthShell
+      title="You're already in an agency"
+      subtitle="You can only belong to one agency workspace at a time."
+    >
+      <div className="text-center">
+        <div className="inline-flex w-12 h-12 rounded-full items-center justify-center mb-4 bg-stages-amber/10">
+          <AlertCircle size={22} className="text-stages-amber" />
+        </div>
+        <p className="text-[13px] text-zinc-300 mb-5 leading-relaxed">
+          This invite is for{" "}
+          <span className="text-zinc-100 font-medium">{invitedName}</span>,
+          but you&apos;re already a member of{" "}
+          <span className="text-zinc-100 font-medium">
+            {existingAgencyName}
+          </span>
+          . To accept, leave your current agency first — or just stay where
+          you are.
+        </p>
+        <Link
+          href={`/w/${existingAgencySlug}`}
+          className="btn-primary w-full justify-center"
+        >
+          Open {existingAgencyName}
+        </Link>
+      </div>
+    </AuthShell>
+  );
+}
+
 
 // ─── Ready to accept ───────────────────────────────────────────────────────
 
