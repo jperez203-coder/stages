@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { ChatLayout } from "@/components/chat/v2/ChatLayout";
 import { ChatSidebar } from "@/components/chat/v2/ChatSidebar";
@@ -144,6 +145,75 @@ export function ChatBody({
       );
     },
   );
+
+  // NF-3.2: composer-focus signal bumped when a ?reply=1 deep-link
+  // arrives. MessageThread → Composer watches this and refocuses on
+  // every bump. Initial value 0 — focus never fires on plain channel
+  // navigation, only on explicit Reply-intent deep links.
+  const [composerFocusSignal, setComposerFocusSignal] = useState(0);
+
+  // ── NF-3.2: deep-link consumption (?channel=... &message=... &reply=1) ─
+  // The workspace activity page links here with query params describing
+  // a target message. We:
+  //   1. Switch activeChannelId to the requested channel (if different
+  //      and known to this pipeline).
+  //   2. Scroll the row whose data-message-id matches into view.
+  //   3. Bump the composer-focus signal when ?reply=1 is present.
+  //   4. Strip the params via router.replace so a refresh / back-button
+  //      doesn't re-trigger the side effects.
+  //
+  // Both channels' messages are loaded at mount (see messagesByChannel
+  // initializer above), so the requested message is always in the DOM
+  // a tick after the channel swap. No incremental fetch needed.
+  //
+  // Pagination caveat (deferred): when older-message pagination ships,
+  // the requested message may be outside the loaded window. For now we
+  // silently no-op the scroll in that case — the channel still
+  // switches, the user just sees the most recent messages.
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const channelParam = searchParams.get("channel");
+    const messageParam = searchParams.get("message");
+    const replyParam = searchParams.get("reply");
+    if (!channelParam && !messageParam && !replyParam) return;
+
+    // Step 1: switch channel if requested and valid for this pipeline.
+    if (channelParam) {
+      const knownChannel = data.channels.find((c) => c.id === channelParam);
+      if (knownChannel && channelParam !== activeChannelId) {
+        setActiveChannelId(channelParam);
+      }
+    }
+
+    // Step 2: scroll to message. requestAnimationFrame defers until after
+    // the channel-swap render commits — the new active channel's rows
+    // need to be in the DOM before document.querySelector can find them.
+    if (messageParam) {
+      requestAnimationFrame(() => {
+        const el = document.querySelector(
+          `[data-message-id="${messageParam}"]`,
+        );
+        if (el) {
+          el.scrollIntoView({ block: "center", behavior: "smooth" });
+        }
+      });
+    }
+
+    // Step 3: bump composer-focus signal on Reply intent.
+    if (replyParam === "1") {
+      setComposerFocusSignal((n) => n + 1);
+    }
+
+    // Step 4: strip the params. router.replace with scroll:false keeps
+    // the just-scrolled position; same pathname, no query string.
+    router.replace(pathname, { scroll: false });
+    // Intentionally not depending on activeChannelId — we only consume
+    // the params on arrival; subsequent user-driven channel switches
+    // shouldn't re-trigger the scroll/focus side effects.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, pathname, router, data.channels]);
 
   // Per-channel message storage. Lazy initializer seeds both channels'
   // arrays from the server fetch; runs once at mount.
@@ -594,6 +664,7 @@ export function ChatBody({
             // hasn't loaded a row for the channel yet.
             mentionablePeople={mentionablePeopleForActiveChannel}
             viewerId={viewer.id}
+            composerFocusSignal={composerFocusSignal}
             allowInternalToggle={allowInternalToggle}
             // Slice 4a follow-up: needed to gate the per-message
             // "Internal" badge in the client channel. MessageThread

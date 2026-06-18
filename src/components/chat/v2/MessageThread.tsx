@@ -106,6 +106,13 @@ type Props = {
   /** NF-2.1: the viewer's auth.users.id. Used to drop self from the
    *  picker — no self-mention via autocomplete. */
   viewerId: string;
+  /** NF-3.2: bumped by ChatBody whenever the URL signals a "reply"
+   *  intent (?reply=1 on a deep-link from the workspace activity page).
+   *  Composer watches this number; every change refocuses the textarea.
+   *  Initial mount value is 0 — focus only triggers on subsequent
+   *  bumps so plain channel navigation doesn't steal focus from
+   *  any other field. */
+  composerFocusSignal?: number;
 };
 
 export function MessageThread({
@@ -118,6 +125,7 @@ export function MessageThread({
   channelHeaderLabel,
   mentionedProfileById,
   mentionablePeople,
+  composerFocusSignal,
   viewerId,
 }: Props) {
   // Channel-level gate for the per-message internal badge:
@@ -214,6 +222,7 @@ export function MessageThread({
         allowInternalToggle={allowInternalToggle}
         mentionablePeople={mentionablePeople}
         viewerId={viewerId}
+        focusSignal={composerFocusSignal}
       />
     </section>
   );
@@ -379,6 +388,12 @@ function MessageRow({
 
   return (
     <article
+      // NF-3.2: tag every message row with its message id so the
+      // activity-page deep-link consumer in ChatBody can find a
+      // specific message via document.querySelector + scrollIntoView.
+      // Plain DOM attr keeps the integration loosely coupled — no
+      // React ref or callback plumbing into the message list.
+      data-message-id={message.id}
       style={{
         display: "flex",
         gap: 12,
@@ -496,6 +511,7 @@ function Composer({
   allowInternalToggle,
   mentionablePeople,
   viewerId,
+  focusSignal,
 }: {
   channelName: string;
   viewerEmail: string;
@@ -503,6 +519,11 @@ function Composer({
   allowInternalToggle: boolean;
   mentionablePeople: ChromeMember[];
   viewerId: string;
+  /** NF-3.2: bumped by ChatBody when a Reply-intent deep-link fires.
+   *  Initial value (0 or undefined) does NOT trigger focus — only
+   *  subsequent changes. Plain chat navigation never focuses the
+   *  composer; only the explicit Reply intent does. */
+  focusSignal?: number;
 }) {
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -511,6 +532,16 @@ function Composer({
   // the value is moot (gated to false at the call site).
   const [isInternal, setIsInternal] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // NF-3.2: refocus on signal change. Skip the initial mount (signal
+  // starts at 0 / undefined); only respond to later bumps. Each bump
+  // arrives from ChatBody after a ?reply=1 URL param consumption.
+  const initialFocusSignalRef = useRef(focusSignal);
+  useEffect(() => {
+    if (focusSignal === undefined) return;
+    if (focusSignal === initialFocusSignalRef.current) return;
+    textareaRef.current?.focus();
+  }, [focusSignal]);
 
   // NF-2.1: @mention picker state. activeMention tracks the @-token
   // the cursor is currently inside (null when no active token).

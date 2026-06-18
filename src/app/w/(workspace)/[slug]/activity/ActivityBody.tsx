@@ -3,7 +3,14 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, BellOff, Search, Filter, CheckCheck } from "lucide-react";
+import {
+  ArrowLeft,
+  BellOff,
+  Search,
+  Filter,
+  CheckCheck,
+  CornerUpLeft,
+} from "lucide-react";
 import { UserAvatar } from "@/components/UserAvatar";
 import { resolveDisplayName } from "@/lib/display-name";
 import {
@@ -611,58 +618,48 @@ function EventCard({
             {messageNodes}
           </div>
 
-          {/* ── Action row ─────────────────────────────────── */}
-          {ev.kind === "mention" && (
-            <div
-              style={{
-                display: "flex",
-                gap: 8,
-                marginTop: 10,
+          {/* ── Action row ──────────────────────────────────
+              NF-3.2: rendered for BOTH event kinds. NF-3 originally
+              gated these on kind==='mention'; the reference image and
+              the spec say client_message cards get the same Reply +
+              Open thread affordance. */}
+          <div
+            style={{
+              display: "flex",
+              gap: 6,
+              marginTop: 10,
+              alignItems: "center",
+            }}
+          >
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onActivate();
+                // Reply intent: navigate AND signal the channel page to
+                // focus its composer (ChatBody reads ?reply=1 from the
+                // query string and bumps its composer-focus signal).
+                router.push(`${href}&reply=1`);
               }}
+              style={replyButtonStyle}
+              aria-label="Reply to this thread"
             >
-              <span
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onActivate();
-                  // Reply intent: navigate AND signal the channel page to
-                  // focus its composer. The query flag is forward-compatible
-                  // even though the chat page doesn't read it yet.
-                  router.push(`${href}&reply=1`);
-                }}
-                style={smallActionStyle}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    onActivate();
-                    router.push(`${href}&reply=1`);
-                  }
-                }}
-              >
-                Reply
-              </span>
-              <span
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onActivate();
-                  router.push(href);
-                }}
-                style={smallActionStyle}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    onActivate();
-                    router.push(href);
-                  }
-                }}
-              >
-                Open thread
-              </span>
-            </div>
-          )}
+              <CornerUpLeft size={12} strokeWidth={2.5} />
+              Reply
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onActivate();
+                router.push(href);
+              }}
+              style={openThreadButtonStyle}
+              aria-label="Open thread in chat"
+            >
+              Open thread
+            </button>
+          </div>
         </div>
 
         <div
@@ -758,17 +755,40 @@ const ghostButtonStyle: React.CSSProperties = {
   cursor: "pointer",
 };
 
-const smallActionStyle: React.CSSProperties = {
+// NF-3.2: action-row buttons. Reply has a small reply-arrow glyph +
+// pill-tinted background; Open thread is text-only, slightly muted
+// so the visual hierarchy ranks Reply > Open thread > body click.
+// Both render on every event-kind card (NF-3.2 removed the
+// kind==='mention' gate).
+const replyButtonStyle: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
+  gap: 5,
   fontSize: 11,
   fontWeight: 600,
   color: "#22D3EE",
   background: "rgba(34,211,238,0.10)",
-  padding: "4px 10px",
+  padding: "5px 10px",
   borderRadius: 6,
+  border: "none",
   cursor: "pointer",
   userSelect: "none",
+  fontFamily: "inherit",
+};
+
+const openThreadButtonStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  fontSize: 11,
+  fontWeight: 500,
+  color: "#979393",
+  background: "transparent",
+  padding: "5px 8px",
+  borderRadius: 6,
+  border: "none",
+  cursor: "pointer",
+  userSelect: "none",
+  fontFamily: "inherit",
 };
 
 // ── Date bucketing + relative time ────────────────────────────────────────
