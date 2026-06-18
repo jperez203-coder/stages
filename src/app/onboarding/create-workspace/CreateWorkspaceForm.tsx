@@ -19,7 +19,14 @@ const MAX_COMPANY_LENGTH = 80;
 export type WorkspaceTypeSelectorMode =
   | "show-no-default"
   | "show-with-agency-default"
-  | "hide-force-personal";
+  | "hide-force-personal"
+  // WL-3a: Flow A signup case — the user landed here from
+  // /select-workspace because their only context is the WL-2
+  // auto-personal. Selector renders with agency pre-selected; the
+  // Personal card is shown but in its existing at-limit disabled
+  // state (hasPersonalWorkspace=true for them by construction). They
+  // can name an agency and submit immediately.
+  | "force-agency";
 
 type WorkspaceType = "agency" | "personal";
 
@@ -93,12 +100,20 @@ export function CreateWorkspaceForm({
   const contexts = useUserContexts();
   const [name, setName] = useState("");
   const [companyName, setCompanyName] = useState("");
-  // WT-3: initialise workspaceType from selectorMode.
-  //   'show-no-default'           → null  (must pick before submit)
-  //   'show-with-agency-default'  → 'agency' (default-but-changeable)
+  // WT-3 + WL-3a: initialise workspaceType from selectorMode.
+  //   'show-no-default'           → null      (must pick before submit)
+  //   'show-with-agency-default'  → 'agency'  (default-but-changeable)
   //   'hide-force-personal'       → 'personal' (locked, no UI shown)
+  //   'force-agency'              → 'agency'  (Personal card stays
+  //                                            visible but disabled via
+  //                                            the existing
+  //                                            hasPersonalWorkspace
+  //                                            at-limit affordance — for
+  //                                            Flow A signups the prop
+  //                                            is true by construction)
   const [workspaceType, setWorkspaceType] = useState<WorkspaceType | null>(
-    selectorMode === "show-with-agency-default"
+    selectorMode === "show-with-agency-default" ||
+      selectorMode === "force-agency"
       ? "agency"
       : selectorMode === "hide-force-personal"
         ? "personal"

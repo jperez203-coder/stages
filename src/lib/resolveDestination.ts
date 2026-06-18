@@ -1,9 +1,13 @@
 import type { UserContext } from "@/hooks/useUserContexts";
+import { isAutoPersonalOnly } from "@/lib/auto-personal";
 
 /**
  * Decision tree for the post-login workspace selector.
  *
- *   * `create_workspace` → user has no contexts; route to onboarding
+ *   * `create_workspace` → user has no agency context and is "essentially
+ *     brand-new" — either truly zero contexts (pre-WL-2 state) OR the
+ *     only context is the untouched WL-2 auto-personal (post-WL-2 state).
+ *     Route to /onboarding/create-workspace where they'll name an agency.
  *   * `go_to` → exactly one valid destination; auto-route there and write
  *     `last_active_workspace_id` (caller's responsibility)
  *   * `show_chooser` → multiple valid contexts; render the chooser UI
@@ -21,6 +25,20 @@ export function resolveDestination(
   lastActiveWorkspaceId: string | null,
 ): ResolveResult {
   if (contexts.length === 0) {
+    return { kind: "create_workspace" };
+  }
+
+  // WL-3a: the WL-2 trigger creates an "auto-personal" workspace at
+  // signup so contexts.length === 0 is unreachable for any post-WL-2
+  // user. Without this branch, those users hit the contexts.length === 1
+  // path below and get routed to /w/personal — a dead end with no
+  // affordance to create an agency. The shared isAutoPersonalOnly
+  // predicate catches "only the untouched auto-personal" and routes them
+  // to /onboarding/create-workspace, restoring the Flow A signup-then-
+  // name-agency journey. Renamed personals don't match (the workspace
+  // name is part of the predicate) so an engaged user is still routed
+  // to their renamed dashboard.
+  if (isAutoPersonalOnly(contexts)) {
     return { kind: "create_workspace" };
   }
 

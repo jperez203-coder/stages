@@ -1,6 +1,7 @@
 import "server-only";
 import { cache } from "react";
 import type { createSupabaseServerClient } from "./supabase-server";
+import { isAutoPersonalOnly } from "./auto-personal";
 
 type SupabaseServerClient = Awaited<ReturnType<typeof createSupabaseServerClient>>;
 
@@ -63,6 +64,19 @@ export type CallerContextSummary = {
    *  multiple client memberships. Callers with multiple clients should
    *  fall back to /select-workspace and let the user pick. */
   singleClientPipelineId: string | null;
+  /** WL-3a: true iff the caller's ONLY context is the untouched WL-2
+   *  auto-personal workspace (1 workspace_memberships row with
+   *  role='owner', joined workspaces.type='personal' and
+   *  workspaces.name='Personal', AND zero pipeline_memberships). Used
+   *  by /onboarding/create-workspace/page.tsx to compute a new
+   *  'force-agency' selectorMode that defaults the form to agency and
+   *  disables the personal card via the existing hasPersonalWorkspace
+   *  affordance — closing the Flow A signup gap that emerged after
+   *  WL-2 stopped contexts.length === 0 from ever being true post-
+   *  signup. Computed via the shared isAutoPersonalOnly predicate in
+   *  src/lib/auto-personal.ts so client-side resolveDestination and
+   *  server-side selectorMode agree on the definition. */
+  hasOnlyAutoPersonal: boolean;
 };
 
 export const fetchCallerContextSummary = cache(
@@ -76,12 +90,14 @@ export const fetchCallerContextSummary = cache(
     // workspace_memberships `role` + embedded workspace.type added to
     // the select. The role column powers hasAgencyOwnerOrAdminRole
     // (WT-2); the joined workspace.type powers hasPersonalWorkspace
-    // (WT-4). Both are filtered from the already-fetched rows — no
-    // extra DB round-trips beyond the columns/embed added here.
+    // (WT-4); the joined workspace.name (added WL-3a) powers
+    // hasOnlyAutoPersonal via the shared isAutoPersonalOnly predicate.
+    // All three are filtered from the already-fetched rows — no extra
+    // DB round-trips beyond the columns/embed added here.
     const [wsRes, pipRes] = await Promise.all([
       supabase
         .from("workspace_memberships")
-        .select("workspace_id, role, workspace:workspaces!inner(type)")
+        .select("workspace_id, role, workspace:workspaces!inner(type, name)")
         .eq("user_id", user.id),
       supabase
         .from("pipeline_memberships")
@@ -122,6 +138,32 @@ export const fetchCallerContextSummary = cache(
       return wsObj?.type === "personal";
     });
 
+    // WL-3a: hasOnlyAutoPersonal. Reshape workspace_memberships rows
+    // into the AutoPersonalContextShape the shared predicate consumes,
+    // then call it. Pipeline memberships count as "additional contexts"
+    // for the predicate's purpose; we feed the workspace rows only
+    // when the pipeline-membership count is zero (any pipeline_-
+    // membership row, agency-side or client, means contexts.length >= 2
+    // when joined with the auto-personal workspace_membership, so the
+    // predicate is automatically false). Skipping the reshape when
+    // pipelineRows.length > 0 saves a few cycles on the hot path.
+    const hasOnlyAutoPersonal =
+      pipelineRows.length === 0 &&
+      isAutoPersonalOnly(
+        wsRows.map((r) => {
+          const w = (r as { workspace?: unknown }).workspace;
+          const wsObj = (Array.isArray(w) ? w[0] : w) as
+            | { type?: "agency" | "personal"; name?: string }
+            | undefined;
+          return {
+            source: "workspace" as const,
+            role: r.role as string,
+            workspaceType: wsObj?.type,
+            workspaceName: wsObj?.name ?? "",
+          };
+        }),
+      );
+
     return {
       hasAgency: hasWsMembership || agencyPipelineRows.length > 0,
       hasClient: clientPipelineRows.length > 0,
@@ -131,6 +173,7 @@ export const fetchCallerContextSummary = cache(
         clientPipelineRows.length === 1
           ? clientPipelineRows[0].pipeline_id
           : null,
+      hasOnlyAutoPersonal,
     };
   },
 );

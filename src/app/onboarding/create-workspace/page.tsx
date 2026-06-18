@@ -103,11 +103,23 @@ export default async function CreateWorkspacePage() {
     isFirstWorkspace = (count ?? 0) === 0;
   }
 
-  // WT-3: workspace-type selector visibility. Three modes — chosen here
-  // server-side so the form mounts in its final shape and there's no
-  // post-hydration "the selector just appeared" flash. The C1 block
-  // above has already redirected pure clients, so the cases below cover
-  // only the agency-eligible / brand-new branches.
+  // WT-3 + WL-3a: workspace-type selector visibility. Four modes — chosen
+  // here server-side so the form mounts in its final shape and there's no
+  // post-hydration "the selector just appeared" flash. The C1 block above
+  // has already redirected pure clients, so the cases below cover only
+  // the agency-eligible / brand-new / auto-personal-only branches.
+  //
+  //   hasOnlyAutoPersonal → 'force-agency'    [WL-3a]
+  //     Caller's ONLY context is the untouched WL-2 auto-personal
+  //     workspace. They came here via the post-signup Flow A routing
+  //     (resolveDestination's WL-3a branch) and need to name an agency
+  //     without seeing a personal option (they already have one). Form
+  //     starts with agency pre-selected; the Personal card surfaces in
+  //     its existing at-limit disabled treatment via
+  //     hasPersonalWorkspace (which is true for them by construction).
+  //     Checked FIRST so a user who somehow holds an owner role on
+  //     their auto-personal AND nothing else doesn't fall into the
+  //     hasAgencyOwnerOrAdminRole branch below.
   //
   //   hasAgencyOwnerOrAdminRole → 'show-no-default'
   //     User owns or admins at least one membership somewhere. Selector
@@ -115,28 +127,31 @@ export default async function CreateWorkspacePage() {
   //     choose 'agency' vs 'personal' before the submit button enables.
   //
   //   else !hasAgency → 'show-with-agency-default'
-  //     Brand-new signup with zero memberships of any kind. Selector
-  //     shown with 'agency' pre-selected (Option B locked decision) —
-  //     they can change to 'personal' before submit, but the default
-  //     biases first-time agency onboarding through the agency surface.
+  //     Brand-new signup with zero memberships of any kind. Post-WL-2
+  //     this branch is unreachable for new signups (the auto-personal
+  //     trigger always lands a workspace_memberships row before they
+  //     get here), but the mode stays in the matrix for pre-WL-2
+  //     accounts (none in prod today) and for the defensive
+  //     edge case where the WL-2 trigger's EXCEPTION block fired and
+  //     left them with zero contexts.
   //
   //   else → 'hide-force-personal'
   //     Caller is member-only somewhere (workspace_memberships role
   //     'member' OR pipeline_memberships role 'member', no owner/admin
   //     standing). They get no selector and the form locks to
-  //     'personal' silently — they can't unlock agency features by
-  //     creating their own agency workspace until they're invited as
-  //     owner/admin somewhere or pay through a future upgrade path.
+  //     'personal' silently.
   //
-  // The fall-through ordering matters: hasAgencyOwnerOrAdminRole is
-  // checked first so an owner-of-A-who-is-also-a-member-of-B still gets
-  // 'show-no-default', not 'hide-force-personal'.
+  // The fall-through ordering matters: hasOnlyAutoPersonal first
+  // (WL-3a Flow A signups), then hasAgencyOwnerOrAdminRole, then
+  // the legacy zero-contexts and member-only branches.
   const selectorMode: WorkspaceTypeSelectorMode =
-    summary.hasAgencyOwnerOrAdminRole
-      ? "show-no-default"
-      : !summary.hasAgency
-        ? "show-with-agency-default"
-        : "hide-force-personal";
+    summary.hasOnlyAutoPersonal
+      ? "force-agency"
+      : summary.hasAgencyOwnerOrAdminRole
+        ? "show-no-default"
+        : !summary.hasAgency
+          ? "show-with-agency-default"
+          : "hide-force-personal";
 
   // WT-5: pass-through for the at-limit Personal-card disabled state.
   // The 1-personal-per-user cap is enforced server-side by
