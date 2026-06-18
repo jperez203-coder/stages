@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Bell, Search, Filter, CheckCheck } from "lucide-react";
+import { ArrowLeft, BellOff, Search, Filter, CheckCheck } from "lucide-react";
 import { UserAvatar } from "@/components/UserAvatar";
 import { resolveDisplayName } from "@/lib/display-name";
 import {
@@ -188,19 +188,25 @@ export function ActivityBody({
             <ArrowLeft size={16} />
           </Link>
 
+          {/* NF-3.1: bell mirrors the dashboard ActivityCard's icon box
+              exactly — 🔔 emoji at 24px in a 48×48 dark-grey box. The
+              earlier draft used a lucide <Bell /> on a yellow-tinted
+              background which broke visual consistency with the
+              dashboard surface. */}
           <div
+            className="flex items-center justify-center flex-shrink-0"
             style={{
-              width: 44,
-              height: 44,
-              borderRadius: 12,
-              background: "#FACC1533",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
+              width: 48,
+              height: 48,
+              borderRadius: 10,
+              background: "#212124",
+              border: "1px solid #36363A",
+              fontSize: 24,
               flexShrink: 0,
             }}
+            aria-hidden="true"
           >
-            <Bell size={20} style={{ color: "#FACC15" }} />
+            🔔
           </div>
 
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -706,7 +712,7 @@ function EmptyState({
         color: "#979393",
       }}
     >
-      <Bell
+      <BellOff
         size={36}
         style={{ color: "#36363A", marginBottom: 12 }}
         aria-hidden="true"
