@@ -113,13 +113,29 @@ const PLAN_DEFS: Array<{
   },
 ];
 
-export type StartTrialBannerVariant = "pre_expiry" | "expired";
+export type StartTrialBannerVariant = "pre_expiry" | "expired" | "inactive";
+
+/**
+ * BR-1: workspace_billing.subscription_status values that map to the
+ * 'inactive' banner variant. The page-level switch passes the raw
+ * status through via inactiveStatus so the banner can sharpen the
+ * heading per state (canceled / past_due / etc. all read slightly
+ * differently). Bodies + CTA + palette are unified across all values.
+ */
+export type InactiveSubscriptionStatus =
+  | "canceled"
+  | "past_due"
+  | "incomplete"
+  | "incomplete_expired"
+  | "unpaid"
+  | "paused";
 
 export function StartTrialBanner({
   workspaceId,
   workspaceSlug: _workspaceSlug,
   variant,
   remainingPhrase,
+  inactiveStatus,
 }: {
   workspaceId: string;
   /** Reserved for future use (e.g. linking to a workspace-specific
@@ -139,6 +155,13 @@ export function StartTrialBanner({
    *  / "in 5 hours" etc. Null on expired variant (we don't render time
    *  in the past). */
   remainingPhrase: string | null;
+  /** BR-1: required when variant === "inactive". The raw
+   *  workspace_billing.subscription_status drives the heading copy.
+   *  Defaults to a generic "Your subscription is inactive" if the page
+   *  passes an unrecognized value — defensive against future Stripe
+   *  status additions we haven't mapped yet. Null/undefined for the
+   *  other two variants. */
+  inactiveStatus?: InactiveSubscriptionStatus | null;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -192,30 +215,68 @@ export function StartTrialBanner({
     if (ctx?.workspaceType === "personal") return null;
   }
 
-  // Variant-specific visual treatment. Both variants share the same
-  // card shape (rounded-lg + p-4 + icon tile + text stack + CTA) but
-  // use distinct palettes — blue for pre_expiry, red for expired.
-  // CTA button is btn-primary blue in BOTH cases (locked decision —
+  // Variant-specific visual treatment. All three variants share the
+  // same card shape (rounded-lg + p-4 + icon tile + text stack + CTA)
+  // but use distinct palettes — blue for pre_expiry, red for expired
+  // AND inactive (both communicate "broken state, fix this"). CTA
+  // button is btn-primary blue in ALL cases (locked decision —
   // red CTA on red banner reads as 'destructive action'; blue CTA on
   // red banner reads as 'fix this').
-  const isExpired = variant === "expired";
-  const cardBg = isExpired
+  const isRedVariant = variant === "expired" || variant === "inactive";
+  const cardBg = isRedVariant
     ? "rgba(244, 63, 94, 0.08)"
     : "rgba(16, 140, 233, 0.08)";
-  const cardBorder = isExpired
+  const cardBorder = isRedVariant
     ? "1px solid rgba(244, 63, 94, 0.40)"
     : "1px solid rgba(16, 140, 233, 0.35)";
-  const iconBg = isExpired
+  const iconBg = isRedVariant
     ? "rgba(244, 63, 94, 0.18)"
     : "rgba(16, 140, 233, 0.18)";
-  const iconColor = isExpired ? "text-stages-red" : "text-stages-blue";
-  const heading = isExpired
-    ? "Your trial has ended"
-    : "Add your card to keep your workspace active";
-  const subtitle = isExpired
-    ? "Add a card to restore your workspace and continue working."
-    : `Your free trial ends ${remainingPhrase ?? "soon"}`;
-  const Icon = isExpired ? AlertCircle : Sparkles;
+  const iconColor = isRedVariant ? "text-stages-red" : "text-stages-blue";
+
+  // BR-1: heading sharpens per inactive sub-status. canceled, past_due,
+  // etc. each read with their own framing — generic "inactive" copy
+  // hides actionable signal from the owner ("did I cancel? did a
+  // payment fail?"). Unmapped statuses fall back to the generic
+  // heading so a future Stripe addition doesn't render blank.
+  let heading: string;
+  let subtitle: string;
+  if (variant === "inactive") {
+    switch (inactiveStatus) {
+      case "canceled":
+        heading = "Your subscription has been canceled";
+        break;
+      case "past_due":
+        heading = "Payment failed on your subscription";
+        break;
+      case "incomplete":
+      case "incomplete_expired":
+        heading = "Your subscription setup is incomplete";
+        break;
+      case "unpaid":
+        heading = "Your subscription is unpaid";
+        break;
+      case "paused":
+        heading = "Your subscription is paused";
+        break;
+      default:
+        heading = "Your subscription is inactive";
+    }
+    // BR-1: shared body copy across all inactive sub-statuses. The
+    // "read-only" framing is forward-looking — BR-2/BR-3 will make
+    // it literally true. For BR-1 the API-layer billing-guard already
+    // blocks invite + member-add routes; the rest follows.
+    subtitle =
+      "Restore access to invite teammates, send messages, and create pipelines. Existing data is read-only until you reactivate.";
+  } else if (variant === "expired") {
+    heading = "Your trial has ended";
+    subtitle = "Add a card to restore your workspace and continue working.";
+  } else {
+    heading = "Add your card to keep your workspace active";
+    subtitle = `Your free trial ends ${remainingPhrase ?? "soon"}`;
+  }
+
+  const Icon = isRedVariant ? AlertCircle : Sparkles;
 
   return (
     <>

@@ -879,11 +879,43 @@ export default async function WorkspaceDashboardPage({
             );
           }
 
-          // Defensive fallthrough — canceled, past_due, null row.
-          // Shouldn't happen post-Slice-6 (the trigger + backfill
-          // guarantee every workspace has a 'trialing' row), but
-          // covers the case where a future state slips through.
-          // billing-guard handles writes; no banner for now.
+          // BR-1: inactive subscription states. Any non-active,
+          // non-trialing Stripe status renders the red "inactive"
+          // banner. Owner sees actionable copy + reactivate CTA
+          // matched to the underlying status (canceled vs past_due
+          // vs etc. each get their own heading). Personal workspaces
+          // don't reach here — they have no workspace_billing row at
+          // all per WT-4's init trigger, so status is null and falls
+          // through to the final return below.
+          //
+          // The CTA wires to the same PlanPickerModal → Stripe
+          // Checkout flow as the expired variant, since reactivation
+          // is the same flow regardless of which inactive state the
+          // workspace lands in.
+          const INACTIVE_STATUSES = [
+            "canceled",
+            "past_due",
+            "incomplete",
+            "incomplete_expired",
+            "unpaid",
+            "paused",
+          ] as const;
+          type InactiveStatus = (typeof INACTIVE_STATUSES)[number];
+          if (status && (INACTIVE_STATUSES as readonly string[]).includes(status)) {
+            return (
+              <StartTrialBanner
+                workspaceId={ws.id}
+                workspaceSlug={ws.slug}
+                variant="inactive"
+                remainingPhrase={null}
+                inactiveStatus={status as InactiveStatus}
+              />
+            );
+          }
+
+          // Final fallthrough — null workspace_billing row (personal
+          // workspaces, or a future state that slips through). No
+          // banner; billing-guard handles writes if applicable.
           return null;
         })()}
 
