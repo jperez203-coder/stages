@@ -55,6 +55,14 @@ type InvitePreview = {
   inviter_is_active_member?: boolean;
   expires_at?: string;
   accepted_at?: string | null;
+  /** FB-2: true when an auth.users row exists for the invited email
+   *  (case-insensitive match). Drives the conditional CTA — primary
+   *  becomes "Sign in to accept" for existing accounts, "Create an
+   *  account" for new ones. Optional so a pre-FB-2 client safely no-ops
+   *  if the field is missing. Defaults to false at render time (treat
+   *  "we don't know" as "probably a new user" — promotes Create which
+   *  is the safer guess for fresh outbound invites). */
+  recipient_has_account?: boolean;
 };
 
 type PreviewState =
@@ -433,24 +441,62 @@ function PendingAnonymousState({
             navigation, so localStorage.setItem completes before /auth/signin
             (or /auth/signup) mounts. WorkspaceSelector reads + clears the
             token in its post-auth useEffect to route the user back here. */}
-        <div className="space-y-2">
-          <Link
-            href={signinHref}
-            onClick={preserveToken}
-            className="btn-primary w-full justify-center"
-          >
-            <LogIn size={14} />
-            Sign in to accept
-          </Link>
-          <Link
-            href={signupHref}
-            onClick={preserveToken}
-            className="btn-ghost w-full justify-center"
-          >
-            <UserPlus size={14} />
-            Create an account
-          </Link>
-        </div>
+        {/* FB-2: conditional CTA based on recipient_has_account.
+            - existing account → primary "Sign in to accept" + small
+              text link to Create (rare second-account case)
+            - new email → primary "Create an account" + small text
+              link to Sign in (for users with an account at a
+              different email who want to manually switch)
+            Both primary CTAs continue to carry ?invite=<token> from
+            FB-1 — preserved via signinHref / signupHref. When the
+            preview RPC predates FB-2 (pre-migration apply window),
+            recipient_has_account is undefined and falls back to false
+            → we promote Create. That's the safer guess for fresh
+            outbound invites; an existing-account recipient still has
+            a one-click path to Sign in via the secondary link. */}
+        {preview.recipient_has_account ? (
+          <div className="space-y-3">
+            <Link
+              href={signinHref}
+              onClick={preserveToken}
+              className="btn-primary w-full justify-center"
+            >
+              <LogIn size={14} />
+              Sign in to accept
+            </Link>
+            <p className="text-[12px] text-zinc-500 text-center">
+              Need an account?{" "}
+              <Link
+                href={signupHref}
+                onClick={preserveToken}
+                className="text-stages-blue hover:underline font-medium"
+              >
+                Create one
+              </Link>
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <Link
+              href={signupHref}
+              onClick={preserveToken}
+              className="btn-primary w-full justify-center"
+            >
+              <UserPlus size={14} />
+              Create an account
+            </Link>
+            <p className="text-[12px] text-zinc-500 text-center">
+              Already have an account?{" "}
+              <Link
+                href={signinHref}
+                onClick={preserveToken}
+                className="text-stages-blue hover:underline font-medium"
+              >
+                Sign in
+              </Link>
+            </p>
+          </div>
+        )}
       </div>
     </AuthShell>
   );
