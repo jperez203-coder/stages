@@ -800,6 +800,50 @@ export default async function WorkspaceDashboardPage({
           const subId = billingRes.data?.stripe_subscription_id ?? null;
           const trialEndsAt = billingRes.data?.trial_ends_at ?? null;
 
+          // BR-1 (fix): inactive-subscription branch hoisted ABOVE the
+          // founder/Track-B split. subscription_status describes the
+          // workspace's billing state, not the owner's identity — a
+          // broken sub is a broken sub regardless of who owns the
+          // workspace. Pre-fix, the founder branch's catch-all
+          // "all other founder states → no banner" return null swallowed
+          // 'past_due' / 'canceled' (post-Stripe-billing, not the
+          // founder-cron path) / 'incomplete' / 'unpaid' / 'paused' for
+          // founder-owned workspaces, leaving Jordan (and any future
+          // founder whose sub breaks) with zero in-app signal.
+          //
+          // Special case: status === 'canceled' AND subId IS NULL is the
+          // founder-day-30-cron post-expiry state — that path keeps
+          // routing through FoundingTrialEndingBanner below, since the
+          // copy is founder-specific ("Your founding trial ended, want
+          // to convert?"). All OTHER 'canceled' variants (Stripe sub
+          // deletion, etc.) route through the inactive banner.
+          const INACTIVE_STATUSES = [
+            "canceled",
+            "past_due",
+            "incomplete",
+            "incomplete_expired",
+            "unpaid",
+            "paused",
+          ] as const;
+          type InactiveStatus = (typeof INACTIVE_STATUSES)[number];
+          const isFounderPostCronCanceled =
+            isFounder && status === "canceled" && subId === null;
+          if (
+            status &&
+            (INACTIVE_STATUSES as readonly string[]).includes(status) &&
+            !isFounderPostCronCanceled
+          ) {
+            return (
+              <StartTrialBanner
+                workspaceId={ws.id}
+                workspaceSlug={ws.slug}
+                variant="inactive"
+                remainingPhrase={null}
+                inactiveStatus={status as InactiveStatus}
+              />
+            );
+          }
+
           if (isFounder) {
             // pre_expiry — Track A trial within 72h of deadline.
             if (
@@ -879,39 +923,12 @@ export default async function WorkspaceDashboardPage({
             );
           }
 
-          // BR-1: inactive subscription states. Any non-active,
-          // non-trialing Stripe status renders the red "inactive"
-          // banner. Owner sees actionable copy + reactivate CTA
-          // matched to the underlying status (canceled vs past_due
-          // vs etc. each get their own heading). Personal workspaces
-          // don't reach here — they have no workspace_billing row at
-          // all per WT-4's init trigger, so status is null and falls
-          // through to the final return below.
-          //
-          // The CTA wires to the same PlanPickerModal → Stripe
-          // Checkout flow as the expired variant, since reactivation
-          // is the same flow regardless of which inactive state the
-          // workspace lands in.
-          const INACTIVE_STATUSES = [
-            "canceled",
-            "past_due",
-            "incomplete",
-            "incomplete_expired",
-            "unpaid",
-            "paused",
-          ] as const;
-          type InactiveStatus = (typeof INACTIVE_STATUSES)[number];
-          if (status && (INACTIVE_STATUSES as readonly string[]).includes(status)) {
-            return (
-              <StartTrialBanner
-                workspaceId={ws.id}
-                workspaceSlug={ws.slug}
-                variant="inactive"
-                remainingPhrase={null}
-                inactiveStatus={status as InactiveStatus}
-              />
-            );
-          }
+          // BR-1 fix: inactive-status branch hoisted to the top of
+          // this block (see the comment above the hoisted check). The
+          // original Track-B-position branch that used to live here is
+          // gone — the hoisted version handles both founder + non-
+          // founder paths, and removing the duplicate keeps the
+          // INACTIVE_STATUSES array single-sourced.
 
           // Final fallthrough — null workspace_billing row (personal
           // workspaces, or a future state that slips through). No
