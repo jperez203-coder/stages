@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { Mail, UserPlus } from "lucide-react";
 import { AuthShell } from "@/components/auth/AuthShell";
@@ -212,10 +212,17 @@ export function SignUpPanel() {
             . You need to sign up with this address to accept it.
           </div>
         </div>
-        <SignUpForm
-          onSignedUp={setPendingConfirmEmail}
-          lockedEmail={inviteLock.email}
-        />
+        {/* FB-1: SignUpForm now reads ?invite= via useSearchParams.
+            Next.js 16 requires that under a Suspense boundary during
+            prerender — same posture SignInPanel uses for
+            WorkspaceSelector. The fallback mirrors the surrounding form
+            spacing so there's no visual flicker. */}
+        <Suspense fallback={<div className="h-72" />}>
+          <SignUpForm
+            onSignedUp={setPendingConfirmEmail}
+            lockedEmail={inviteLock.email}
+          />
+        </Suspense>
         <ConsentMicrocopy />
       </AuthShell>
     );
@@ -226,7 +233,9 @@ export function SignUpPanel() {
       title="Create your account"
       subtitle="Set up a workspace to start tracking client engagements."
     >
-      <SignUpForm onSignedUp={setPendingConfirmEmail} />
+      <Suspense fallback={<div className="h-72" />}>
+        <SignUpForm onSignedUp={setPendingConfirmEmail} />
+      </Suspense>
       <ConsentMicrocopy />
     </AuthShell>
   );

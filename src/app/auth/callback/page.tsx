@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { AlertCircle } from "lucide-react";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { useSession } from "@/hooks/useSession";
@@ -34,8 +34,33 @@ import { useSession } from "@/hooks/useSession";
  * The only thing we read from the URL ourselves is the OAuth `error` param
  * (set when the user clicks Cancel on Google's consent screen).
  */
+/**
+ * FB-1: useSearchParams was added to the inner component below to read
+ * ?invite= / ?next= for the invite handoff. Next.js 16 requires any
+ * Client Component tree that calls useSearchParams to live inside a
+ * Suspense boundary during prerender — otherwise the prerender errors
+ * with "useSearchParams() should be wrapped in a suspense boundary."
+ * Same Suspense-wrapper posture SignInPanel uses for WorkspaceSelector.
+ * The fallback mirrors the in-flight spinner shell so there's no visual
+ * flicker between Suspense fallback and the actual inner render.
+ */
 export default function AuthCallbackPage() {
+  return (
+    <Suspense
+      fallback={
+        <AuthShell title="Signing you in…" subtitle="Hold on a moment.">
+          <div className="h-32" />
+        </AuthShell>
+      }
+    >
+      <AuthCallbackInner />
+    </Suspense>
+  );
+}
+
+function AuthCallbackInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const session = useSession();
   const [error, setError] = useState<string | null>(null);
   const [timedOut, setTimedOut] = useState(false);
@@ -56,11 +81,29 @@ export default function AuthCallbackPage() {
   // asynchronously after the page mounts, so on first render session.status
   // is "loading", then "anonymous" (briefly, while the exchange is in
   // flight), then "authenticated". When it flips authenticated, we go.
+  //
+  // FB-1: when ?invite=<token> or ?next=<path> rode along on the OAuth
+  // redirectTo (e.g. user clicked "Sign in with Google" from an invite
+  // page that augmented signInWithGoogle's redirectTo), route the user
+  // straight to that destination instead of bouncing through /auth/signin
+  // and WorkspaceSelector. Same precedence as WorkspaceSelector: ?invite
+  // > ?next > default. Falls back to /auth/signin (where WorkspaceSelector
+  // takes over) when neither URL param is present — preserves existing
+  // OAuth-without-invite behavior.
   useEffect(() => {
-    if (session.status === "authenticated") {
-      router.replace("/auth/signin");
+    if (session.status !== "authenticated") return;
+    const inviteToken = searchParams.get("invite");
+    if (inviteToken) {
+      router.replace(`/accept-invite/${inviteToken}`);
+      return;
     }
-  }, [session.status, router]);
+    const nextPath = searchParams.get("next");
+    if (nextPath && nextPath.startsWith("/")) {
+      router.replace(nextPath);
+      return;
+    }
+    router.replace("/auth/signin");
+  }, [session.status, router, searchParams]);
 
   // Safety net. If the SDK exchange fails silently and the session never
   // flips authenticated, we'd otherwise sit on the spinner forever. After

@@ -371,14 +371,34 @@ function PendingAnonymousState({
   const inviterSuffix = preview.inviter_is_active_member ? "" : " (no longer in this workspace)";
   const role = preview.role ?? "member";
 
-  // Before navigating away to /auth/signin or /auth/signup, stash the token
-  // in localStorage so WorkspaceSelector can route the user back here once
-  // they're authenticated. Set on click, consumed-and-cleared by
-  // WorkspaceSelector in the same browser. Cross-browser / cross-app email-
-  // confirmation gap is documented in 6d-iv verification.
+  // FB-1: token preservation across the email-confirmation browser handoff.
+  // Two-layer scheme that survives both same-browser and cross-browser flows:
+  //
+  //   1. localStorage write (preserveToken below) — survives in-session
+  //      navigation between /accept-invite, /auth/signin, /auth/signup,
+  //      and the post-auth WorkspaceSelector mount. Consumed by
+  //      WorkspaceSelector via consumePendingAcceptInvite. Works when the
+  //      whole flow stays in one browser session (incl. email confirmation
+  //      OFF + immediate sign-in).
+  //
+  //   2. URL query param (?invite=<token>) embedded in the CTA hrefs —
+  //      survives the cross-browser email-confirmation handoff. When email
+  //      confirmation is ON, Supabase emails a link to /auth/signin which
+  //      may open in a different browser/profile than the one where the
+  //      user typed the password. localStorage is sandboxed per browser,
+  //      so layer 1 is empty there. SignUpForm reads ?invite= and threads
+  //      it through emailRedirectTo as ?next=/accept-invite/<token>; the
+  //      post-confirm landing carries the token in the URL the email
+  //      client opened, regardless of localStorage state.
+  //
+  // WorkspaceSelector prefers URL params over localStorage. Both layers
+  // coexist; either alone is sufficient to recover the invite context.
   const preserveToken = () => {
     setPendingAcceptInvite(token);
   };
+
+  const signupHref = `/auth/signup?invite=${encodeURIComponent(token)}`;
+  const signinHref = `/auth/signin?invite=${encodeURIComponent(token)}`;
 
   return (
     <AuthShell
@@ -415,7 +435,7 @@ function PendingAnonymousState({
             token in its post-auth useEffect to route the user back here. */}
         <div className="space-y-2">
           <Link
-            href="/auth/signin"
+            href={signinHref}
             onClick={preserveToken}
             className="btn-primary w-full justify-center"
           >
@@ -423,7 +443,7 @@ function PendingAnonymousState({
             Sign in to accept
           </Link>
           <Link
-            href="/auth/signup"
+            href={signupHref}
             onClick={preserveToken}
             className="btn-ghost w-full justify-center"
           >
@@ -461,9 +481,14 @@ function WrongAccountState({
    */
   const switchAccount = async () => {
     setSwitching(true);
+    // FB-1: belt-and-suspenders — write the token to localStorage AND
+    // include it in the signin URL, matching the same two-layer pattern
+    // PendingState uses. If signout flips the user into another browser
+    // context (rare; sign-out is local-only by default), the URL layer
+    // still carries the invite through to post-auth routing.
     setPendingAcceptInvite(token);
     await supabase.auth.signOut();
-    router.push("/auth/signin");
+    router.push(`/auth/signin?invite=${encodeURIComponent(token)}`);
   };
 
   if (switching) {

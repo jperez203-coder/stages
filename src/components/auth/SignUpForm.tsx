@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { AtSign, Eye, EyeOff, Lock, User } from "lucide-react";
 import { GoogleGLogo } from "@/components/auth/GoogleGLogo";
 import { supabase } from "@/lib/supabase";
@@ -32,6 +33,15 @@ type Props = {
 const MIN_PASSWORD_LENGTH = 8;
 
 export function SignUpForm({ onSignedUp, lockedEmail }: Props) {
+  // FB-1: read ?invite=<token> from the URL. When present, the user
+  // arrived from /accept-invite/[token] → "Create an account"; we
+  // need to thread the token through Supabase's emailRedirectTo so
+  // the post-confirmation landing carries the invite context even
+  // when the confirmation email opens in a different browser/profile
+  // than the one where signup was initiated.
+  const searchParams = useSearchParams();
+  const inviteToken = searchParams.get("invite");
+
   // When lockedEmail is provided we initialize state from it AND ignore
   // input changes (the input is readOnly, but defensive against React
   // controlled-input gotchas).
@@ -83,11 +93,29 @@ export function SignUpForm({ onSignedUp, lockedEmail }: Props) {
     // Google OAuth signups already use. So this single change closes
     // the email+password signup hole without any trigger or RPC
     // changes.
+    // FB-1: when an invite token was carried in via ?invite=, embed a
+    // ?next=/accept-invite/<token> in emailRedirectTo. The confirmation
+    // email's link will land at /auth/signin with the invite path in
+    // the URL — WorkspaceSelector (or the SignIn panel pre-auth path)
+    // honors ?next= and routes there post-auth, bypassing the standard
+    // resolveDestination tree. Survives the localStorage-cross-browser
+    // gap because the path is encoded in the link itself.
+    //
+    // No invite token → unchanged behavior. The next-param scrub is
+    // belt-and-suspenders: encodeURIComponent on the token (already a
+    // UUID, but defensive) ensures the redirectTo URL parses correctly
+    // in case a future token format includes URL-reserved chars.
+    const emailRedirectTo = inviteToken
+      ? `${window.location.origin}/auth/signin?next=${encodeURIComponent(
+          `/accept-invite/${inviteToken}`,
+        )}`
+      : `${window.location.origin}/auth/signin`;
+
     const { data, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        emailRedirectTo: `${window.location.origin}/auth/signin`,
+        emailRedirectTo,
         data: { full_name: trimmedName },
       },
     });

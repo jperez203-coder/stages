@@ -66,14 +66,41 @@ export function WorkspaceSelector() {
     if (session.status !== "authenticated") return;
     if (contexts.status !== "ready") return;
 
-    // Pending invite redirect — set by /accept-invite/[token] before the
-    // anonymous user clicked "Sign in" or "Create an account". Check
-    // BEFORE running the resolver so we route back to finish accepting
-    // instead of falling into the user's default destination.
+    // FB-1: URL-param invite routing (precedence: invite > next > localStorage).
+    //
+    // Honored before localStorage because URL params survive the
+    // cross-browser email-confirmation handoff that localStorage can't —
+    // Supabase emails the confirmation link to a browser/profile whose
+    // localStorage is sandboxed away from where signup was initiated, so
+    // pendingAcceptInvite reads empty there. SignUpForm threads the token
+    // into emailRedirectTo as ?next=/accept-invite/<token>; this branch
+    // is what consumes that path post-auth.
+    //
+    // ?invite=<token> takes top priority (canonical invite param surfaced
+    // by the accept-invite CTAs). ?next=<path> is the generic post-auth
+    // hand-off vehicle used by emailRedirectTo. Both share the same
+    // accept-invite destination today; ?next= leaves room for future
+    // non-invite post-auth redirects without overloading invite semantics.
+    //
+    // Honored in portal-mode too — same posture as the localStorage path:
+    // an active invite-acceptance flow always takes precedence over the
+    // portal vs. agency routing decision.
+    const urlInviteToken = searchParams.get("invite");
+    if (urlInviteToken) {
+      router.replace(`/accept-invite/${urlInviteToken}`);
+      return;
+    }
+    const urlNextPath = searchParams.get("next");
+    if (urlNextPath && urlNextPath.startsWith("/")) {
+      router.replace(urlNextPath);
+      return;
+    }
+
+    // Pending invite redirect (localStorage layer). The same-browser
+    // fallback for users whose entire flow stayed in one session — covers
+    // the email-confirmation-OFF case and the click-to-sign-in case.
     // consumePendingAcceptInvite reads-and-clears in one step so a future
     // post-auth render (sign out → sign back in) won't see a stale token.
-    // (Honored in portal-mode too — a pending invite acceptance is a
-    // legitimate interrupted flow that should always take precedence.)
     const pendingInviteToken = consumePendingAcceptInvite();
     if (pendingInviteToken) {
       router.replace(`/accept-invite/${pendingInviteToken}`);
