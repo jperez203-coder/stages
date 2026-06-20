@@ -1,0 +1,87 @@
+-- ============================================================================
+-- BR-2c: drop the deprecated 4-arg create_pipeline_with_channels overload
+-- ============================================================================
+-- BR-2b's verification SELECT against pg_proc surfaced TWO rows for
+-- create_pipeline_with_channels: the gated 5-arg version (20260609120000,
+-- adds template_id) AND a still-extant 4-arg version (20260520120000,
+-- the pre-template generation).
+--
+-- The 4-arg overload has NO subscription gate. PostgREST + the supabase
+-- client both resolve overloads by argument shape; a caller passing
+-- exactly 4 args (workspace_id, pipeline_name, pipeline_emoji,
+-- pipeline_company) would resolve to the ungated function and bypass
+-- BR-2b's enforcement entirely.
+--
+-- AUDIT CONFIRMED THE 4-ARG IS DEAD
+-- ─────────────────────────────────
+-- Grep across src/ for create_pipeline_with_channels surfaced:
+--   * Exactly ONE supabase.rpc() call, at
+--     src/app/w/(workspace)/[slug]/p/new/page.tsx:154-169. The call
+--     passes 5 args including template_id, explicitly targeting the
+--     5-arg overload (inline comment at line 145 confirms intent).
+--   * Five other matches across chat-data.ts / TemplatePickerModal.tsx
+--     / ChatSidebar.tsx / AppShell.tsx — all documentation references
+--     in comments, no executable calls.
+--
+-- Verdict: zero app-code consumers of the 4-arg overload. Drop is safe.
+--
+-- WHY DROP RATHER THAN GATE THE 4-ARG?
+-- ────────────────────────────────────
+-- Either approach closes the bypass, but DROP leaves zero ambiguity for
+-- future maintainers. A gated 4-arg overload signals "this is a
+-- supported entry point" which it isn't; removing it is the honest
+-- representation of "the only supported create-pipeline entry point is
+-- the 5-arg form." If a future requirement reintroduces a need for an
+-- arg-shape distinction, we'd add it fresh with the gate baked in from
+-- the start.
+--
+-- DROP SIGNATURE
+-- ──────────────
+-- Postgres DROP FUNCTION requires the exact arg signature to
+-- disambiguate overloads. Per 20260520120000_create_pipeline_company_-
+-- param.sql:30-35, the 4-arg overload is:
+--   public.create_pipeline_with_channels(uuid, text, text, text)
+-- The 5-arg overload — public.create_pipeline_with_channels(uuid, text,
+-- text, text, uuid) — is NOT affected by this DROP and continues
+-- serving the only live call site.
+--
+-- IF NOT EXISTS guard makes this idempotent: re-applying against a DB
+-- where the 4-arg has already been dropped is a no-op, not an error.
+--
+-- ┌─ DOWN PLAN
+-- │
+-- │   CREATE OR REPLACE the 4-arg signature using the body from
+-- │   supabase/migrations/20260520120000_create_pipeline_company_-
+-- │   param.sql. This is purely a backward-compat restore — no app
+-- │   code calls it, so reverting only matters if a future caller is
+-- │   added that relies on the 4-arg shape.
+-- │
+-- └──────────────────────────────────────────────────────────────────────
+-- ============================================================================
+
+drop function if exists public.create_pipeline_with_channels(uuid, text, text, text);
+
+
+-- ============================================================================
+-- VERIFICATION QUERIES (commented — run in SQL editor after apply)
+-- ============================================================================
+-- (a) Confirm only ONE overload of create_pipeline_with_channels remains
+--     (the 5-arg version with the BR-2b gate).
+--   select
+--     proname,
+--     pg_get_function_identity_arguments(oid) as args,
+--     position('is_workspace_writable' in pg_get_functiondef(oid)) > 0 as has_gate
+--   from pg_proc
+--   where pronamespace = 'public'::regnamespace
+--     and proname = 'create_pipeline_with_channels'
+--   order by args;
+--   -- Expected: EXACTLY 1 row.
+--   --   args = 'workspace_id uuid, pipeline_name text, pipeline_emoji
+--   --          text, pipeline_company text, template_id uuid'
+--   --   has_gate = true
+--
+-- (b) Smoke: app-code call site still works. From the running app:
+--     navigate to /w/[slug]/p/new, pick a template, click Create —
+--     should succeed for a writable workspace, raise
+--     'subscription_required' for an inactive one (BR-2b gate fires).
+-- ============================================================================
