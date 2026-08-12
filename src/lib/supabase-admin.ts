@@ -35,6 +35,13 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
  *   - src/app/w/(workspace)/[slug]/settings/privacy/actions.ts
  *     (Slice 0.1 — writes ai_consent_audit, a service-role-only audit
  *     table modeled on seat_sync_log per docs/DATA-COLLECTION.md § 4.3.D)
+ *   - src/app/api/track-pageview/route.ts (public, unauthenticated
+ *     endpoint — INSERTs into page_views, which has zero RLS policies
+ *     by design; only a service-role client can write to it)
+ *   - src/lib/admin-metrics.ts (founder-only /admin/metrics page —
+ *     reads across workspaces/pipelines/billing that no single RLS-
+ *     scoped session could see at once; gated by isAdminUser() in
+ *     src/lib/admin-auth.ts BEFORE this module is ever called)
  *
  * Any new import of this file is a request to widen the trust boundary
  * further — treat it as a design review, not a routine code change.
