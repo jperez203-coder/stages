@@ -13,8 +13,26 @@ import { computeAgencySeatCount } from "@/lib/seat-count";
  * in supabase/migrations/20260618120000_stripe_billing_tables.sql. If
  * pricing ever changes, MRR here will drift until this constant is
  * updated — there's no live read from Stripe.
+ *
+ * FOUNDER_USER_IDS is intentionally separate from admin-auth.ts's
+ * ADMIN_USER_IDS — one is "who can view this page," the other is "whose
+ * activity doesn't count as real acquisition." They happen to be the same
+ * person today; don't collapse them into one constant, the two policies
+ * can diverge later (e.g. a teammate who can view metrics but whose
+ * testing SHOULD count). Excluded from: signups, pipeline/invite/plan
+ * funnel steps, and every billing aggregate (MRR, active/trialing,
+ * plan split, trial→paid, cancellations) for any workspace a founder
+ * OWNS — so QA work in your own workspace never inflates these numbers
+ * again. page_views is the one exception: visits are anonymous by
+ * design (no session/IP logged, on purpose — see the migration), so a
+ * founder's own visits to /auth/signup can't be distinguished and
+ * aren't excluded. If that ever matters, it needs new instrumentation,
+ * not a filter here.
  */
 const PLAN_PRICE: Record<string, number> = { solo: 29, team: 39 };
+const FOUNDER_USER_IDS = new Set<string>([
+  "f3d54a29-ad84-4de5-a727-5af825be3206", // jordanperez1270@gmail.com
+]);
 
 export type FunnelStep = {
   label: string;
@@ -63,7 +81,7 @@ export async function fetchAdminMetrics(): Promise<AdminMetrics> {
       .order("created_at", { ascending: true })
       .limit(1)
       .maybeSingle(),
-    admin.from("profiles").select("id", { count: "exact", head: true }),
+    admin.from("profiles").select("id"),
     admin.from("pipelines").select("workspace_id"),
     admin
       .from("workspace_memberships")
@@ -80,7 +98,7 @@ export async function fetchAdminMetrics(): Promise<AdminMetrics> {
 
   for (const [label, res] of [
     ["page_views count", pageViewsRes],
-    ["profiles count", profilesRes],
+    ["profiles", profilesRes],
     ["pipelines", pipelinesRes],
     ["owner memberships", ownerMembershipsRes],
     ["client_invites", clientInvitesRes],
@@ -93,33 +111,66 @@ export async function fetchAdminMetrics(): Promise<AdminMetrics> {
   }
 
   const visitedCount = pageViewsRes.count ?? 0;
-  const signedUpCount = profilesRes.count ?? 0;
+  const signedUpCount = (profilesRes.data ?? []).filter(
+    (p) => !FOUNDER_USER_IDS.has(p.id),
+  ).length;
 
-  // ── Step 3: created a pipeline — distinct owners of a workspace that
-  // has at least one pipeline. ──────────────────────────────────────────
+  const ownerMemberships = ownerMembershipsRes.data ?? [];
+  const founderOwnedWorkspaceIds = new Set(
+    ownerMemberships
+      .filter((m) => FOUNDER_USER_IDS.has(m.user_id))
+      .map((m) => m.workspace_id),
+  );
+  const nonFounderOwnerMemberships = ownerMemberships.filter(
+    (m) => !FOUNDER_USER_IDS.has(m.user_id),
+  );
+
+  // ── Step 3: created a pipeline — distinct non-founder owners of a
+  // workspace that has at least one pipeline. ──────────────────────────
   const workspaceIdsWithPipeline = new Set(
     (pipelinesRes.data ?? []).map((p) => p.workspace_id),
   );
   const pipelineCreators = new Set(
-    (ownerMembershipsRes.data ?? [])
+    nonFounderOwnerMemberships
       .filter((m) => workspaceIdsWithPipeline.has(m.workspace_id))
       .map((m) => m.user_id),
   );
 
-  // ── Step 4: invited a client — distinct inviters. ──────────────────
+  // ── Step 4: invited a client — distinct non-founder inviters. ──────
   const inviters = new Set(
     (clientInvitesRes.data ?? [])
       .map((c) => c.invited_by)
-      .filter((id): id is string => !!id),
+      .filter((id): id is string => !!id && !FOUNDER_USER_IDS.has(id)),
   );
 
-  // ── Step 5: selected a plan (has a workspace_billing row, any status)
+  // ── Step 5: selected a plan (has a workspace_billing row, any status),
+  // excluding founder-owned workspaces. ───────────────────────────────
   const workspaceIdsWithBilling = new Set(
-    (billingRes.data ?? []).map((b) => b.workspace_id),
+    (billingRes.data ?? [])
+      .map((b) => b.workspace_id)
+      .filter((id) => !founderOwnedWorkspaceIds.has(id)),
   );
   const planSelectors = new Set(
-    (ownerMembershipsRes.data ?? [])
+    nonFounderOwnerMemberships
       .filter((m) => workspaceIdsWithBilling.has(m.workspace_id))
+      .map((m) => m.user_id),
+  );
+
+  // ── Step 6: cancelled — distinct non-founder owners of a workspace
+  // whose billing row has since gone to 'canceled'. A subset of "selected
+  // a plan," same owner-based counting rule as every other step. ────────
+  const workspaceIdsCancelled = new Set(
+    (billingRes.data ?? [])
+      .filter(
+        (b) =>
+          b.subscription_status === "canceled" &&
+          !founderOwnedWorkspaceIds.has(b.workspace_id),
+      )
+      .map((b) => b.workspace_id),
+  );
+  const cancelledOwners = new Set(
+    nonFounderOwnerMemberships
+      .filter((m) => workspaceIdsCancelled.has(m.workspace_id))
       .map((m) => m.user_id),
   );
 
@@ -129,6 +180,7 @@ export async function fetchAdminMetrics(): Promise<AdminMetrics> {
     pipelineCreators.size,
     inviters.size,
     planSelectors.size,
+    cancelledOwners.size,
   ];
   const labels = [
     "Visited signup page",
@@ -136,6 +188,7 @@ export async function fetchAdminMetrics(): Promise<AdminMetrics> {
     "Created a pipeline",
     "Invited a client",
     "Selected a plan (Solo/Team)",
+    "Cancelled",
   ];
   const funnel: FunnelStep[] = rawCounts.map((count, i) => ({
     label: labels[i],
@@ -148,8 +201,10 @@ export async function fetchAdminMetrics(): Promise<AdminMetrics> {
       rawCounts[0] === 0 ? null : Math.round((count / rawCounts[0]) * 1000) / 10,
   }));
 
-  // ── Plan / MRR / trial breakdowns ──────────────────────────────────
-  const billing = billingRes.data ?? [];
+  // ── Plan / MRR / trial breakdowns — founder-owned workspaces excluded
+  const billing = (billingRes.data ?? []).filter(
+    (b) => !founderOwnedWorkspaceIds.has(b.workspace_id),
+  );
   const active = billing.filter((b) => b.subscription_status === "active");
   const trialing = billing.filter((b) => b.subscription_status === "trialing");
   const everTrialed = billing.filter((b) => b.trial_ends_at !== null);
