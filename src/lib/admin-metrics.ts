@@ -48,6 +48,7 @@ export type AdminMetrics = {
   planCounts: { solo: number; team: number };
   activeSubscriptions: number;
   trialingSubscriptions: number;
+  churn: { canceled: number; totalEverSubscribed: number; rate: number | null };
   trialToPaid: { converted: number; totalEverTrialed: number; rate: number | null };
   cancellations: {
     workspaceName: string;
@@ -248,6 +249,16 @@ export async function fetchAdminMetrics(): Promise<AdminMetrics> {
     })
     .sort((a, b) => (a.canceledAround < b.canceledAround ? 1 : -1));
 
+  // Churn rate — of every non-founder workspace that ever had a billing
+  // row (any status: active, trialing, canceled, past_due, ...), what
+  // fraction ended up canceled. Lifetime churn, not a rolling monthly
+  // rate — matches the simplicity of trialToPaid below. Revisit if/when
+  // there's enough volume for a real cohort-based churn calculation.
+  const churnRate =
+    billing.length === 0
+      ? null
+      : Math.round((cancellations.length / billing.length) * 1000) / 10;
+
   return {
     funnel,
     pageViewsTrackingSince: oldestPageViewRes.data?.created_at ?? null,
@@ -255,6 +266,11 @@ export async function fetchAdminMetrics(): Promise<AdminMetrics> {
     planCounts,
     activeSubscriptions: active.length,
     trialingSubscriptions: trialing.length,
+    churn: {
+      canceled: cancellations.length,
+      totalEverSubscribed: billing.length,
+      rate: churnRate,
+    },
     trialToPaid: {
       converted: convertedFromTrial.length,
       totalEverTrialed: everTrialed.length,

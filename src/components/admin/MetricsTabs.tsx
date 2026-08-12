@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { AdminMetrics } from "@/lib/admin-metrics";
 import { AcquisitionFunnelChart } from "@/components/admin/AcquisitionFunnelChart";
 
-const TABS = ["Overview", "Cancelled"] as const;
+const TABS = ["Overview", "Cancellations / churn"] as const;
 type Tab = (typeof TABS)[number];
 
 export function MetricsTabs({ metrics }: { metrics: AdminMetrics }) {
@@ -33,7 +33,7 @@ export function MetricsTabs({ metrics }: { metrics: AdminMetrics }) {
             }}
           >
             {t}
-            {t === "Cancelled" && metrics.cancellations.length > 0 && (
+            {t === "Cancellations / churn" && metrics.cancellations.length > 0 && (
               <span
                 className="ml-2 text-[11px] font-medium"
                 style={{
@@ -126,17 +126,37 @@ function OverviewTab({ metrics }: { metrics: AdminMetrics }) {
 
 function CancelledTab({ metrics }: { metrics: AdminMetrics }) {
   return (
-    <section
-      className="rounded-2xl"
-      style={{ background: "#2C2C2F", border: "1px solid #36363A", padding: "24px" }}
-    >
-      <h2 className="text-[15px] font-medium text-white mb-1">Cancelled subscriptions</h2>
-      <p className="text-[12.5px] mb-5" style={{ color: "#71717A" }}>
-        Tenure is approximated as created_at → updated_at on the billing row —
-        there's no dedicated canceled_at column, so this can be off if a row
-        was touched again after cancellation.
-      </p>
-      {metrics.cancellations.length === 0 ? (
+    <>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-6">
+        <StatTile
+          label="Churn rate"
+          value={metrics.churn.rate === null ? "—" : `${metrics.churn.rate}%`}
+          sub={`${metrics.churn.canceled}/${metrics.churn.totalEverSubscribed} ever subscribed`}
+        />
+        <StatTile label="Cancelled" value={String(metrics.churn.canceled)} />
+        <StatTile
+          label="Retained"
+          value={
+            metrics.churn.rate === null ? "—" : `${Math.round((100 - metrics.churn.rate) * 10) / 10}%`
+          }
+        />
+      </div>
+
+      <section
+        className="rounded-2xl"
+        style={{ background: "#2C2C2F", border: "1px solid #36363A", padding: "24px" }}
+      >
+        <h2 className="text-[15px] font-medium text-white mb-1">
+          Cancellation / churn rate detail
+        </h2>
+        <p className="text-[12.5px] mb-5" style={{ color: "#71717A" }}>
+          Churn rate = cancelled ÷ every non-founder workspace that ever had a
+          subscription (any status), lifetime — not a rolling monthly rate.
+          Tenure below is approximated as created_at → updated_at on the
+          billing row — there's no dedicated canceled_at column, so this can
+          be off if a row was touched again after cancellation.
+        </p>
+        {metrics.cancellations.length === 0 ? (
         <p className="text-[13px]" style={{ color: "#979393" }}>
           No cancellations yet.
         </p>
@@ -172,7 +192,8 @@ function CancelledTab({ metrics }: { metrics: AdminMetrics }) {
           </tbody>
         </table>
       )}
-    </section>
+      </section>
+    </>
   );
 }
 
