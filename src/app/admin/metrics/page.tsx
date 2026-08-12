@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { isAdminUser } from "@/lib/admin-auth";
 import { fetchAdminMetrics } from "@/lib/admin-metrics";
+import { AcquisitionFunnelChart } from "@/components/admin/AcquisitionFunnelChart";
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +51,14 @@ export default async function AdminMetricsPage() {
           <StatTile label="Team plans" value={String(metrics.planCounts.team)} />
           <StatTile label="Cancellations" value={String(metrics.cancellations.length)} />
         </div>
+
+        {/* ── Funnel shape ──────────────────────────────────────────── */}
+        <section
+          className="rounded-2xl mb-6"
+          style={{ background: "#2C2C2F", border: "1px solid #36363A", padding: "24px" }}
+        >
+          <AcquisitionFunnelChart steps={metrics.funnel} />
+        </section>
 
         {/* ── Funnel ────────────────────────────────────────────────── */}
         <section
