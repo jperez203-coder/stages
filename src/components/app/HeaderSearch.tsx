@@ -189,20 +189,21 @@ export function HeaderSearch({ pipelines, status, workspaceSlug }: Props) {
   return (
     <div
       ref={containerRef}
-      className="flex-1 min-w-0 hidden md:block"
-      style={{ position: "relative" }}
+      className="flex-shrink-0 min-w-0 hidden md:block"
+      style={{ position: "relative", width: 420 }}
     >
       <div
         className="flex items-center gap-2"
         style={{
-          background: "rgba(255,255,255,0.04)",
+          background: "#1F1F1F",
           border: `1px solid ${open ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)"}`,
           borderRadius: 8,
-          padding: "8px 12px",
+          height: 30,
+          padding: "0 10px",
           transition: "border-color 120ms ease-out",
         }}
       >
-        <Search size={14} style={{ color: "rgba(255,255,255,0.5)" }} />
+        <Search size={14} style={{ color: "#949599" }} />
         <input
           ref={inputRef}
           type="text"
@@ -217,7 +218,7 @@ export function HeaderSearch({ pipelines, status, workspaceSlug }: Props) {
           aria-label="Search pipelines by name or company"
           autoComplete="off"
           spellCheck={false}
-          className="flex-1 bg-transparent text-[13px] outline-none border-none"
+          className="flex-1 bg-transparent text-[13px] outline-none border-none placeholder:text-[#949599]"
           style={{
             color: "white",
             minWidth: 0,

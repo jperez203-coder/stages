@@ -3,7 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Plus } from "lucide-react";
+import { ArrowLeft, Plus, PanelLeft, Settings } from "lucide-react";
 import { StagesLogo } from "@/components/icons/StagesLogo";
 import { useSession } from "@/hooks/useSession";
 import { useUserContexts } from "@/hooks/useUserContexts";
@@ -14,6 +14,7 @@ import {
   type HeaderSearchPipeline,
   type HeaderSearchStatus,
 } from "@/components/app/HeaderSearch";
+import { Sidebar } from "@/components/app/Sidebar";
 import { supabase } from "@/lib/supabase";
 
 type Props = {
@@ -143,6 +144,11 @@ export function AppShell({ children }: Props) {
   const [searchPipelines, setSearchPipelines] = useState<HeaderSearchPipeline[]>([]);
   const [searchStatus, setSearchStatus] = useState<HeaderSearchStatus>("loading");
 
+  // Sidebar collapse — Figma V2's sidebar-toggle icon in the header.
+  // Local UI state only, not persisted; matches the icon's apparent role
+  // as a quick show/hide rather than a saved preference.
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+
   useEffect(() => {
     if (!activeWorkspaceId) {
       // No agency context yet (contexts loading, or user not an agency
@@ -186,44 +192,40 @@ export function AppShell({ children }: Props) {
   }, [activeWorkspaceId]);
 
   return (
-    <div className="min-h-screen flex flex-col" style={{ background: "#212124" }}>
+    // Header is a flat, full-width strip flush with the true viewport edges
+    // — NOT part of the rounded/stroked panel below it. Only the
+    // sidebar+content region gets the rounded-card, "leave space between
+    // all edges" treatment from Figma V2. Keeping these as two separate
+    // elements (rather than one bordered wrapper around everything) is
+    // deliberate per Jordan's correction — the top bar has its own flat
+    // edge-to-edge look with no stroke or corner radius.
+    <div style={{ height: "100vh", background: "#000000", display: "flex", flexDirection: "column" }}>
       <header
-        className="border-b border-zinc-800 sticky top-0 z-40"
+        className="flex-shrink-0"
         style={{
-          background: "#121212",
-          height: "64px",
+          background: "#000000",
+          height: "44px",
         }}
       >
-        {/* Inner container matches the dashboard body's max-w-[1200px] +
-            px-4/sm:px-6 so the workspace switcher's left edge and the
-            avatar's right edge align with the cards below. Header
-            background still spans the full viewport (sticky bar). */}
-        {/* Flat flex row matching the figma header layout:
-              [logo] [switcher] [search flex-1] [pipeline] [avatar]
-            Consistent 16px gap between every element. Search bar is the
-            only flexible element — it absorbs all remaining space; the
-            others sit at their natural width. No max-width cap on search:
-            it spans whatever's left between switcher and Pipeline button. */}
+        {/* Three-column grid, not a flat flex row: [left: switcher+toggle]
+            [middle: logo+search, CENTERED within this column] [right:
+            create/settings/avatar]. The middle column's width is
+            everything left over after the two fixed-width edge columns,
+            and its content is centered inside it — so the logo+search
+            cluster sits centered over the "home screen" content area
+            (which starts right where the sidebar-aligned left column
+            ends), not dumped against the left edge with a single trailing
+            spacer soaking up all the empty space on one side. */}
         <div
-          className="max-w-[1600px] mx-auto px-6 sm:px-12 h-full flex items-center"
-          style={{ gap: "16px" }}
+          className="h-full grid items-center"
+          style={{
+            gridTemplateColumns: "auto 1fr auto",
+            columnGap: "16px",
+            paddingLeft: 12,
+            paddingRight: 12,
+          }}
         >
-          {/* Logo — clicking routes to the active workspace's dashboard
-              (or workspace selector if no active slug). Standard webapp
-              pattern (Linear, Notion, Slack all do this). Falls back to
-              `/` if activeSlug isn't resolved yet — won't happen on
-              normal /w/[slug]/* navigation since the URL has the slug. */}
-          <Link
-            href={activeSlug ? `/w/${activeSlug}` : "/"}
-            className="flex-shrink-0 flex items-center transition-opacity"
-            style={{ cursor: "pointer" }}
-            onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.8")}
-            onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
-            aria-label="Go to dashboard"
-          >
-            <StagesLogo size={28} />
-          </Link>
-
+        <div className="flex items-center" style={{ gap: "16px" }}>
           {/* Workspace switcher — agency-only. Hidden for pure clients
               (no workspaces to switch between, no "Create workspace"
               affordance they should see). Empty slot during the brief
@@ -236,6 +238,9 @@ export function AppShell({ children }: Props) {
                 contexts={contexts.contexts}
                 activeSlug={activeSlug}
                 userId={session.user.id}
+                triggerWidth={236}
+                triggerHeight={30}
+                compact
               />
             )}
 
@@ -275,49 +280,119 @@ export function AppShell({ children }: Props) {
               </Link>
             )}
 
+          {/* Sidebar-toggle — Figma V2. Only meaningful when a sidebar
+              could actually render; hidden otherwise (pure clients,
+              workspace-agnostic routes) so it never looks clickable with
+              nothing to toggle. */}
+          {hasAnyAgencyContext && activeSlug && (
+            <button
+              type="button"
+              onClick={() => setSidebarOpen((v) => !v)}
+              aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+              aria-pressed={sidebarOpen}
+              className="flex items-center justify-center flex-shrink-0 transition-colors"
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: 8,
+                background: "transparent",
+                border: "none",
+                color: "#979393",
+                cursor: "pointer",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#232326")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              <PanelLeft size={17} />
+            </button>
+          )}
+        </div>
+
+        {/* Middle column — logo + search, centered within the leftover
+            width after the two fixed edge columns. */}
+        <div className="flex items-center justify-center" style={{ gap: "16px" }}>
+          {/* Small brand mark — moved here from the header's far-left slot
+              per the Figma V2 layout, which places it beside the search
+              bar rather than as the header's leading element. Still links
+              home. */}
+          <Link
+            href={activeSlug ? `/w/${activeSlug}` : "/"}
+            className="flex-shrink-0 flex items-center transition-opacity"
+            style={{ cursor: "pointer" }}
+            onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.8")}
+            onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
+            aria-label="Go to dashboard"
+          >
+            <StagesLogo size={22} />
+          </Link>
+
           {/* Header search — real interactive input as of 2026-05-25.
               Was a styled placeholder div through Phase 4a; now wires
               the reserved ⌘K binding to focus the input and runs a
               client-side substring filter over the active workspace's
-              pipelines (name + company). flex-1 absorbs leftover
-              header space; hidden below md so mobile chrome stays
-              tight. See HeaderSearch.tsx for v1 scope decisions. */}
+              pipelines (name + company). Fixed width (Figma V2) — this
+              column centers it rather than letting it stretch. Hidden
+              below md so mobile chrome stays tight. See HeaderSearch.tsx
+              for v1 scope decisions. */}
           <HeaderSearch
             pipelines={searchPipelines}
             status={searchStatus}
             workspaceSlug={activeSlug}
           />
 
-          {/* + Pipeline button — only on workspace-scoped routes where
-              activeSlug is known AND the current user is a workspace
-              owner/admin. Members and pipeline-only agency users have
-              this hidden; the flex-1 search bar to its left grows to
-              fill the freed space, no layout jump.
-              Tier-A boundary fix (2026-05-26): also explicitly gated
-              on hasAnyAgencyContext. canCreatePipeline already
-              evaluates to false for pure clients today (activeWorkspaceContext
-              requires type === "agency"), but the redundant guard makes
-              the intent obvious to future readers and resists
-              regressions in the activeWorkspaceContext derivation. */}
+          {/* Quick-create — sits directly beside the search bar with the
+              same 16px gap the logo mark uses on its other side, so the
+              search bar reads as symmetrically bracketed (logo | search |
+              +), not grouped with the settings/avatar cluster on the far
+              right. Icon size matches Settings (17px) so the two read as
+              the same visual weight. Same underlying action and owner/
+              admin gating as before; only position + icon size changed. */}
           {activeSlug && canCreatePipeline && hasAnyAgencyContext && (
             <button
               type="button"
               onClick={() => router.push(`/w/${activeSlug}/p/new`)}
-              className="flex items-center gap-1.5 text-[14px] font-medium text-white flex-shrink-0 transition-opacity"
+              aria-label="New project"
+              className="flex items-center justify-center flex-shrink-0 transition-colors"
               style={{
-                background: "#108CE9",
-                height: 40,
-                padding: "0 16px",
-                borderRadius: 10,
+                width: 16,
+                height: 16,
+                borderRadius: "50%",
+                background: "#979393",
                 border: "none",
+                color: "#000000",
                 cursor: "pointer",
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.9")}
+              onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.85")}
               onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
             >
-              <Plus size={14} strokeWidth={2.5} />
-              Pipeline
+              <Plus size={9} strokeWidth={2.5} />
             </button>
+          )}
+        </div>
+
+        <div className="flex items-center" style={{ gap: "16px", marginRight: 16 }}>
+          {/* Settings — Figma V2 adds a standalone gear icon in the
+              header. Routes to the existing account settings page;
+              there's no per-workspace settings landing page today, so
+              this points at the one settings surface that already
+              exists rather than inventing a new destination. */}
+          {session.status === "authenticated" && (
+            <Link
+              href="/settings/account"
+              aria-label="Settings"
+              className="flex items-center justify-center flex-shrink-0 transition-colors"
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: 8,
+                background: "transparent",
+                color: "#979393",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#232326")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              <Settings size={17} />
+            </Link>
           )}
 
           {/* Avatar */}
@@ -326,15 +401,40 @@ export function AppShell({ children }: Props) {
               email={session.user.email ?? ""}
               displayName={contexts.profile.displayName}
               avatarUrl={contexts.profile.avatarUrl}
+              size={30}
             />
           )}
         </div>
+        </div>
       </header>
 
-      {/* Children render below the persistent header. Each view (ClientList,
-          ClientBoard, StagePage) is responsible for its own view-specific
-          chrome (search bars, back buttons, breadcrumbs, action buttons). */}
-      <div className="flex-1 flex flex-col min-h-0">{children}</div>
+      {/* Rounded, stroked panel — the ONLY element with the corner radius
+          + border treatment. Padding here (not on the outer wrapper) is
+          what insets it from the viewport's left/right/bottom edges while
+          the header above stays flush. */}
+      <div
+        className="flex-1 min-h-0"
+        style={{ paddingTop: 0, paddingRight: 12, paddingBottom: 12, paddingLeft: 12 }}
+      >
+        <div
+          className="flex h-full"
+          style={{
+            background: "#212124",
+            border: "1px solid #2D2E30",
+            borderRadius: 16,
+            overflow: "hidden",
+          }}
+        >
+          {hasAnyAgencyContext && activeSlug && sidebarOpen && (
+            <Sidebar
+              workspaceSlug={activeSlug}
+              workspaceId={activeWorkspaceId}
+              pipelines={searchPipelines}
+            />
+          )}
+          <div className="flex-1 flex flex-col min-h-0 overflow-y-auto">{children}</div>
+        </div>
+      </div>
     </div>
   );
 }

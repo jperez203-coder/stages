@@ -34,6 +34,15 @@ type Props = {
    *  tall — matches its 32px avatar) so the right-side cluster reads as
    *  one unit. Dropdown panel is unaffected by this prop. */
   compact?: boolean;
+  /** Fixed trigger-pill width in px. Figma V2 sizes AppShell's switcher to
+   *  exactly match the sidebar's width below it, so the two align as one
+   *  visual column. Omit to keep the pill's default content-hugging width
+   *  (every other call site — settings layout, PortalShell, WorkspaceSelector). */
+  triggerWidth?: number;
+  /** Fixed trigger-pill height in px, overriding the compact/default 32/40
+   *  toggle for fine pixel-level tuning against sibling header elements
+   *  (search bar, avatar). Omit to keep the compact-derived height. */
+  triggerHeight?: number;
   /** Dropdown alignment relative to the trigger pill.
    *   * "start" (default) — dropdown's LEFT edge aligns with trigger's
    *      left edge and extends rightward. Right answer when the trigger
@@ -97,13 +106,15 @@ export function HeaderWorkspaceSwitcher({
   userId,
   compact = false,
   align = "start",
+  triggerWidth,
+  triggerHeight: triggerHeightOverride,
 }: Props) {
   // Trigger-pill dimensions derived from `compact`. Default (agency
   // mode) sits at 40 to match AppShell's 40px avatar; compact (portal
   // mode) sits at 32 to match PortalShell's 32px avatar. Inner tile
   // scales proportionally so the # mark's visual weight stays roughly
   // ~70% of the pill height in both modes.
-  const triggerHeight = compact ? 32 : 40;
+  const triggerHeight = triggerHeightOverride ?? (compact ? 32 : 40);
   const triggerTileSize = compact ? 22 : 28;
   const triggerPadding = compact ? "0 8px 0 3px" : "0 10px 0 4px";
   const triggerFontSize = compact ? 12 : 13;
@@ -485,30 +496,41 @@ export function HeaderWorkspaceSwitcher({
         onClick={() => setOpen(!open)}
         className="flex items-center gap-2 transition-colors"
         style={{
-          background: "#212124",
+          // AppShell (the only caller passing triggerWidth) gets the
+          // Figma V2 fill; every other call site (PortalShell, settings,
+          // WorkspaceSelector) keeps its existing look untouched.
+          background: triggerWidth ? "#1F1F1F" : "#212124",
           border: "1px solid #36363A",
           borderRadius: "8px",
           padding: triggerPadding,
           height: `${triggerHeight}px`,
+          width: triggerWidth ? `${triggerWidth}px` : undefined,
+          justifyContent: triggerWidth ? "space-between" : undefined,
           color: "#E4E4E7",
           cursor: "pointer",
         }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = "#28282C")}
-        onMouseLeave={(e) => (e.currentTarget.style.background = "#212124")}
+        onMouseEnter={(e) =>
+          (e.currentTarget.style.background = triggerWidth ? "#292929" : "#28282C")
+        }
+        onMouseLeave={(e) =>
+          (e.currentTarget.style.background = triggerWidth ? "#1F1F1F" : "#212124")
+        }
       >
-        <StagesHashTile workspaceId={triggerWorkspaceId} size={triggerTileSize} />
-        <span
-          className="font-semibold truncate"
-          style={{
-            fontSize: triggerFontSize,
-            maxWidth: triggerLabelMaxWidth,
-          }}
-        >
-          {triggerLabel}
+        <span className="flex items-center gap-2 min-w-0">
+          <StagesHashTile workspaceId={triggerWorkspaceId} size={triggerTileSize} />
+          <span
+            className="font-semibold truncate"
+            style={{
+              fontSize: triggerFontSize,
+              maxWidth: triggerLabelMaxWidth,
+            }}
+          >
+            {triggerLabel}
+          </span>
         </span>
         <ChevronDown
           size={12}
-          className="text-zinc-500"
+          className="text-zinc-500 flex-shrink-0"
           style={{
             transform: open ? "rotate(180deg)" : "none",
             transition: "transform 0.15s",

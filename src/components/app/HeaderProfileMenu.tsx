@@ -121,7 +121,7 @@ export function HeaderProfileMenu({
         style={{
           width: `${size}px`,
           height: `${size}px`,
-          borderRadius: "6px",
+          borderRadius: "50%",
           cursor: "pointer",
           padding: 0,
           background: "transparent",
@@ -288,13 +288,13 @@ function Avatar({
   const initial = resolveInitial({ display_name: displayName, email });
 
   // Rendering shape rules (apply to both image and initials branches):
-  //   * borderRadius: 6px ACROSS ALL SIZES (2026-05-22 polish round —
-  //     was conditional 10px / 50%, now uniform square-ish 6px). Jordan
-  //     wanted "square instead of circle" — 6px is clearly square but
-  //     with a tiny bit of softness so the corners don't look razor-
-  //     sharp. Applies to both the 40px header trigger AND the 44px
-  //     dropdown header avatar; consistency reads better than the old
-  //     size-conditional flip.
+  //   * borderRadius: 50% (circular) as of the 2026-09-05 sidebar/Figma-V2
+  //     redesign — reverses the 2026-05-22 polish round's deliberate
+  //     square-ish 6px (Jordan explicitly wanted square at the time).
+  //     The new Figma spec calls for a circular avatar; flagged to Jordan
+  //     when this changed since it's a direct reversal of a prior explicit
+  //     preference, not an oversight. Applies to both the 40px header
+  //     trigger AND the 44px dropdown header avatar.
   //   * border: 1px on both branches (was 1px image + 2px initials —
   //     the 2px on initials read as a thick obvious ring; 1px matches
   //     the image branch + reads quieter).
@@ -316,7 +316,7 @@ function Avatar({
           width: `${size}px`,
           height: `${size}px`,
           boxSizing: "border-box",
-          borderRadius: "6px",
+          borderRadius: "50%",
           objectFit: "cover",
           // Stroke removed 2026-05-22 — Jordan polish pass. Photo + initial
           // branches both render borderless now on dashboard + canvas
@@ -340,7 +340,7 @@ function Avatar({
         color: text,
         // Stroke removed 2026-05-22 — see comment on the photo branch above.
         border: "none",
-        borderRadius: "6px",
+        borderRadius: "50%",
         fontSize: `${fontSize}px`,
       }}
     >
