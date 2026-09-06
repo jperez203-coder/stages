@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Filter, Search, Plus, Flag } from "lucide-react";
+import { Filter, Search, Plus, Flag } from "lucide-react";
+import { SidebarChevron } from "@/components/icons/SidebarChevron";
 import { supabase } from "@/lib/supabase";
 import { HomeGreeting } from "@/components/home/HomeGreeting";
 import { HomeTabs } from "@/components/home/HomeTabs";
@@ -12,6 +13,7 @@ import type { TaskRow } from "@/components/tasks/types";
 import { TaskGroupBadgeNotStarted } from "@/components/icons/TaskGroupBadgeNotStarted";
 import { TaskGroupBadgeInProgress } from "@/components/icons/TaskGroupBadgeInProgress";
 import { TaskGroupBadgeOverdue } from "@/components/icons/TaskGroupBadgeOverdue";
+import { TaskCreateButtonGraphic } from "@/components/icons/TaskCreateButtonGraphic";
 
 /**
  * /w/[slug]/tasks body — the global Task tab (Figma V2).
@@ -230,19 +232,9 @@ export function TaskListView({
               type="button"
               title="Create a task from within a project for now"
               disabled
-              className="flex items-center gap-1.5 rounded-md"
-              style={{
-                padding: "7px 12px",
-                fontSize: 13,
-                fontWeight: 500,
-                background: "#108CE9",
-                border: "none",
-                color: "#fff",
-                opacity: 0.5,
-                cursor: "not-allowed",
-              }}
+              style={{ background: "transparent", border: "none", padding: 0, opacity: 0.6, cursor: "not-allowed" }}
             >
-              <Plus size={14} /> Task
+              <TaskCreateButtonGraphic height={28} />
             </button>
           </div>
         </div>
@@ -260,11 +252,7 @@ export function TaskListView({
                 className="flex items-center gap-2 mb-2"
                 style={{ background: "transparent", border: "none", cursor: "pointer", padding: 0 }}
               >
-                {isCollapsed ? (
-                  <ChevronRight size={14} color="#71717A" />
-                ) : (
-                  <ChevronDown size={14} color="#71717A" />
-                )}
+                <SidebarChevron open={!isCollapsed} size={9} />
                 <GroupBadge group={key} />
                 <span className="text-[13px]" style={{ color: "#71717A" }}>
                   {groupTasks.length}

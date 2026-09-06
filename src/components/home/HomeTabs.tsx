@@ -62,11 +62,9 @@ export function HomeTabs({ activeTab, slug }: { activeTab: HomeTabKey; slug: str
             )}
             <Link
               href={href}
-              className={`font-poppins flex items-center gap-1.5 pb-3 text-[14px] transition-colors -mb-px border-b ${
-                isActive ? "font-semibold" : "font-normal"
-              }`}
+              className="font-poppins font-normal flex items-center gap-1.5 pb-3 text-[12px] transition-colors -mb-px border-b"
               style={{
-                color: isActive ? "#E4E4E7" : "#71717A",
+                color: isActive ? "#FFFFFF" : "#71717A",
                 borderBottomColor: isActive ? "#D9D9D9" : "transparent",
               }}
               onMouseEnter={(e) => {

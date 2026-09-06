@@ -3,8 +3,9 @@
 import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Plus, PanelLeft, Settings } from "lucide-react";
+import { ArrowLeft, PanelLeft, Settings } from "lucide-react";
 import { StagesLogo } from "@/components/icons/StagesLogo";
+import { QuickCreateIcon } from "@/components/icons/QuickCreateIcon";
 import { useSession } from "@/hooks/useSession";
 import { useUserContexts } from "@/hooks/useUserContexts";
 import { HeaderWorkspaceSwitcher } from "@/components/app/HeaderWorkspaceSwitcher";
@@ -356,16 +357,14 @@ export function AppShell({ children }: Props) {
               style={{
                 width: 16,
                 height: 16,
-                borderRadius: "50%",
-                background: "#979393",
+                background: "transparent",
                 border: "none",
-                color: "#000000",
                 cursor: "pointer",
               }}
               onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.85")}
               onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
             >
-              <Plus size={9} strokeWidth={2.5} />
+              <QuickCreateIcon size={14} />
             </button>
           )}
         </div>
