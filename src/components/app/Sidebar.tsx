@@ -3,15 +3,11 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import {
-  Home,
-  ChevronRight,
-  ChevronDown,
-  Plus,
-  FileText,
-  Table as TableIcon,
-} from "lucide-react";
+import { Home, Plus } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { DocIcon } from "@/components/icons/DocIcon";
+import { SheetIcon } from "@/components/icons/SheetIcon";
+import { SidebarChevron } from "@/components/icons/SidebarChevron";
 import type { HeaderSearchPipeline } from "@/components/app/HeaderSearch";
 
 /**
@@ -153,7 +149,7 @@ export function Sidebar({ workspaceSlug, workspaceId, pipelines }: Props) {
     if (!workspaceId) return;
     const defaultContent =
       type === "doc"
-        ? { blocks: [{ type: "p", text: "" }] }
+        ? { blocks: [{ id: crypto.randomUUID(), type: "p", text: "" }] }
         : { columns: ["Column 1", "Column 2"], rows: [] };
     const { data, error } = await supabase
       .from("documents")
@@ -312,11 +308,7 @@ export function Sidebar({ workspaceSlug, workspaceId, pipelines }: Props) {
               onMouseEnter={(e) => (e.currentTarget.style.background = "#232326")}
               onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
             >
-              {isOpen ? (
-                <ChevronDown size={12} color="#71717A" />
-              ) : (
-                <ChevronRight size={12} color="#71717A" />
-              )}
+              <SidebarChevron open={isOpen} size={7} />
               <span
                 className="text-[11px] font-semibold uppercase truncate"
                 style={{ color: "#71717A", letterSpacing: "0.04em" }}
@@ -336,9 +328,9 @@ export function Sidebar({ workspaceSlug, workspaceId, pipelines }: Props) {
                     onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                   >
                     {doc.type === "doc" ? (
-                      <FileText size={13} color="#15B981" style={{ flexShrink: 0 }} />
+                      <DocIcon size={16} className="flex-shrink-0" />
                     ) : (
-                      <TableIcon size={13} color="#3BA5EE" style={{ flexShrink: 0 }} />
+                      <SheetIcon size={16} className="flex-shrink-0" />
                     )}
                     <span className="text-[13px] truncate" style={{ color: "#E4E4E7" }}>
                       {doc.title}
@@ -406,7 +398,7 @@ function NavRow({
 function SectionHeader({ label, collapsed }: { label: string; collapsed?: boolean }) {
   return (
     <div className="flex items-center gap-1.5" style={{ padding: "7px 8px" }}>
-      <ChevronRight size={12} color="#71717A" style={{ opacity: collapsed ? 1 : 0 }} />
+      <SidebarChevron open={false} size={7} style={{ opacity: collapsed ? 1 : 0 }} />
       <span className="text-[12px]" style={{ color: "#71717A" }}>
         {label}
       </span>

@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
-import { DashboardGreeting } from "@/components/dashboard/DashboardGreeting";
+// DashboardGreeting import intentionally removed — see deferred-not-deleted
+// comment in HomeGreeting.tsx. The component file is kept in
+// src/components/dashboard/ for easy reinstatement.
 import { MissingNameBanner } from "@/components/dashboard/MissingNameBanner";
 import { StartTrialBanner } from "@/components/billing/StartTrialBanner";
 import { FoundingTrialEndingBanner } from "@/components/billing/FoundingTrialEndingBanner";
@@ -11,6 +13,8 @@ import { ActivityCard } from "@/components/dashboard/ActivityCard";
 // comment at the former mount point below. The component file is kept
 // in src/components/dashboard/ for easy reinstatement.
 import { PipelinesSection } from "@/components/dashboard/PipelinesSection";
+import { HomeTabs } from "@/components/home/HomeTabs";
+import { HomeGreeting } from "@/components/home/HomeGreeting";
 import type { AvatarUser } from "@/components/UserAvatar";
 import { pickAnchorStage, stageStateFromCounts } from "@/lib/current-stage";
 import type { StageState } from "@/lib/current-stage";
@@ -749,10 +753,16 @@ export default async function WorkspaceDashboardPage({
     : null;
 
   return (
-    <div className="dotted-grid flex-1 px-6 sm:px-12 py-6">
-      <div className="max-w-[1600px] mx-auto">
-        <DashboardGreeting firstName={firstName} />
+    <div className="dotted-grid flex-1 px-6 pt-3 pb-6">
+      <div className="max-w-[1600px] mx-auto mb-4">
+        <HomeGreeting firstName={firstName} />
+      </div>
 
+      <div className="mb-6">
+        <HomeTabs activeTab="dashboard" slug={slug} />
+      </div>
+
+      <div className="max-w-[1600px] mx-auto">
         {/* Missing-name nudge — renders only when display_name is
             null/empty AND the user hasn't dismissed it in this
             browser. Client component; the dismissal logic lives

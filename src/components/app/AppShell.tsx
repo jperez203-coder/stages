@@ -323,7 +323,7 @@ export function AppShell({ children }: Props) {
             onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
             aria-label="Go to dashboard"
           >
-            <StagesLogo size={22} />
+            <StagesLogo size={19} />
           </Link>
 
           {/* Header search — real interactive input as of 2026-05-25.
@@ -419,7 +419,7 @@ export function AppShell({ children }: Props) {
         <div
           className="flex h-full"
           style={{
-            background: "#212124",
+            background: "var(--color-stages-bg)",
             border: "1px solid #2D2E30",
             borderRadius: 16,
             overflow: "hidden",

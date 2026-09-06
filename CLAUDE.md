@@ -32,7 +32,7 @@ Brand palette (exposed as Tailwind theme tokens — `bg-stages-bg`, `text-stages
 
 | Token | Hex | Use |
 | --- | --- | --- |
-| `stages-bg` | `#212124` | Page background |
+| `stages-bg` | `#000000` | Page background (black, changed from `#212124` 2026-09-05 to match Figma V2) |
 | `stages-card` | `#2C2C2F` | Panel / card surfaces |
 | `stages-border` | `#36363A` | Default border |
 | `stages-border-hover` | `#4A4A50` | Hover border |
