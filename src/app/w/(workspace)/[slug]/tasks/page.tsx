@@ -95,7 +95,7 @@ export default async function TasksPage({
     supabase
       .from("tasks")
       .select(
-        `id, title, deadline, priority, status, done, created_at, stage_id,
+        `id, title, description, deadline, priority, status, done, created_at, stage_id,
          stage:stages!inner(
            id, pipeline_id,
            pipeline:pipelines!stages_pipeline_id_fkey!inner(id, name, emoji, workspace_id)
@@ -170,9 +170,11 @@ export default async function TasksPage({
       return {
         id: t.id,
         title: t.title,
+        description: t.description as string | null,
         deadline: t.deadline as string | null,
         priority: t.priority as TaskRow["priority"],
         status: t.status as TaskRow["status"],
+        done: t.done as boolean,
         createdAt: t.created_at as string,
         pipeline,
         assignees: assigneesByTaskId.get(t.id) ?? [],
@@ -186,5 +188,7 @@ export default async function TasksPage({
   const firstWord = nameBase ? nameBase.split(/\s+/)[0] : "";
   const firstName = firstWord ? firstWord[0].toUpperCase() + firstWord.slice(1) : null;
 
-  return <TaskListView slug={slug} firstName={firstName} initialTasks={tasks} />;
+  return (
+    <TaskListView slug={slug} firstName={firstName} initialTasks={tasks} currentUserId={user.id} />
+  );
 }

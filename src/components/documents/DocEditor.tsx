@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Bold, Heading1, Heading2, Italic, List, Pilcrow } from "lucide-react";
+import { Bold, Heading1, Heading2, Italic, List, Pilcrow, Plus, Square, X } from "lucide-react";
 
 /**
  * Minimal block doc editor. Blocks are { id, type, text } where `text` is
@@ -37,7 +37,10 @@ import { Bold, Heading1, Heading2, Italic, List, Pilcrow } from "lucide-react";
  * immediately as their own step.
  */
 
-export type DocBlock = { id: string; type: "p" | "h1" | "h2" | "bullet"; text: string };
+// `color` only applies to "banner" blocks — a solid-color block with an
+// editable header line (no image; see BlockRow's banner branch). Optional
+// rather than a separate variant type so DocBlock stays one flat shape.
+export type DocBlock = { id: string; type: "p" | "h1" | "h2" | "bullet" | "banner"; text: string; color?: string };
 export type DocContent = { blocks: DocBlock[] };
 
 function makeId(): string {
@@ -50,6 +53,16 @@ const BLOCK_TYPES: { type: DocBlock["type"]; icon: typeof Pilcrow; label: string
   { type: "h1", icon: Heading1, label: "Heading 1" },
   { type: "h2", icon: Heading2, label: "Heading 2" },
   { type: "bullet", icon: List, label: "Bullet" },
+];
+
+// Own palette rather than reusing STAGE_COLORS from lib/constants — that
+// array also drives pipeline stage color assignment, so a banner-specific
+// tweak (Jordan wanted a different green: #2A8C5E) would otherwise have
+// shifted stage colors everywhere else too.
+const BANNER_COLORS = [
+  "#3BA5EE", "#8B5CF6", "#EC4899", "#F59E0B",
+  "#2A8C5E", "#06B6D4", "#F43F5E", "#3B82F6",
+  "#A855F7", "#14B8A6", "#EAB308", "#EF4444",
 ];
 
 function blockStyle(type: DocBlock["type"]): React.CSSProperties {
@@ -163,7 +176,9 @@ function setCaretAtTextOffset(el: HTMLElement, offset: number) {
   const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
   let remaining = offset;
   let node: Node | null;
+  let sawAnyTextNode = false;
   while ((node = walker.nextNode())) {
+    sawAnyTextNode = true;
     const len = node.textContent?.length ?? 0;
     if (remaining <= len) {
       const range = document.createRange();
@@ -176,9 +191,18 @@ function setCaretAtTextOffset(el: HTMLElement, offset: number) {
     }
     remaining -= len;
   }
+  // No text node satisfied the requested offset. Two different cases land
+  // here: (a) the element has some text but the offset ran past all of it
+  // (focusAtEnd's normal path) — collapsing to the end is correct there;
+  // (b) the element has NO text nodes at all — e.g. backspacing the last
+  // character often leaves a lone <br> behind instead of an empty node,
+  // so the walker finds nothing even though the only sane caret position
+  // is the start. Collapsing to the end in case (b) was the bug: it put
+  // the visible caret past the <br>, which against a same-line CSS
+  // placeholder read as "caret at the end of the placeholder text".
   const range = document.createRange();
   range.selectNodeContents(el);
-  range.collapse(false);
+  range.collapse(!sawAnyTextNode);
   const sel = window.getSelection();
   sel?.removeAllRanges();
   sel?.addRange(range);
@@ -197,17 +221,35 @@ const BlockRow = forwardRef<
     block: DocBlock;
     onTextChange: (html: string) => void;
     onFormatChange: (html: string) => void;
-    onTypeChange: (type: DocBlock["type"]) => void;
     onEnter: (beforeCaretHtml: string, afterCaretHtml: string) => void;
     onBackspaceAtStart: () => void;
     onPasteLines: (beforeCaret: string, afterCaret: string, lines: string[]) => void;
+    placeholder: string;
+    /** Banner-only: change its color / remove it entirely. */
+    onColorChange: (color: string) => void;
+    onRemoveBanner: () => void;
+    /** Per-line "+" gutter button (hover-only) — opens the insert menu
+     *  anchored to whichever line it was clicked on. */
+    onRequestPlus: (blockId: string, anchor: HTMLElement) => void;
   }
 >(function BlockRow(
-  { block, onTextChange, onFormatChange, onTypeChange, onEnter, onBackspaceAtStart, onPasteLines },
+  {
+    block,
+    onTextChange,
+    onFormatChange,
+    onEnter,
+    onBackspaceAtStart,
+    onPasteLines,
+    placeholder,
+    onColorChange,
+    onRemoveBanner,
+    onRequestPlus,
+  },
   ref,
 ) {
   const divRef = useRef<HTMLDivElement | null>(null);
   const lastSynced = useRef<string | null>(null);
+  const [showPalette, setShowPalette] = useState(false);
 
   // Only touch the live DOM when `block.text` changed for a reason OTHER
   // than this element's own onInput (undo/redo, a merge from a neighboring
@@ -256,49 +298,121 @@ const BlockRow = forwardRef<
 
   const isEmpty = plainTextLength(block.text) === 0;
 
+  // Per-line "+" — hover-only, sits in the gutter to the left of every
+  // block (not just the first). Opens DocEditor's insert menu anchored
+  // to this exact line.
+  const plusGutter = (
+    <button
+      type="button"
+      onClick={(e) => onRequestPlus(block.id, e.currentTarget)}
+      aria-label="Add content"
+      className="flex items-center justify-center rounded transition-colors opacity-0 group-hover:opacity-100"
+      style={{ width: 20, height: 20, marginTop: 1, background: "transparent", border: "none", color: "#71717A", cursor: "pointer", flexShrink: 0 }}
+      onMouseEnter={(e) => (e.currentTarget.style.color = "#E4E4E7")}
+      onMouseLeave={(e) => (e.currentTarget.style.color = "#71717A")}
+    >
+      <Plus size={15} />
+    </button>
+  );
+
+  if (block.type === "banner") {
+    const color = block.color ?? BANNER_COLORS[0];
+    return (
+      <div className="group" style={{ position: "relative" }}>
+        <div className="flex items-start gap-1.5">
+          {plusGutter}
+          <div
+            className="group/banner"
+            style={{ flex: 1, minWidth: 0, position: "relative", borderRadius: 8, padding: "10px 20px", background: color }}
+          >
+            <input
+              value={block.text}
+              onChange={(e) => onTextChange(e.target.value)}
+              placeholder="Header"
+              className="w-full outline-none"
+              style={{ background: "transparent", border: "none", color: "#FFFFFF", fontSize: 16, padding: 0, fontFamily: "inherit" }}
+            />
+            <div
+              className="flex items-center gap-1 opacity-0 group-hover/banner:opacity-100 transition-opacity"
+              style={{ position: "absolute", top: 8, right: 8 }}
+            >
+              <div style={{ position: "relative" }}>
+                <button
+                  type="button"
+                  onClick={() => setShowPalette((v) => !v)}
+                  aria-label="Change banner color"
+                  className="flex items-center justify-center rounded"
+                  style={{ width: 24, height: 24, background: "rgba(0,0,0,0.15)", border: "none", cursor: "pointer" }}
+                >
+                  <span style={{ width: 12, height: 12, borderRadius: "50%", background: "#0A0A0B", opacity: 0.4 }} />
+                </button>
+                {showPalette && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: "calc(100% + 4px)",
+                      right: 0,
+                      zIndex: 10,
+                      display: "grid",
+                      gridTemplateColumns: "repeat(6, 1fr)",
+                      gap: 6,
+                      padding: 8,
+                      background: "#18181B",
+                      border: "1px solid #2D2E30",
+                      borderRadius: 8,
+                      boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
+                    }}
+                  >
+                    {BANNER_COLORS.map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => {
+                          onColorChange(c);
+                          setShowPalette(false);
+                        }}
+                        aria-label={`Set banner color ${c}`}
+                        style={{
+                          width: 18,
+                          height: 18,
+                          borderRadius: "50%",
+                          background: c,
+                          border: c === color ? "2px solid white" : "none",
+                          cursor: "pointer",
+                          padding: 0,
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={onRemoveBanner}
+                aria-label="Remove banner"
+                className="flex items-center justify-center rounded"
+                style={{ width: 24, height: 24, background: "rgba(0,0,0,0.15)", border: "none", color: "#0A0A0B", cursor: "pointer" }}
+              >
+                <X size={13} />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="group" style={{ position: "relative" }}>
-      {/* Format toolbar floats ABOVE the line, near its start — not a
-          layout sibling of the text. A trailing/leading flex sibling
-          either shifts the text's left edge (leading) or ends up far off
-          to the right of short lines once the column is wide (trailing),
-          which is what made this look "removed." Absolute positioning
-          keeps it right next to the text regardless of row width. */}
-      <div
-        className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
-        style={{
-          position: "absolute",
-          top: -24,
-          left: 0,
-          background: "#1B1B1D",
-          border: "1px solid #2D2E30",
-          borderRadius: 6,
-          padding: 1,
-          zIndex: 5,
-        }}
-      >
-        {BLOCK_TYPES.map(({ type, icon: Icon, label }) => (
-          <button
-            key={type}
-            type="button"
-            title={label}
-            onClick={() => onTypeChange(type)}
-            className="flex items-center justify-center rounded transition-colors"
-            style={{
-              width: 20,
-              height: 20,
-              background: block.type === type ? "#2C2C2F" : "transparent",
-              border: "none",
-              cursor: "pointer",
-              color: block.type === type ? "#E4E4E7" : "#71717A",
-            }}
-          >
-            <Icon size={12} />
-          </button>
-        ))}
-      </div>
-
+      {/* The per-block hover toolbar (Paragraph/H1/H2/Bullet) that used to
+          float here on every line's hover was removed — it popped up
+          constantly while reading/scanning text and got in the way rather
+          than helping. Those same block-type controls now live in the
+          selection-triggered Bold/Italic toolbar below (only appears when
+          you've actually selected text), alongside onTypeChange still
+          wired the same way via DocEditor's setBlockType. */}
       <div className="flex items-start gap-1.5">
+        {plusGutter}
         {block.type === "bullet" && (
           <span style={{ color: "#71717A", fontSize: 14, lineHeight: "22px", flexShrink: 0 }}>•</span>
         )}
@@ -307,11 +421,39 @@ const BlockRow = forwardRef<
           contentEditable
           suppressContentEditableWarning
           spellCheck={false}
-          data-placeholder={block.type === "p" ? "Type something…" : ""}
+          data-placeholder={block.type === "p" ? placeholder : ""}
+          onMouseUp={() => {
+            // Empty contentEditable divs have no real text to click
+            // against, so browsers place the visible caret at the click's
+            // X position instead of snapping it to the only real offset
+            // (0) — against a placeholder that reads as a full line of
+            // text, that looks like the caret landed at the END instead
+            // of the start. Force it back to the real (only) position
+            // after the native click has already run.
+            if (isEmpty) {
+              const el = divRef.current;
+              if (el) setCaretAtTextOffset(el, 0);
+            }
+          }}
           onInput={(e) => {
-            const html = e.currentTarget.innerHTML;
+            const el = e.currentTarget;
+            let html = el.innerHTML;
+            if (html !== "" && plainTextLength(html) === 0) {
+              // Backspacing the last character out usually leaves a stray
+              // <br> (or similar empty node) behind instead of a truly
+              // empty element. That lone node is what makes the browser
+              // paint the caret at the END of the CSS placeholder instead
+              // of the start — confirmed by testing: a genuinely empty
+              // div (innerHTML === "") renders the caret at the true
+              // start every time, but one containing just a <br> doesn't.
+              // Clearing it fully makes "just deleted everything" look
+              // and behave identically to "never typed anything".
+              el.innerHTML = "";
+              html = "";
+            }
             lastSynced.current = html;
             onTextChange(html);
+            if (html === "") setCaretAtTextOffset(el, 0);
           }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -376,14 +518,41 @@ const BlockRow = forwardRef<
   );
 });
 
+export type PlusMenuItem = {
+  label: string;
+  icon: React.ComponentType<{ size?: number; color?: string }>;
+  onSelect: () => void;
+};
+
 export function DocEditor({
   content,
   onChange,
+  placeholder = "Type something…",
+  extraPlusMenuItems,
 }: {
   content: DocContent;
   onChange: (next: DocContent) => void;
+  /** Empty-paragraph placeholder text. Defaults to the Docs pages' copy;
+   *  the task detail panel passes its own ("Write, press '/' for
+   *  commands") to match its Figma spec without changing Docs. */
+  placeholder?: string;
+  /** Extra rows appended to the per-line "+" insert menu, after the
+   *  always-present "Banner" option — e.g. the task panel adds "Upload
+   *  file" / "Add link" here, routed back to its own attachments section.
+   *  DocEditor stays ignorant of what these do; it just renders them and
+   *  calls onSelect. */
+  extraPlusMenuItems?: PlusMenuItem[];
 }) {
-  const blocks = content.blocks.length ? content.blocks : [{ id: makeId(), type: "p" as const, text: "" }];
+  // Stable id for the fallback empty block — makeId() must NOT be called
+  // inline here, or every re-render while content.blocks is still []
+  // (e.g. opening the "+" menu, a state update on THIS component) hands
+  // out a fresh random id, silently orphaning anything that captured the
+  // previous render's id (the "+" menu did exactly this: open menu →
+  // re-render regenerates the id → "Banner" click's stored blockId no
+  // longer matches any block → insertBanner's findIndex silently no-ops).
+  const fallbackIdRef = useRef<string | null>(null);
+  if (!fallbackIdRef.current) fallbackIdRef.current = makeId();
+  const blocks = content.blocks.length ? content.blocks : [{ id: fallbackIdRef.current, type: "p" as const, text: "" }];
   const refs = useRef<Map<string, BlockRowHandle>>(new Map());
   const lastSplitAtRef = useRef(0);
 
@@ -449,6 +618,31 @@ export function DocEditor({
   const setBlockType = (id: string, type: DocBlock["type"]) => {
     commitStructural(blocks);
     onChange({ blocks: blocks.map((b) => (b.id === id ? { ...b, type } : b)) });
+  };
+
+  const setBlockColor = (id: string, color: string) => {
+    commitStructural(blocks);
+    onChange({ blocks: blocks.map((b) => (b.id === id ? { ...b, color } : b)) });
+  };
+
+  // Inserts a banner block right after `afterId` — or, if that block is an
+  // empty paragraph (the common case: clicking "+" on a blank line),
+  // REPLACES it instead so you don't end up with a stray empty line sitting
+  // above the banner. Multiple banners are allowed anywhere in the body;
+  // there's no singleton slot anymore.
+  const insertBanner = (afterId: string) => {
+    commitStructural(blocks);
+    const index = blocks.findIndex((b) => b.id === afterId);
+    if (index === -1) return;
+    const target = blocks[index];
+    const newBlock: DocBlock = { id: makeId(), type: "banner", text: "", color: BANNER_COLORS[0] };
+    const next = [...blocks];
+    if (target.type === "p" && plainTextLength(target.text) === 0) {
+      next[index] = newBlock;
+    } else {
+      next.splice(index + 1, 0, newBlock);
+    }
+    onChange({ blocks: next });
   };
 
   // Splits the block at `id` into two: `beforeHtml` stays in place, a new
@@ -533,6 +727,15 @@ export function DocEditor({
     commitStructural(blocks);
     const prev = blocks[index - 1];
     const current = blocks[index];
+    if (prev.type === "banner") {
+      // Backspacing into a banner removes it instead of merging plain text
+      // into its colored header — merging doesn't make sense there, same
+      // reasoning most block editors use for callouts.
+      const next = blocks.filter((b) => b.id !== prev.id);
+      onChange({ blocks: next });
+      setTimeout(() => refs.current.get(current.id)?.focusAtStart(), 0);
+      return;
+    }
     const mergeBoundary = plainTextLength(prev.text);
     const next = blocks
       .map((b) => (b.id === prev.id ? { ...b, text: prev.text + current.text } : b))
@@ -586,6 +789,37 @@ export function DocEditor({
     refs.current.get(toolbar.blockId)?.applyFormat(command);
   };
 
+  const toolbarBlock = toolbar ? blocks.find((b) => b.id === toolbar.blockId) : null;
+
+  // ── Per-line "+" insert menu (Banner always, plus host-provided extras) ─
+  const [plusMenu, setPlusMenu] = useState<{ blockId: string; top: number; left: number } | null>(null);
+  const plusMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!plusMenu) return;
+    // Containment check (does the click's real target land inside the
+    // menu's DOM node?), not stopPropagation() on the menu's own
+    // onMouseDown — that was the bug: a REAL click's mousedown reached
+    // this listener and closed the menu (unmounting it) before the
+    // matching "click" event could ever fire on a menu button, so
+    // choosing "Banner" visually looked like it did nothing. This is the
+    // same pattern DueDatePopover/PriorityPopover/StatusPopover/
+    // AssigneesPopover already use successfully.
+    const onMouseDown = (e: MouseEvent) => {
+      if (plusMenuRef.current && plusMenuRef.current.contains(e.target as Node)) return;
+      setPlusMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPlusMenu(null);
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [plusMenu]);
+
   return (
     <div
       className="flex flex-col"
@@ -615,7 +849,6 @@ export function DocEditor({
           block={block}
           onTextChange={(text) => setBlockTextTyping(block.id, text)}
           onFormatChange={(text) => setBlockTextImmediate(block.id, text)}
-          onTypeChange={(type) => setBlockType(block.id, type)}
           onEnter={(before, after) =>
             splitBlock(block.id, before, after, block.type === "bullet" ? "bullet" : "p")
           }
@@ -623,8 +856,65 @@ export function DocEditor({
             plainTextLength(block.text) === 0 ? removeBlock(block.id) : mergeIntoPrevious(block.id)
           }
           onPasteLines={(before, after, lines) => pasteLines(block.id, before, after, lines)}
+          placeholder={placeholder}
+          onColorChange={(color) => setBlockColor(block.id, color)}
+          onRemoveBanner={() => removeBlock(block.id)}
+          onRequestPlus={(blockId, anchor) => {
+            const rect = anchor.getBoundingClientRect();
+            setPlusMenu({ blockId, top: rect.bottom + 4, left: rect.left });
+          }}
         />
       ))}
+
+      {plusMenu && (
+        <div
+          ref={plusMenuRef}
+          className="fixed flex flex-col"
+          style={{
+            top: plusMenu.top,
+            left: plusMenu.left,
+            width: 200,
+            background: "#18181B",
+            border: "1px solid #2D2E30",
+            borderRadius: 12,
+            boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
+            padding: 6,
+            zIndex: 30,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              insertBanner(plusMenu.blockId);
+              setPlusMenu(null);
+            }}
+            className="flex items-center gap-2 w-full transition-colors"
+            style={{ background: "transparent", border: "none", borderRadius: 6, padding: "7px 8px", cursor: "pointer", color: "#E4E4E7", fontSize: 13, textAlign: "left" }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "#26262A")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          >
+            <Square size={14} color="#71717A" />
+            Banner
+          </button>
+          {(extraPlusMenuItems ?? []).map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              onClick={() => {
+                item.onSelect();
+                setPlusMenu(null);
+              }}
+              className="flex items-center gap-2 w-full transition-colors"
+              style={{ background: "transparent", border: "none", borderRadius: 6, padding: "7px 8px", cursor: "pointer", color: "#E4E4E7", fontSize: 13, textAlign: "left" }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#26262A")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              <item.icon size={14} color="#71717A" />
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {toolbar && (
         <div
@@ -640,6 +930,39 @@ export function DocEditor({
             zIndex: 30,
           }}
         >
+          {/* Block-type controls (Text/H1/H2/Bullet) — moved here from the
+              old per-block hover toolbar, which popped up over every line
+              on hover and got in the way of reading. Only shows now when
+              text is actually selected. */}
+          {BLOCK_TYPES.map(({ type, icon: Icon, label }) => (
+            <button
+              key={type}
+              type="button"
+              title={label}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                if (toolbar) setBlockType(toolbar.blockId, type);
+              }}
+              className="flex items-center justify-center rounded transition-colors"
+              style={{
+                width: 26,
+                height: 26,
+                background: toolbarBlock?.type === type ? "#3A3A3E" : "transparent",
+                border: "none",
+                cursor: "pointer",
+                color: toolbarBlock?.type === type ? "#E4E4E7" : "#A1A1AA",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#3A3A3E")}
+              onMouseLeave={(e) =>
+                (e.currentTarget.style.background = toolbarBlock?.type === type ? "#3A3A3E" : "transparent")
+              }
+            >
+              <Icon size={13} />
+            </button>
+          ))}
+
+          <span aria-hidden style={{ width: 1, height: 18, margin: "0 3px", background: "#3A3A3E", flexShrink: 0 }} />
+
           <button
             type="button"
             aria-label="Bold"

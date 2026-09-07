@@ -14,6 +14,10 @@ import { TaskGroupBadgeNotStarted } from "@/components/icons/TaskGroupBadgeNotSt
 import { TaskGroupBadgeInProgress } from "@/components/icons/TaskGroupBadgeInProgress";
 import { TaskGroupBadgeOverdue } from "@/components/icons/TaskGroupBadgeOverdue";
 import { TaskCreateButtonGraphic } from "@/components/icons/TaskCreateButtonGraphic";
+import { DueDatePopover } from "@/components/tasks/DueDatePopover";
+import { PriorityPopover } from "@/components/tasks/PriorityPopover";
+import { StatusPopover, type StatusSelection } from "@/components/tasks/StatusPopover";
+import { GlobalTaskDetailPanel } from "@/components/tasks/GlobalTaskDetailPanel";
 
 /**
  * /w/[slug]/tasks body — the global Task tab (Figma V2).
@@ -38,8 +42,10 @@ import { TaskCreateButtonGraphic } from "@/components/icons/TaskCreateButtonGrap
  * NOT WIRED YET (flagged, not faked): the "+ Task" button, the "+ Add
  * Task" row per group, and the filter/search icons are visual-only —
  * same documented gap as MyTasksCard's + button (creating a task needs a
- * pipeline/stage picker that doesn't exist yet). Assignees are read-only
- * here too; there's no picker UI for task_assignees yet.
+ * pipeline/stage picker that doesn't exist yet). The Assignees column
+ * here is still read-only display (avatars only) — the actual multi-
+ * select picker lives in the task detail panel (click a task's title to
+ * open it), not in this compact table cell.
  *
  * Priority and Status ARE both live — plain <select> pickers (not in the
  * original screenshot, which had no Status column, but added since moving
@@ -114,14 +120,35 @@ export function TaskListView({
   slug,
   firstName,
   initialTasks,
+  currentUserId,
 }: {
   slug: string;
   firstName: string | null;
   initialTasks: TaskRow[];
+  currentUserId: string;
 }) {
   const [tasks, setTasks] = useState(initialTasks);
   const [activeChip, setActiveChip] = useState<Chip>("all");
   const [collapsed, setCollapsed] = useState<Set<GroupKey>>(new Set());
+  const [openDatePickerTaskId, setOpenDatePickerTaskId] = useState<string | null>(null);
+  const [dateAnchor, setDateAnchor] = useState<HTMLElement | null>(null);
+  const [openPriorityTaskId, setOpenPriorityTaskId] = useState<string | null>(null);
+  const [priorityAnchor, setPriorityAnchor] = useState<HTMLElement | null>(null);
+  const [openStatusTaskId, setOpenStatusTaskId] = useState<string | null>(null);
+  const [statusAnchor, setStatusAnchor] = useState<HTMLElement | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const selectedTask = tasks.find((t) => t.id === selectedTaskId) ?? null;
+
+  // Shared patch applier used by the detail panel — marking a task done
+  // drops it from this not-done list, same as the table cell's Complete
+  // handler in updateStatus below.
+  const applyTaskPatch = (taskId: string, patch: Partial<TaskRow>) => {
+    if (patch.done === true) {
+      setTasks((prev) => prev.filter((t) => t.id !== taskId));
+      return;
+    }
+    setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, ...patch } : t)));
+  };
 
   const chipCounts = useMemo(() => {
     const counts: Record<Chip, number> = { all: tasks.length, today: 0, thisWeek: 0, later: 0, noDate: 0 };
@@ -162,14 +189,31 @@ export function TaskListView({
 
   const updatePriority = async (taskId: string, priority: TaskRow["priority"]) => {
     setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, priority } : t)));
+    setOpenPriorityTaskId(null);
     const { error } = await supabase.from("tasks").update({ priority }).eq("id", taskId);
     if (error) console.error("[tasks] priority update failed:", error.message);
   };
 
-  const updateStatus = async (taskId: string, status: TaskRow["status"]) => {
-    setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, status } : t)));
-    const { error } = await supabase.from("tasks").update({ status }).eq("id", taskId);
+  const updateStatus = async (taskId: string, selection: StatusSelection) => {
+    setOpenStatusTaskId(null);
+    if (selection === "complete") {
+      // Completed tasks drop out of this not-done list, matching the
+      // server query's `.eq("done", false)` filter.
+      setTasks((prev) => prev.filter((t) => t.id !== taskId));
+      const { error } = await supabase.from("tasks").update({ done: true }).eq("id", taskId);
+      if (error) console.error("[tasks] status update failed:", error.message);
+      return;
+    }
+    setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, status: selection, done: false } : t)));
+    const { error } = await supabase.from("tasks").update({ status: selection, done: false }).eq("id", taskId);
     if (error) console.error("[tasks] status update failed:", error.message);
+  };
+
+  const updateDeadline = async (taskId: string, deadline: string | null) => {
+    setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, deadline } : t)));
+    setOpenDatePickerTaskId(null);
+    const { error } = await supabase.from("tasks").update({ deadline }).eq("id", taskId);
+    if (error) console.error("[tasks] deadline update failed:", error.message);
   };
 
   return (
@@ -278,57 +322,92 @@ export function TaskListView({
                       return (
                         <tr key={task.id} style={{ borderBottom: "1px solid #212124" }}>
                           <td style={{ padding: "8px" }}>
-                            <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedTaskId(task.id)}
+                              className="flex items-center gap-2 transition-colors"
+                              style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer", textAlign: "left" }}
+                            >
                               <span
                                 aria-hidden
                                 style={{ width: 6, height: 6, borderRadius: "50%", background: meta.color, flexShrink: 0 }}
                               />
-                              <span className="text-[13px]" style={{ color: "#E4E4E7" }}>{task.title}</span>
-                            </div>
+                              <span
+                                className="text-[13px] hover:underline"
+                                style={{ color: "#E4E4E7" }}
+                              >
+                                {task.title}
+                              </span>
+                            </button>
                           </td>
                           <td style={{ padding: "8px" }}>
-                            <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                setPriorityAnchor(e.currentTarget);
+                                setOpenPriorityTaskId((prev) => (prev === task.id ? null : task.id));
+                              }}
+                              className="flex items-center gap-1.5 transition-colors"
+                              style={{
+                                background: "transparent",
+                                border: `1px solid ${openPriorityTaskId === task.id ? "#E4E4E7" : "transparent"}`,
+                                borderRadius: 6,
+                                padding: "4px 6px",
+                                margin: "-4px -6px",
+                                cursor: "pointer",
+                              }}
+                            >
                               <Flag
                                 size={12}
                                 color={task.priority ? PRIORITY_META[task.priority].color : "#3A3A3E"}
                                 fill={task.priority ? PRIORITY_META[task.priority].color : "none"}
                               />
-                              <select
-                                value={task.priority ?? ""}
-                                onChange={(e) =>
-                                  updatePriority(task.id, (e.target.value || null) as TaskRow["priority"])
-                                }
-                                className="text-[13px] outline-none"
-                                style={{ background: "transparent", border: "none", color: "#E4E4E7", cursor: "pointer" }}
-                              >
-                                <option value="" style={{ background: "#212124" }}>—</option>
-                                {(Object.keys(PRIORITY_META) as (keyof typeof PRIORITY_META)[]).map((p) => (
-                                  <option key={p} value={p} style={{ background: "#212124" }}>
-                                    {PRIORITY_META[p].label}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
+                              <span className="text-[13px]" style={{ color: task.priority ? "#E4E4E7" : "#3A3A3E" }}>
+                                {task.priority ? PRIORITY_META[task.priority].label : "—"}
+                              </span>
+                            </button>
+                            {openPriorityTaskId === task.id && (
+                              <PriorityPopover
+                                anchor={priorityAnchor}
+                                value={task.priority}
+                                onSelect={(priority) => updatePriority(task.id, priority)}
+                                onClose={() => setOpenPriorityTaskId(null)}
+                              />
+                            )}
                           </td>
                           <td style={{ padding: "8px" }}>
-                            <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                setStatusAnchor(e.currentTarget);
+                                setOpenStatusTaskId((prev) => (prev === task.id ? null : task.id));
+                              }}
+                              className="flex items-center gap-1.5 transition-colors"
+                              style={{
+                                background: "transparent",
+                                border: `1px solid ${openStatusTaskId === task.id ? "#E4E4E7" : "transparent"}`,
+                                borderRadius: 6,
+                                padding: "4px 6px",
+                                margin: "-4px -6px",
+                                cursor: "pointer",
+                              }}
+                            >
                               <span
                                 aria-hidden
                                 style={{ width: 6, height: 6, borderRadius: "50%", background: STATUS_META[task.status].color, flexShrink: 0 }}
                               />
-                              <select
-                                value={task.status}
-                                onChange={(e) => updateStatus(task.id, e.target.value as TaskRow["status"])}
-                                className="text-[13px] outline-none"
-                                style={{ background: "transparent", border: "none", color: "#E4E4E7", cursor: "pointer" }}
-                              >
-                                {(Object.keys(STATUS_META) as TaskRow["status"][]).map((s) => (
-                                  <option key={s} value={s} style={{ background: "#212124" }}>
-                                    {STATUS_META[s].label}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
+                              <span className="text-[13px]" style={{ color: "#E4E4E7" }}>
+                                {STATUS_META[task.status].label}
+                              </span>
+                            </button>
+                            {openStatusTaskId === task.id && (
+                              <StatusPopover
+                                anchor={statusAnchor}
+                                value={task.done ? "complete" : task.status}
+                                onSelect={(selection) => updateStatus(task.id, selection)}
+                                onClose={() => setOpenStatusTaskId(null)}
+                              />
+                            )}
                           </td>
                           <td style={{ padding: "8px" }}>
                             <div className="flex items-center gap-1.5">
@@ -343,23 +422,39 @@ export function TaskListView({
                               {task.assignees.length === 0 ? (
                                 <span className="text-[13px]" style={{ color: "#3A3A3E" }}>—</span>
                               ) : (
-                                task.assignees.map((a) => {
+                                task.assignees.map((a, i) => {
                                   const { text, bg } = getAvatarColorFromUserId(a.id);
                                   return (
+                                    // Outer disc is a SOLID backing matching
+                                    // the page background (#000000), not
+                                    // just a border — see the same fix in
+                                    // GlobalTaskDetailPanel.tsx for why a
+                                    // plain border on overlapping avatars
+                                    // lets translucent palette colors (see
+                                    // AVATAR_PALETTE) bleed through.
                                     <div
                                       key={a.id}
                                       title={a.displayName ?? undefined}
+                                      className="flex items-center justify-center rounded-full"
+                                      style={{
+                                        width: 28,
+                                        height: 28,
+                                        marginLeft: i === 0 ? 0 : -8,
+                                        background: "#000000",
+                                        flexShrink: 0,
+                                      }}
+                                    >
+                                    <div
                                       className="flex items-center justify-center rounded-full text-[11px] font-medium"
                                       style={{
                                         width: 22,
                                         height: 22,
-                                        marginLeft: -4,
                                         background: bg,
                                         color: text,
-                                        border: "1.5px solid #17171A",
                                       }}
                                     >
                                       {resolveInitial({ display_name: a.displayName })}
+                                    </div>
                                     </div>
                                   );
                                 })
@@ -367,12 +462,30 @@ export function TaskListView({
                             </div>
                           </td>
                           <td style={{ padding: "8px" }}>
-                            {dueLabel ? (
-                              <span className="text-[13px]" style={{ color: isOverdue ? "#F43F5E" : "#979393" }}>
-                                {dueLabel}
-                              </span>
-                            ) : (
-                              <span className="text-[13px]" style={{ color: "#3A3A3E" }}>Add date</span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                setDateAnchor(e.currentTarget);
+                                setOpenDatePickerTaskId((prev) => (prev === task.id ? null : task.id));
+                              }}
+                              className="text-[13px] transition-colors"
+                              style={{
+                                background: "transparent",
+                                border: "none",
+                                padding: 0,
+                                cursor: "pointer",
+                                color: dueLabel ? (isOverdue ? "#F43F5E" : "#979393") : "#3A3A3E",
+                              }}
+                            >
+                              {dueLabel || "Add date"}
+                            </button>
+                            {openDatePickerTaskId === task.id && (
+                              <DueDatePopover
+                                anchor={dateAnchor}
+                                value={task.deadline}
+                                onSelect={(deadline) => updateDeadline(task.id, deadline)}
+                                onClose={() => setOpenDatePickerTaskId(null)}
+                              />
                             )}
                           </td>
                         </tr>
@@ -403,6 +516,15 @@ export function TaskListView({
           </p>
         )}
       </div>
+
+      {selectedTask && (
+        <GlobalTaskDetailPanel
+          task={selectedTask}
+          currentUserId={currentUserId}
+          onClose={() => setSelectedTaskId(null)}
+          onUpdate={applyTaskPatch}
+        />
+      )}
     </div>
   );
 }

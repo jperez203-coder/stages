@@ -1,8 +1,10 @@
 "use client";
 
 import {
+  forwardRef,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
@@ -1471,12 +1473,16 @@ type TaskAttachmentItem = FileItem & { status?: "uploading" };
 type TaskAttachmentPreview = { type: "image" | "pdf"; row: FileItem } | null;
 type TaskAttachmentDelete = { id: string; label: string } | null;
 
-function TaskAttachmentsSection({
-  pipelineId,
-  taskId,
-  canEdit,
-  viewerId,
-}: {
+/** Imperative actions exposed to callers that want to trigger Upload /
+ *  Add link from OUTSIDE this section — e.g. GlobalTaskDetailPanel's
+ *  "+" content menu, which offers Upload file / Add link as shortcuts
+ *  into this same section rather than duplicating its upload logic. */
+export type TaskAttachmentsSectionHandle = {
+  triggerUpload: () => void;
+  triggerAddLink: () => void;
+};
+
+export const TaskAttachmentsSection = forwardRef<TaskAttachmentsSectionHandle, {
   pipelineId: string;
   taskId: string;
   /** Upload + add-link affordances gated on can_edit_pipeline (admin/
@@ -1485,7 +1491,12 @@ function TaskAttachmentsSection({
    *  the pipeline_links RLS UPDATE/DELETE policy. */
   canEdit: boolean;
   viewerId: string;
-}) {
+}>(function TaskAttachmentsSection({
+  pipelineId,
+  taskId,
+  canEdit,
+  viewerId,
+}, ref) {
   const [files, setFiles] = useState<TaskAttachmentItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -1497,6 +1508,11 @@ function TaskAttachmentsSection({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragActive, setDragActive] = useState(false);
+
+  useImperativeHandle(ref, () => ({
+    triggerUpload: () => fileInputRef.current?.click(),
+    triggerAddLink: () => setShowAddLink(true),
+  }));
   const dragCounterRef = useRef(0);
 
   // Same SELECT shape as FilesBody — keeps the row shape compatible
@@ -2098,7 +2114,7 @@ function TaskAttachmentsSection({
       )}
     </div>
   );
-}
+});
 
 // Compact attachment row used INSIDE the task panel only. Same data
 // model as FileCard but no preview thumbnail — the row is one line
