@@ -6,10 +6,12 @@ import { SidebarChevron } from "@/components/icons/SidebarChevron";
 import { supabase } from "@/lib/supabase";
 import { HomeGreeting } from "@/components/home/HomeGreeting";
 import { HomeTabs } from "@/components/home/HomeTabs";
+import Image from "next/image";
 import { getAvatarColorFromUserId } from "@/lib/avatar-color";
 import { resolveInitial } from "@/lib/display-name";
+import { sortAssigneesForViewer } from "@/lib/sort-assignees";
 import { bucketForDeadline, bucketMatchesChip, type Chip } from "@/lib/task-buckets";
-import type { TaskRow } from "@/components/tasks/types";
+import type { TaskAssignee, TaskRow } from "@/components/tasks/types";
 import { TaskGroupBadgeNotStarted } from "@/components/icons/TaskGroupBadgeNotStarted";
 import { TaskGroupBadgeInProgress } from "@/components/icons/TaskGroupBadgeInProgress";
 import { TaskGroupBadgeOverdue } from "@/components/icons/TaskGroupBadgeOverdue";
@@ -17,6 +19,7 @@ import { TaskCreateButtonGraphic } from "@/components/icons/TaskCreateButtonGrap
 import { DueDatePopover } from "@/components/tasks/DueDatePopover";
 import { PriorityPopover } from "@/components/tasks/PriorityPopover";
 import { StatusPopover, type StatusSelection } from "@/components/tasks/StatusPopover";
+import { AssigneesPopover } from "@/components/tasks/AssigneesPopover";
 import { GlobalTaskDetailPanel } from "@/components/tasks/GlobalTaskDetailPanel";
 
 /**
@@ -42,10 +45,9 @@ import { GlobalTaskDetailPanel } from "@/components/tasks/GlobalTaskDetailPanel"
  * NOT WIRED YET (flagged, not faked): the "+ Task" button, the "+ Add
  * Task" row per group, and the filter/search icons are visual-only —
  * same documented gap as MyTasksCard's + button (creating a task needs a
- * pipeline/stage picker that doesn't exist yet). The Assignees column
- * here is still read-only display (avatars only) — the actual multi-
- * select picker lives in the task detail panel (click a task's title to
- * open it), not in this compact table cell.
+ * pipeline/stage picker that doesn't exist yet). Assignees IS live here
+ * too now (AssigneesPopover, same component the task detail panel uses)
+ * — clicking the cell's avatars/— opens the same name-search picker.
  *
  * Priority and Status ARE both live — plain <select> pickers (not in the
  * original screenshot, which had no Status column, but added since moving
@@ -136,6 +138,8 @@ export function TaskListView({
   const [priorityAnchor, setPriorityAnchor] = useState<HTMLElement | null>(null);
   const [openStatusTaskId, setOpenStatusTaskId] = useState<string | null>(null);
   const [statusAnchor, setStatusAnchor] = useState<HTMLElement | null>(null);
+  const [openAssigneesTaskId, setOpenAssigneesTaskId] = useState<string | null>(null);
+  const [assigneesAnchor, setAssigneesAnchor] = useState<HTMLElement | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const selectedTask = tasks.find((t) => t.id === selectedTaskId) ?? null;
 
@@ -216,8 +220,15 @@ export function TaskListView({
     if (error) console.error("[tasks] deadline update failed:", error.message);
   };
 
+  // AssigneesPopover writes its own task_assignees inserts/deletes as each
+  // row is toggled — this just keeps the local list in sync, same as
+  // GlobalTaskDetailPanel's handleAssigneesChange.
+  const updateAssignees = (taskId: string, assignees: TaskAssignee[]) => {
+    setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, assignees } : t)));
+  };
+
   return (
-    <div className="dotted-grid flex-1 px-6 pt-3 pb-6 overflow-y-auto">
+    <div className="dotted-grid flex-1 px-6 pt-3 pb-6 overflow-y-auto overflow-x-hidden">
       <div className="max-w-[1600px] mx-auto mb-4">
         <HomeGreeting firstName={firstName} />
       </div>
@@ -306,8 +317,26 @@ export function TaskListView({
               {!isCollapsed && (
                 <table className="w-full" style={{ borderCollapse: "collapse" }}>
                   <thead>
-                    <tr style={{ borderBottom: "1px solid #2D2E30" }}>
-                      <th className="text-left font-normal text-[13px]" style={{ padding: "6px 8px", color: "#71717A" }}>Name</th>
+                    <tr style={{ borderBottom: "1px solid #2D2E30", transition: "border-color 100ms ease-out" }}>
+                      <th className="text-left font-normal text-[13px]" style={{ padding: "6px 8px", color: "#71717A", position: "relative" }}>
+                        Name
+                        {/* Widened by the FIRST body row's hover (it has no
+                            previousElementSibling in tbody to borrow from,
+                            since the header lives in a separate <thead>) —
+                            see that row's onMouseEnter/onMouseLeave. */}
+                        <div
+                          className="header-divider-bottom"
+                          // zIndex 2, above row-hover-fill's 0: the first
+                          // body row's fill extends 1px upward (same -1
+                          // trick that closes the row-to-row gap) into this
+                          // exact seam, and <tbody> content can win the
+                          // paint-order race against <thead> content even
+                          // though this div is declared earlier in the
+                          // DOM — an explicit higher z-index settles it
+                          // instead of leaving it to table-painting quirks.
+                          style={{ position: "absolute", bottom: -1, left: -9999, right: -9999, height: 1, background: "#2D2E30", opacity: 0, transition: "opacity 100ms ease-out", pointerEvents: "none", zIndex: 2 }}
+                        />
+                      </th>
                       <th className="text-left font-normal text-[13px]" style={{ padding: "6px 8px", color: "#71717A", width: 110 }}>Priority</th>
                       <th className="text-left font-normal text-[13px]" style={{ padding: "6px 8px", color: "#71717A", width: 120 }}>Status</th>
                       <th className="text-left font-normal text-[13px]" style={{ padding: "6px 8px", color: "#71717A", width: 160 }}>Pipeline</th>
@@ -320,20 +349,121 @@ export function TaskListView({
                       const dueLabel = formatDueDate(task.deadline);
                       const isOverdue = key === "overdue";
                       return (
-                        <tr key={task.id} style={{ borderBottom: "1px solid #212124" }}>
-                          <td style={{ padding: "8px" }}>
+                        <tr
+                          key={task.id}
+                          style={{ borderBottom: "1px solid #212124", transition: "border-color 100ms ease-out" }}
+                          onMouseEnter={(e) => {
+                            const row = e.currentTarget;
+                            // Hide the row's OWN native border and reveal
+                            // its full-bleed replacement — never both at
+                            // once, which was the earlier bug: two nearly-
+                            // identical lines at slightly different
+                            // sub-pixel positions read as a doubled/ridged
+                            // line. The seam ABOVE this row is a different
+                            // element's border (the previous row's own
+                            // borderBottom, or the header's, in collapsed-
+                            // border tables — a row never draws its own
+                            // top edge), so widening it means reaching that
+                            // sibling and doing the exact same swap on it.
+                            row.style.borderBottomColor = "transparent";
+                            row.querySelector<HTMLElement>(".row-hover-fill")!.style.opacity = "1";
+                            row.querySelector<HTMLElement>(".row-divider-bottom")!.style.opacity = "1";
+                            const prev = row.previousElementSibling as HTMLElement | null;
+                            if (prev) {
+                              prev.style.borderBottomColor = "transparent";
+                              prev.querySelector<HTMLElement>(".row-divider-bottom")!.style.opacity = "1";
+                            } else {
+                              // First row in the group — nothing to borrow
+                              // from in tbody, so reach into this table's
+                              // own <thead> row instead.
+                              const headerRow = row.closest("table")?.querySelector<HTMLElement>("thead tr");
+                              if (headerRow) {
+                                headerRow.style.borderBottomColor = "transparent";
+                                headerRow.querySelector<HTMLElement>(".header-divider-bottom")!.style.opacity = "1";
+                              }
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            const row = e.currentTarget;
+                            row.style.borderBottomColor = "#212124";
+                            row.querySelector<HTMLElement>(".row-hover-fill")!.style.opacity = "0";
+                            row.querySelector<HTMLElement>(".row-divider-bottom")!.style.opacity = "0";
+                            const prev = row.previousElementSibling as HTMLElement | null;
+                            if (prev) {
+                              prev.style.borderBottomColor = "#212124";
+                              prev.querySelector<HTMLElement>(".row-divider-bottom")!.style.opacity = "0";
+                            } else {
+                              const headerRow = row.closest("table")?.querySelector<HTMLElement>("thead tr");
+                              if (headerRow) {
+                                headerRow.style.borderBottomColor = "#2D2E30";
+                                headerRow.querySelector<HTMLElement>(".header-divider-bottom")!.style.opacity = "0";
+                              }
+                            }
+                          }}
+                        >
+                          <td style={{ padding: "8px", position: "relative" }}>
+                            {/* Full-bleed hover highlight, decoupled from the
+                                divider lines. A huge box-shadow spread on
+                                the <tr> (the "usual" CSS trick for this)
+                                rendered as a broken oversized block in
+                                testing — box-shadow on table-row elements
+                                isn't reliable. This absolutely-positioned
+                                overlay, anchored to the row's own height
+                                via this first cell's position:relative,
+                                escapes the table's (narrower, capped) width
+                                via large negative left/right insets — a
+                                normal layout property, not a paint effect,
+                                so it's reliable. The root container clips
+                                it at the panel's true edges via an explicit
+                                overflow-x-hidden (relying on overflow-y-
+                                auto's implicit "other axis becomes auto"
+                                behavior instead let the -9999px elements'
+                                layout size make the page HORIZONTALLY
+                                SCROLLABLE — clipped from view, but still
+                                draggable into empty space).
+                                Fill and divider are two independently-
+                                toggled pieces (not one wrapper) because the
+                                divider-bottom piece gets BORROWED by the
+                                row below when IT is hovered (to widen the
+                                seam above the hovered row without a second
+                                competing line) — if they shared one
+                                wrapper's opacity, borrowing it would wrongly
+                                light up this row's own background fill
+                                too. */}
+                            <div
+                              className="row-hover-fill"
+                              // top/bottom -1, not 0: absolute insets land
+                              // on the td's PADDING edge, but the collapsed
+                              // border still reserves a 1px strip just
+                              // outside that (even with its color set to
+                              // transparent, the width isn't removed) — a
+                              // 1px sliver of plain page background was
+                              // showing through there. Extending by 1px
+                              // overlaps into that reserved strip instead
+                              // of stopping just short of it.
+                              style={{ position: "absolute", top: -1, bottom: -1, left: -9999, right: -9999, background: "#121214", opacity: 0, transition: "opacity 100ms ease-out", pointerEvents: "none", zIndex: 0 }}
+                            />
+                            <div
+                              className="row-divider-bottom"
+                              // zIndex 2 for the same reason as the header's
+                              // own divider — this line can get borrowed by
+                              // the NEXT row (to widen the seam above IT),
+                              // and that next row's fill extends 1px
+                              // upward into this same spot.
+                              style={{ position: "absolute", bottom: -1, left: -9999, right: -9999, height: 1, background: "#212124", opacity: 0, transition: "opacity 100ms ease-out", pointerEvents: "none", zIndex: 2 }}
+                            />
                             <button
                               type="button"
                               onClick={() => setSelectedTaskId(task.id)}
                               className="flex items-center gap-2 transition-colors"
-                              style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer", textAlign: "left" }}
+                              style={{ position: "relative", zIndex: 1, background: "transparent", border: "none", padding: 0, cursor: "pointer", textAlign: "left" }}
                             >
                               <span
                                 aria-hidden
                                 style={{ width: 6, height: 6, borderRadius: "50%", background: meta.color, flexShrink: 0 }}
                               />
                               <span
-                                className="text-[13px] hover:underline"
+                                className="text-[13px]"
                                 style={{ color: "#E4E4E7" }}
                               >
                                 {task.title}
@@ -349,6 +479,8 @@ export function TaskListView({
                               }}
                               className="flex items-center gap-1.5 transition-colors"
                               style={{
+                                position: "relative",
+                                zIndex: 1,
                                 background: "transparent",
                                 border: `1px solid ${openPriorityTaskId === task.id ? "#E4E4E7" : "transparent"}`,
                                 borderRadius: 6,
@@ -384,6 +516,8 @@ export function TaskListView({
                               }}
                               className="flex items-center gap-1.5 transition-colors"
                               style={{
+                                position: "relative",
+                                zIndex: 1,
                                 background: "transparent",
                                 border: `1px solid ${openStatusTaskId === task.id ? "#E4E4E7" : "transparent"}`,
                                 borderRadius: 6,
@@ -410,7 +544,7 @@ export function TaskListView({
                             )}
                           </td>
                           <td style={{ padding: "8px" }}>
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1.5" style={{ position: "relative", zIndex: 1 }}>
                               <span style={{ fontSize: 13 }}>{task.pipeline.emoji}</span>
                               <span className="text-[13px] truncate" style={{ color: "#979393" }}>
                                 {task.pipeline.name}
@@ -418,11 +552,28 @@ export function TaskListView({
                             </div>
                           </td>
                           <td style={{ padding: "8px" }}>
-                            <div className="flex items-center" style={{ marginLeft: 4 }}>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                setAssigneesAnchor(e.currentTarget);
+                                setOpenAssigneesTaskId((prev) => (prev === task.id ? null : task.id));
+                              }}
+                              className="flex items-center transition-colors"
+                              style={{
+                                position: "relative",
+                                zIndex: 1,
+                                background: "transparent",
+                                border: `1px solid ${openAssigneesTaskId === task.id ? "#E4E4E7" : "transparent"}`,
+                                borderRadius: 6,
+                                padding: "2px 4px",
+                                margin: "-2px -4px -2px 4px",
+                                cursor: "pointer",
+                              }}
+                            >
                               {task.assignees.length === 0 ? (
                                 <span className="text-[13px]" style={{ color: "#3A3A3E" }}>—</span>
                               ) : (
-                                task.assignees.map((a, i) => {
+                                sortAssigneesForViewer(task.assignees, currentUserId).map((a, i) => {
                                   const { text, bg } = getAvatarColorFromUserId(a.id);
                                   return (
                                     // Outer disc is a SOLID backing matching
@@ -444,22 +595,43 @@ export function TaskListView({
                                         flexShrink: 0,
                                       }}
                                     >
-                                    <div
-                                      className="flex items-center justify-center rounded-full text-[11px] font-medium"
-                                      style={{
-                                        width: 22,
-                                        height: 22,
-                                        background: bg,
-                                        color: text,
-                                      }}
-                                    >
-                                      {resolveInitial({ display_name: a.displayName })}
-                                    </div>
+                                    {a.avatarUrl ? (
+                                      <Image
+                                        src={a.avatarUrl}
+                                        alt=""
+                                        width={22}
+                                        height={22}
+                                        unoptimized
+                                        style={{ width: 22, height: 22, borderRadius: "50%", objectFit: "cover", display: "block" }}
+                                      />
+                                    ) : (
+                                      <div
+                                        className="flex items-center justify-center rounded-full text-[11px] font-medium"
+                                        style={{
+                                          width: 22,
+                                          height: 22,
+                                          background: bg,
+                                          color: text,
+                                        }}
+                                      >
+                                        {resolveInitial({ display_name: a.displayName })}
+                                      </div>
+                                    )}
                                     </div>
                                   );
                                 })
                               )}
-                            </div>
+                            </button>
+                            {openAssigneesTaskId === task.id && (
+                              <AssigneesPopover
+                                anchor={assigneesAnchor}
+                                pipelineId={task.pipeline.id}
+                                taskId={task.id}
+                                currentAssignees={task.assignees}
+                                onChange={(next) => updateAssignees(task.id, next)}
+                                onClose={() => setOpenAssigneesTaskId(null)}
+                              />
+                            )}
                           </td>
                           <td style={{ padding: "8px" }}>
                             <button
@@ -470,6 +642,8 @@ export function TaskListView({
                               }}
                               className="text-[13px] transition-colors"
                               style={{
+                                position: "relative",
+                                zIndex: 1,
                                 background: "transparent",
                                 border: "none",
                                 padding: 0,

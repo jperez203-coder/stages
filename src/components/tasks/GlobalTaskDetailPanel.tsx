@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import { X, Target, User, Calendar, Flag, ChevronRight, Upload, Link as LinkIcon } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { getAvatarColorFromUserId } from "@/lib/avatar-color";
 import { resolveInitial } from "@/lib/display-name";
+import { sortAssigneesForViewer } from "@/lib/sort-assignees";
 import { TaskTabIcon } from "@/components/icons/TaskTabIcon";
 import { DocEditor, type DocContent } from "@/components/documents/DocEditor";
 import { DueDatePopover } from "@/components/tasks/DueDatePopover";
@@ -246,6 +248,7 @@ export function GlobalTaskDetailPanel({ task, currentUserId, onClose, onUpdate }
         >
           <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
             <TaskTabIcon size={18} />
+            <span className="text-[13px]" style={{ color: "#D4D4D8" }}>Task</span>
             <span style={{ color: "#52525B" }}>/</span>
             <span style={{ fontSize: 13 }}>{task.pipeline.emoji}</span>
             <span
@@ -432,7 +435,7 @@ export function GlobalTaskDetailPanel({ task, currentUserId, onClose, onUpdate }
                         overlap only ever eats into the ring, not the
                         neighboring avatar's colored fill, so the visible
                         stroke around each avatar stays a clean full arc. */}
-                    {task.assignees.map((a, i) => {
+                    {sortAssigneesForViewer(task.assignees, currentUserId).map((a, i) => {
                       const { text, bg } = getAvatarColorFromUserId(a.id);
                       return (
                         <div
@@ -447,12 +450,23 @@ export function GlobalTaskDetailPanel({ task, currentUserId, onClose, onUpdate }
                             flexShrink: 0,
                           }}
                         >
-                          <div
-                            className="flex items-center justify-center rounded-full text-[10px] font-medium"
-                            style={{ width: 24, height: 24, background: bg, color: text }}
-                          >
-                            {resolveInitial({ display_name: a.displayName })}
-                          </div>
+                          {a.avatarUrl ? (
+                            <Image
+                              src={a.avatarUrl}
+                              alt=""
+                              width={24}
+                              height={24}
+                              unoptimized
+                              style={{ width: 24, height: 24, borderRadius: "50%", objectFit: "cover", display: "block" }}
+                            />
+                          ) : (
+                            <div
+                              className="flex items-center justify-center rounded-full text-[10px] font-medium"
+                              style={{ width: 24, height: 24, background: bg, color: text }}
+                            >
+                              {resolveInitial({ display_name: a.displayName })}
+                            </div>
+                          )}
                         </div>
                       );
                     })}

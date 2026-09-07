@@ -2005,6 +2005,12 @@ export const TaskAttachmentsSection = forwardRef<TaskAttachmentsSectionHandle, {
           position: "relative",
           minHeight: 64,
           padding: 4,
+          // Negative margin offsets the padding above so the drag-over
+          // dashed border still has a little breathing room from the rows
+          // without insetting the rows themselves — without this, the
+          // rows sat 4px narrower on each side than the Upload/Add link
+          // buttons and any banner above them, reading as misaligned.
+          margin: -4,
           border: `1.5px dashed ${dragActive ? "#108CE9" : "transparent"}`,
           borderRadius: 8,
           transition: "border-color 120ms ease-out, background 120ms ease-out",
@@ -2178,7 +2184,7 @@ function TaskAttachmentRow({
         alignItems: "center",
         gap: 10,
         padding: "8px 10px",
-        background: "#212124",
+        background: "transparent",
         border: "1px solid #2A2A2D",
         borderRadius: 6,
         cursor: isUploading ? "wait" : "pointer",
@@ -2186,10 +2192,16 @@ function TaskAttachmentRow({
         transition: "border-color 120ms ease-out, background 120ms ease-out",
       }}
       onMouseEnter={(e) => {
-        if (!isUploading) e.currentTarget.style.borderColor = "#3A3A3E";
+        if (!isUploading) {
+          e.currentTarget.style.borderColor = "#3A3A3E";
+          e.currentTarget.style.background = "#212124";
+        }
       }}
       onMouseLeave={(e) => {
-        if (!isUploading) e.currentTarget.style.borderColor = "#2A2A2D";
+        if (!isUploading) {
+          e.currentTarget.style.borderColor = "#2A2A2D";
+          e.currentTarget.style.background = "transparent";
+        }
       }}
     >
       <Image

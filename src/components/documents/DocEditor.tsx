@@ -231,6 +231,10 @@ const BlockRow = forwardRef<
     /** Per-line "+" gutter button (hover-only) — opens the insert menu
      *  anchored to whichever line it was clicked on. */
     onRequestPlus: (blockId: string, anchor: HTMLElement) => void;
+    /** Extra top margin, in px — used ONLY for the block right after a
+     *  banner (see DocEditor's render). Zero everywhere else so normal
+     *  block spacing is untouched. */
+    spacingBefore: number;
   }
 >(function BlockRow(
   {
@@ -244,6 +248,7 @@ const BlockRow = forwardRef<
     onColorChange,
     onRemoveBanner,
     onRequestPlus,
+    spacingBefore,
   },
   ref,
 ) {
@@ -300,14 +305,18 @@ const BlockRow = forwardRef<
 
   // Per-line "+" — hover-only, sits in the gutter to the left of every
   // block (not just the first). Opens DocEditor's insert menu anchored
-  // to this exact line.
+  // to this exact line. Absolutely positioned (not a flex sibling) so its
+  // reserved layout space doesn't push the actual text right of where the
+  // title sits — a flex gap here shifted every line's text ~26px off the
+  // title's left edge even while the button was invisible (opacity:0
+  // still occupies its box).
   const plusGutter = (
     <button
       type="button"
       onClick={(e) => onRequestPlus(block.id, e.currentTarget)}
       aria-label="Add content"
       className="flex items-center justify-center rounded transition-colors opacity-0 group-hover:opacity-100"
-      style={{ width: 20, height: 20, marginTop: 1, background: "transparent", border: "none", color: "#71717A", cursor: "pointer", flexShrink: 0 }}
+      style={{ position: "absolute", left: -26, top: 1, width: 20, height: 20, background: "transparent", border: "none", color: "#71717A", cursor: "pointer" }}
       onMouseEnter={(e) => (e.currentTarget.style.color = "#E4E4E7")}
       onMouseLeave={(e) => (e.currentTarget.style.color = "#71717A")}
     >
@@ -318,12 +327,12 @@ const BlockRow = forwardRef<
   if (block.type === "banner") {
     const color = block.color ?? BANNER_COLORS[0];
     return (
-      <div className="group" style={{ position: "relative" }}>
-        <div className="flex items-start gap-1.5">
-          {plusGutter}
+      <div className="group" style={{ position: "relative", marginTop: spacingBefore }}>
+        {plusGutter}
+        <div>
           <div
             className="group/banner"
-            style={{ flex: 1, minWidth: 0, position: "relative", borderRadius: 8, padding: "10px 20px", background: color }}
+            style={{ position: "relative", borderRadius: 8, padding: "10px 20px", background: color }}
           >
             <input
               value={block.text}
@@ -403,7 +412,7 @@ const BlockRow = forwardRef<
   }
 
   return (
-    <div className="group" style={{ position: "relative" }}>
+    <div className="group" style={{ position: "relative", marginTop: spacingBefore }}>
       {/* The per-block hover toolbar (Paragraph/H1/H2/Bullet) that used to
           float here on every line's hover was removed — it popped up
           constantly while reading/scanning text and got in the way rather
@@ -411,8 +420,8 @@ const BlockRow = forwardRef<
           selection-triggered Bold/Italic toolbar below (only appears when
           you've actually selected text), alongside onTypeChange still
           wired the same way via DocEditor's setBlockType. */}
+      {plusGutter}
       <div className="flex items-start gap-1.5">
-        {plusGutter}
         {block.type === "bullet" && (
           <span style={{ color: "#71717A", fontSize: 14, lineHeight: "22px", flexShrink: 0 }}>•</span>
         )}
@@ -556,6 +565,18 @@ export function DocEditor({
   const refs = useRef<Map<string, BlockRowHandle>>(new Map());
   const lastSplitAtRef = useRef(0);
 
+  // Safety net for content saved BEFORE insertBanner started guaranteeing a
+  // trailing paragraph (below) — a banner has no contentEditable area of
+  // its own, so a doc/task ending on one had nowhere left to click or type
+  // at all. Runs once per doc that actually ends this way; appending a
+  // real "p" block makes the condition false on the next render.
+  useEffect(() => {
+    if (blocks.length > 0 && blocks[blocks.length - 1].type === "banner") {
+      onChange({ blocks: [...blocks, { id: makeId(), type: "p", text: "" }] });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blocks]);
+
   // ── Undo/redo history ──────────────────────────────────────────────────
   const historyRef = useRef<{ past: DocBlock[][]; future: DocBlock[][] }>({ past: [], future: [] });
   const typingBaselineRef = useRef<DocBlock[] | null>(null);
@@ -641,6 +662,14 @@ export function DocEditor({
       next[index] = newBlock;
     } else {
       next.splice(index + 1, 0, newBlock);
+    }
+    // A banner has no contentEditable text area of its own, so if it ends
+    // up as the LAST block there'd be nowhere left to click/type below it
+    // — the doc would just dead-end. Always keep a real empty paragraph
+    // after a trailing banner so there's somewhere to continue typing.
+    const bannerIdx = next.findIndex((b) => b.id === newBlock.id);
+    if (bannerIdx === next.length - 1) {
+      next.push({ id: makeId(), type: "p", text: "" });
     }
     onChange({ blocks: next });
   };
@@ -839,7 +868,7 @@ export function DocEditor({
         }
       }}
     >
-      {blocks.map((block) => (
+      {blocks.map((block, index) => (
         <BlockRow
           key={block.id}
           ref={(handle) => {
@@ -856,7 +885,19 @@ export function DocEditor({
             plainTextLength(block.text) === 0 ? removeBlock(block.id) : mergeIntoPrevious(block.id)
           }
           onPasteLines={(before, after, lines) => pasteLines(block.id, before, after, lines)}
-          placeholder={placeholder}
+          // Only the very first block of an otherwise-completely-empty doc
+          // shows the placeholder — e.g. a brand-new blank page/task. Every
+          // OTHER empty paragraph (a blank line used as a spacer between
+          // sections in existing content, which this doc has plenty of)
+          // stays silent instead of littering the page with "Type
+          // something…" on every blank line.
+          placeholder={index === 0 && blocks.length === 1 ? placeholder : ""}
+          // Extra breathing room only right after a banner — everywhere
+          // else, blocks stay zero-gap on purpose (see the "double
+          // spacing" fix on regular Enter-created lines vs. wrapped text).
+          // This targets specifically the banner→text adjacency, not
+          // spacing in general.
+          spacingBefore={index > 0 && blocks[index - 1].type === "banner" ? 10 : 0}
           onColorChange={(color) => setBlockColor(block.id, color)}
           onRemoveBanner={() => removeBlock(block.id)}
           onRequestPlus={(blockId, anchor) => {

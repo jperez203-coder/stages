@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import Image from "next/image";
 import { Search, Check } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { getAvatarColorFromUserId } from "@/lib/avatar-color";
@@ -22,10 +23,11 @@ import type { TaskAssignee } from "@/components/tasks/types";
  * profiles lookup (no direct FK between the two tables for PostgREST to
  * embed, same reason tasks/page.tsx does its own two-step assignee fetch).
  *
- * The "Search or enter email…" box only FILTERS this already-fetched
- * member list by name/email substring — it does not send an invite. Real
- * invite-by-email is a separate, already-existing flow (Team settings /
- * client invites) and out of scope here.
+ * The "Search by name…" box only FILTERS this already-fetched member list
+ * by display name (no email matching, per Jordan — this is a name picker,
+ * not an invite box) — it does not send an invite. Real invite-by-email is
+ * a separate, already-existing flow (Team settings / client invites) and
+ * out of scope here.
  */
 
 type Props = {
@@ -133,9 +135,11 @@ export function AssigneesPopover({ anchor, pipelineId, taskId, currentAssignees,
     if (!people) return [];
     const q = query.trim().toLowerCase();
     if (!q) return people;
-    return people.filter(
-      (p) => (p.displayName ?? "").toLowerCase().includes(q) || p.email.toLowerCase().includes(q),
-    );
+    // Name-only match — per Jordan, this is a "type a name" picker, not an
+    // invite-by-email box, so email never factors into the filter (even
+    // though a person without a display_name still shows their email as
+    // a last-resort label below).
+    return people.filter((p) => (p.displayName ?? "").toLowerCase().includes(q));
   }, [people, query]);
 
   const assignedIds = new Set(currentAssignees.map((a) => a.id));
@@ -207,7 +211,7 @@ export function AssigneesPopover({ anchor, pipelineId, taskId, currentAssignees,
           autoFocus
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search or enter email…"
+          placeholder="Search by name…"
           className="text-[12px] outline-none flex-1"
           style={{ background: "transparent", border: "none", color: "#E4E4E7" }}
         />
@@ -252,12 +256,23 @@ export function AssigneesPopover({ anchor, pipelineId, taskId, currentAssignees,
               onMouseEnter={(e) => (e.currentTarget.style.background = "#26262A")}
               onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
             >
-              <div
-                className="flex items-center justify-center rounded-full text-[10px] font-medium"
-                style={{ width: 22, height: 22, background: bg, color: text, flexShrink: 0 }}
-              >
-                {resolveInitial({ display_name: person.displayName })}
-              </div>
+              {person.avatarUrl ? (
+                <Image
+                  src={person.avatarUrl}
+                  alt=""
+                  width={22}
+                  height={22}
+                  unoptimized
+                  style={{ width: 22, height: 22, borderRadius: "50%", objectFit: "cover", display: "block", flexShrink: 0 }}
+                />
+              ) : (
+                <div
+                  className="flex items-center justify-center rounded-full text-[10px] font-medium"
+                  style={{ width: 22, height: 22, background: bg, color: text, flexShrink: 0 }}
+                >
+                  {resolveInitial({ display_name: person.displayName })}
+                </div>
+              )}
               <span className="text-[13px] flex-1 truncate" style={{ color: "#E4E4E7" }}>
                 {person.displayName ?? person.email}
               </span>
