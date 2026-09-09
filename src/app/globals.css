@@ -8,7 +8,7 @@
   --font-poppins: var(--font-poppins-raw), system-ui, sans-serif;
 
   /* Stages brand palette — ported from prototype GlobalStyles */
-  --color-stages-bg: #000000;
+  --color-stages-bg: #101010;
   --color-stages-card: #2C2C2F;
   --color-stages-border: #36363A;
   --color-stages-border-hover: #4A4A50;

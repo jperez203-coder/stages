@@ -48,6 +48,12 @@ export type UserContext = {
    *  visibility, and pipeline /clients tab visibility. */
   workspaceType?: "agency" | "personal";
 
+  /** Storage path of the workspace's custom logo (workspace_logos bucket),
+   *  or null/undefined if it hasn't uploaded one — falls back to the
+   *  generated "#" hash tile. Set for every agency context; undefined for
+   *  client contexts (same rationale as workspaceType). */
+  logoPath?: string | null;
+
   /** Set when source === 'pipeline'. */
   pipelineId?: string;
   pipelineName?: string;
@@ -87,6 +93,7 @@ type WorkspaceMembershipRow = {
     slug: string;
     name: string;
     type: "agency" | "personal";
+    logo_path: string | null;
   } | null;
 };
 
@@ -100,6 +107,7 @@ type PipelineMembershipRow = {
       slug: string;
       name: string;
       type: "agency" | "personal";
+      logo_path: string | null;
     } | null;
   } | null;
 };
@@ -131,12 +139,12 @@ export function useUserContexts(): UserContextsState {
       const [wsResult, pmResult, profResult] = await Promise.all([
         supabase
           .from("workspace_memberships")
-          .select("role, workspace:workspaces(id, slug, name, type)")
+          .select("role, workspace:workspaces(id, slug, name, type, logo_path)")
           .eq("user_id", userId),
         supabase
           .from("pipeline_memberships")
           .select(
-            "role, pipeline:pipelines(id, name, workspace:workspaces(id, slug, name, type))",
+            "role, pipeline:pipelines(id, name, workspace:workspaces(id, slug, name, type, logo_path))",
           )
           .eq("user_id", userId),
         supabase
@@ -166,6 +174,7 @@ export function useUserContexts(): UserContextsState {
           workspaceSlug: row.workspace.slug,
           workspaceName: row.workspace.name,
           workspaceType: row.workspace.type,
+          logoPath: row.workspace.logo_path,
         });
       }
 
@@ -183,6 +192,7 @@ export function useUserContexts(): UserContextsState {
           // contexts don't surface the parent workspace as a first-class
           // concept in any UI surface (they live in /portal/*).
           workspaceType: isAgencyCtx ? row.pipeline.workspace.type : undefined,
+          logoPath: isAgencyCtx ? row.pipeline.workspace.logo_path : undefined,
           pipelineId: row.pipeline.id,
           pipelineName: row.pipeline.name,
         });

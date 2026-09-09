@@ -10,9 +10,15 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
+import { InviteMembersIcon } from "@/components/icons/InviteMembersIcon";
 import { StagesHashTile } from "@/components/icons/StagesHashTile";
+import { WorkspaceSettingsIcon } from "@/components/icons/WorkspaceSettingsIcon";
 import { urlForContext } from "@/lib/resolveDestination";
 import { supabase } from "@/lib/supabase";
+import {
+  createWorkspaceLogoSignedUrl,
+  uploadWorkspaceLogo,
+} from "@/lib/workspace-logo";
 import type { UserContext } from "@/hooks/useUserContexts";
 
 type Props = {
@@ -219,19 +225,86 @@ export function HeaderWorkspaceSwitcher({
     clientContexts,
   ]);
 
-  // Client Portal section collapse default: expanded when ≤ 3 portals,
-  // collapsed when > 3 (per spec). The chevron is always present.
-  const [portalSectionOpen, setPortalSectionOpen] = useState(
-    clientGroups.length <= 3,
+  // Figma V2 panel shows the active workspace as its own header block,
+  // then a single flat "Switch Workspaces" list for everything else —
+  // no My Agency/Personal split at the display layer (that split still
+  // drives isAtWorkspaceCap above). This is every agency workspace
+  // besides whichever one is currently active.
+  const otherWorkspaces = useMemo(
+    () => workspaces.filter((w) => w.workspaceSlug !== activeSlug),
+    [workspaces, activeSlug],
   );
-  // Re-sync the default when the user's memberships change underfoot
-  // (sign-in / accept-invite / context refresh). Re-running the effect
-  // only when group COUNT changes — not contents — so the user's manual
-  // toggle isn't yanked back to default on every render.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+
+  // Signed URLs for every agency workspace that has uploaded a custom
+  // logo (workspace_logos bucket — private, so a raw logoPath can't be
+  // rendered directly). Keyed by workspaceId so the trigger pill, header
+  // block, and Switch Workspaces rows can all resolve their own tile.
+  // Client-portal contexts never carry logoPath (same convention as
+  // workspaceType — clients don't see the parent workspace as a
+  // first-class concept), so Client Portal rows always show the
+  // generated "#" tile.
+  const [logoUrlsByWorkspaceId, setLogoUrlsByWorkspaceId] = useState<
+    Record<string, string>
+  >({});
   useEffect(() => {
-    setPortalSectionOpen(clientGroups.length <= 3);
-  }, [clientGroups.length]);
+    const pending = workspaces.filter(
+      (w) => w.logoPath && !logoUrlsByWorkspaceId[w.workspaceId],
+    );
+    if (pending.length === 0) return;
+    let alive = true;
+    void Promise.all(
+      pending.map(async (w) => {
+        const { signedUrl } = await createWorkspaceLogoSignedUrl(w.logoPath!);
+        return [w.workspaceId, signedUrl] as const;
+      }),
+    ).then((results) => {
+      if (!alive) return;
+      setLogoUrlsByWorkspaceId((prev) => {
+        const next = { ...prev };
+        for (const [workspaceId, signedUrl] of results) {
+          if (signedUrl) next[workspaceId] = signedUrl;
+        }
+        return next;
+      });
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaces]);
+
+  // Hover-to-upload state for the header block's tile. Upload is gated to
+  // workspace owners (matches the workspace_logos bucket's RLS and
+  // workspaces_update's owner-only check) — showing the affordance to a
+  // non-owner would just produce a silent RLS failure on click.
+  const [logoHover, setLogoHover] = useState(false);
+  const [logoUploading, setLogoUploading] = useState(false);
+  const logoFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleLogoFileChange = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !activeAgencyCtx) return;
+    setLogoUploading(true);
+    const { path, error } = await uploadWorkspaceLogo(
+      activeAgencyCtx.workspaceId,
+      file,
+    );
+    if (error || !path) {
+      setLogoUploading(false);
+      return;
+    }
+    const { signedUrl } = await createWorkspaceLogoSignedUrl(path);
+    setLogoUploading(false);
+    if (signedUrl) {
+      setLogoUrlsByWorkspaceId((prev) => ({
+        ...prev,
+        [activeAgencyCtx.workspaceId]: signedUrl,
+      }));
+    }
+  };
 
   // Trigger pill identity. In portal mode it's "Client of: <Agency>"
   // with the agency's tint. Falls back to agency identity otherwise.
@@ -406,8 +479,8 @@ export function HeaderWorkspaceSwitcher({
     return (
       <div key={ctx.workspaceId} className="px-2 group">
         {isEditing ? (
-          <div className="flex items-center gap-3 px-2 py-2">
-            <StagesHashTile workspaceId={ctx.workspaceId} size={40} />
+          <div className="flex items-center gap-3 px-2 py-1.5">
+            <StagesHashTile workspaceId={ctx.workspaceId} size={34} logoUrl={logoUrlsByWorkspaceId[ctx.workspaceId]} />
             <input
               autoFocus
               value={editValue}
@@ -434,10 +507,10 @@ export function HeaderWorkspaceSwitcher({
           </div>
         ) : (
           <div
-            className="flex items-center gap-3 px-2 py-2 rounded-lg cursor-pointer transition-colors"
+            className="flex items-center gap-3 px-2 py-1.5 rounded-lg cursor-pointer transition-colors"
             style={{ background: isActive ? "#212939" : "transparent" }}
             onMouseEnter={(e) => {
-              if (!isActive) e.currentTarget.style.background = "#1F1F22";
+              if (!isActive) e.currentTarget.style.background = "#292929";
             }}
             onMouseLeave={(e) => {
               if (!isActive)
@@ -445,12 +518,12 @@ export function HeaderWorkspaceSwitcher({
             }}
             onClick={() => switchTo(ctx)}
           >
-            <StagesHashTile workspaceId={ctx.workspaceId} size={40} />
+            <StagesHashTile workspaceId={ctx.workspaceId} size={34} logoUrl={logoUrlsByWorkspaceId[ctx.workspaceId]} />
             <div className="flex-1 min-w-0">
-              <div className="text-[14px] font-semibold truncate text-white">
+              <div className="text-[13px] font-semibold truncate text-white">
                 {ctx.workspaceName}
               </div>
-              <div className="text-[12px] text-zinc-500 truncate mt-0.5">
+              <div className="text-[11px] text-zinc-500 truncate mt-0.5">
                 {formatAgencyStats(ctx.stats)}
               </div>
             </div>
@@ -526,7 +599,7 @@ export function HeaderWorkspaceSwitcher({
         }
       >
         <span className="flex items-center gap-2 min-w-0">
-          <StagesHashTile workspaceId={triggerWorkspaceId} size={triggerTileSize} />
+          <StagesHashTile workspaceId={triggerWorkspaceId} size={triggerTileSize} logoUrl={logoUrlsByWorkspaceId[triggerWorkspaceId]} />
           <span
             // Bumped one step up from font-medium (it was already
             // font-medium, not regular, when this request came in) —
@@ -555,24 +628,23 @@ export function HeaderWorkspaceSwitcher({
           className={`absolute mt-2 fade-in z-50 ${
             align === "end" ? "right-0" : "left-0"
           }`}
-          style={{ width: "320px" }}
+          style={{ width: "296px" }}
         >
           <div
             style={{
-              background: "#1A1A1A",
-              border: "1px solid #36363A",
-              borderRadius: "12px",
+              background: "#1F1F1F",
+              border: "1px solid #434241",
+              borderRadius: "10px",
               boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
               overflow: "hidden",
             }}
           >
             {/* Pure-client CTA at the TOP of the dropdown. Shown when
                 the user has zero agency workspaces — replaces the
-                empty MY AGENCY section AND the "+ New workspace"
-                footer (both of which would be useless to this
-                persona). Routes to /upgrade, which is the waitlist
-                page for the paid plan that unlocks workspace
-                creation. */}
+                header block AND the Create Workspace footer (both of
+                which would be useless to this persona). Routes to
+                /upgrade, which is the waitlist page for the paid plan
+                that unlocks workspace creation. */}
             {!hasAnyAgencyContext && (
               <div className="py-1">
                 <div className="px-2">
@@ -582,9 +654,9 @@ export function HeaderWorkspaceSwitcher({
                       setOpen(false);
                       router.push("/upgrade?source=switcher_empty");
                     }}
-                    className="w-full flex items-center gap-3 px-2 py-2 rounded-lg transition-colors text-left"
+                    className="w-full flex items-center gap-3 px-2 py-1.5 rounded-lg transition-colors text-left"
                     onMouseEnter={(e) =>
-                      (e.currentTarget.style.background = "#1F1F22")
+                      (e.currentTarget.style.background = "#292929")
                     }
                     onMouseLeave={(e) =>
                       (e.currentTarget.style.background = "transparent")
@@ -596,12 +668,12 @@ export function HeaderWorkspaceSwitcher({
                         sees the same tint, while different clients
                         see different ones. Picked over a workspace-id
                         hash because the user has no workspace yet. */}
-                    <StagesHashTile workspaceId={userId} size={40} />
+                    <StagesHashTile workspaceId={userId} size={34} />
                     <div className="flex-1 min-w-0">
-                      <div className="text-[14px] font-semibold text-white">
+                      <div className="text-[13px] font-semibold text-white">
                         Create your own workspace
                       </div>
-                      <div className="text-[12px] text-zinc-500 mt-0.5">
+                      <div className="text-[11px] text-zinc-500 mt-0.5">
                         Run your own agency on Stages
                       </div>
                     </div>
@@ -614,187 +686,271 @@ export function HeaderWorkspaceSwitcher({
               </div>
             )}
 
-            {/* Section stack. Cap at ~420px so a user with many
-                workspaces still gets the "+ New workspace" footer
-                visible without scrolling the whole dropdown. */}
-            <div className="max-h-[420px] overflow-y-auto scrollbar-thin">
-              {/* ── MY AGENCY ─────────────────────────────────────── */}
-              {myAgencyContexts.length > 0 && (
-                <div className="py-1">
-                  <div className="px-3 pt-1.5 pb-1 text-[10px] font-semibold tracking-wider text-zinc-500 uppercase">
-                    My Agency
+            {hasAnyAgencyContext && (
+              <>
+                {/* Header block — the active workspace's identity, big
+                    tile + name + stats. Figma V2's panel leads with
+                    this instead of burying the active workspace in a
+                    list row. Falls back to the client-portal identity
+                    (triggerLabel/triggerWorkspaceId already compute
+                    "Client of: X" + the agency's tint) when the
+                    active context is a client portal. */}
+                <div className="flex items-center gap-3" style={{ padding: "12px" }}>
+                  {/* Hover-to-upload logo tile. Only interactive for the
+                      workspace owner — matches the workspace_logos
+                      bucket's RLS (owner-only insert/update) and
+                      workspaces_update's owner-only check, so a
+                      non-owner never sees an affordance that would
+                      just fail silently on click. */}
+                  <div
+                    className="relative"
+                    style={{ width: 40, height: 40, flexShrink: 0 }}
+                    onMouseEnter={() => setLogoHover(true)}
+                    onMouseLeave={() => setLogoHover(false)}
+                  >
+                    <StagesHashTile
+                      workspaceId={triggerWorkspaceId}
+                      size={40}
+                      logoUrl={logoUrlsByWorkspaceId[triggerWorkspaceId]}
+                    />
+                    {activeAgencyCtx?.role === "owner" && !activeClientCtx && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => logoFileInputRef.current?.click()}
+                          disabled={logoUploading}
+                          aria-label="Upload workspace logo"
+                          className="absolute inset-0 flex items-center justify-center transition-opacity"
+                          style={{
+                            borderRadius: 10,
+                            background: "rgba(16,16,16,0.55)",
+                            backdropFilter: "blur(3px)",
+                            WebkitBackdropFilter: "blur(3px)",
+                            border: "none",
+                            cursor: logoUploading ? "default" : "pointer",
+                            opacity: logoHover || logoUploading ? 1 : 0,
+                          }}
+                        >
+                          <Pencil size={14} className="text-white" />
+                        </button>
+                        <input
+                          ref={logoFileInputRef}
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={handleLogoFileChange}
+                        />
+                      </>
+                    )}
                   </div>
-                  {myAgencyContexts.map(renderAgencyRow)}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[16px] font-bold truncate text-white">
+                      {triggerLabel}
+                    </div>
+                    {activeAgencyCtx && !activeClientCtx && (
+                      <div className="text-[12px] text-zinc-500 truncate mt-0.5">
+                        {formatAgencyStats(activeAgencyCtx.stats)}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              )}
+                <div style={{ height: 1, background: "#434241" }} />
 
-              {/* ── CLIENT PORTALS ────────────────────────────────── */}
-              {clientGroups.length > 0 && (
-                <div
-                  className={`py-1 ${
-                    myAgencyContexts.length > 0 || !hasAnyAgencyContext
-                      ? "border-t border-zinc-800"
-                      : ""
-                  }`}
-                >
+                {/* Manage — only meaningful for the active agency
+                    workspace, hidden while viewing a client portal
+                    (clients can't manage the agency's workspace). */}
+                {activeAgencyCtx && !activeClientCtx && (
+                  <>
+                    <div className="py-1">
+                      <div className="px-4 pt-1 pb-0.5 text-[11px] font-semibold text-zinc-500">
+                        Manage
+                      </div>
+                      <div className="px-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOpen(false);
+                            router.push(
+                              `/w/${activeAgencyCtx.workspaceSlug}/settings/team`,
+                            );
+                          }}
+                          className="w-full flex items-center gap-3 px-2 py-1.5 rounded-lg transition-colors text-left text-[13px] font-medium text-white"
+                          style={{ background: "transparent" }}
+                          onMouseEnter={(e) =>
+                            (e.currentTarget.style.background = "#292929")
+                          }
+                          onMouseLeave={(e) =>
+                            (e.currentTarget.style.background = "transparent")
+                          }
+                        >
+                          <InviteMembersIcon size={14} className="flex-shrink-0" />
+                          Invite members
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOpen(false);
+                            router.push(
+                              `/w/${activeAgencyCtx.workspaceSlug}/settings`,
+                            );
+                          }}
+                          className="w-full flex items-center gap-3 px-2 py-1.5 rounded-lg transition-colors text-left text-[13px] font-medium text-white"
+                          style={{ background: "transparent" }}
+                          onMouseEnter={(e) =>
+                            (e.currentTarget.style.background = "#292929")
+                          }
+                          onMouseLeave={(e) =>
+                            (e.currentTarget.style.background = "transparent")
+                          }
+                        >
+                          <WorkspaceSettingsIcon size={14} className="flex-shrink-0" />
+                          Settings
+                        </button>
+                      </div>
+                    </div>
+                    <div style={{ height: 1, background: "#434241" }} />
+                  </>
+                )}
+
+                <div className="max-h-[420px] overflow-y-auto scrollbar-thin">
+                  {/* ── SWITCH WORKSPACES ─────────────────────────────
+                      Every agency workspace besides the one shown in
+                      the header above — My Agency and Personal
+                      flattened into one flat list per Figma. */}
+                  {otherWorkspaces.length > 0 && (
+                    <div className="py-1">
+                      <div className="px-4 pt-1 pb-0.5 text-[11px] font-semibold text-zinc-500">
+                        Switch Workspaces
+                      </div>
+                      {otherWorkspaces.map(renderAgencyRow)}
+                    </div>
+                  )}
+
+                  {/* ── CLIENT PORTAL ─────────────────────────────── */}
+                  {clientGroups.length > 0 && (
+                    <div
+                      className={`py-1 ${
+                        otherWorkspaces.length > 0
+                          ? "border-t border-zinc-800"
+                          : ""
+                      }`}
+                    >
+                      <div className="px-4 pt-1 pb-0.5 text-[11px] font-semibold text-zinc-500">
+                        Client Portal
+                      </div>
+                      {clientGroups.map((group) => {
+                        const isActive =
+                          !!activeClientCtx &&
+                          group.contexts.some(
+                            (c) => c.pipelineId === activeClientCtx.pipelineId,
+                          );
+                        // First context in the group is the navigation
+                        // target when there are multiple pipelines
+                        // under one agency (no per-pipeline
+                        // last-visited tracking today).
+                        const target = group.contexts[0]!;
+                        const showPipelineSubtitle =
+                          group.contexts.length === 1;
+                        return (
+                          <div key={group.workspaceId} className="px-2">
+                            <div
+                              className="flex items-center gap-3 px-2 py-1.5 rounded-lg cursor-pointer transition-colors"
+                              style={{
+                                background: isActive
+                                  ? "#212939"
+                                  : "transparent",
+                              }}
+                              onMouseEnter={(e) => {
+                                if (!isActive)
+                                  e.currentTarget.style.background =
+                                    "#292929";
+                              }}
+                              onMouseLeave={(e) => {
+                                if (!isActive)
+                                  e.currentTarget.style.background =
+                                    "transparent";
+                              }}
+                              onClick={() => switchToPortal(target)}
+                            >
+                              <StagesHashTile
+                                workspaceId={group.workspaceId}
+                                size={34}
+                              />
+                              <div className="flex-1 min-w-0">
+                                {/* CLIENT PORTAL rows stay on
+                                    workspaceName, NOT company_name —
+                                    the company-name RPC only feeds the
+                                    active-pill label, not the row
+                                    labels here (each row would need
+                                    its own pipeline-scoped RPC call,
+                                    which isn't worth the wattage for a
+                                    list that's already grouped by
+                                    agency). */}
+                                <div className="text-[13px] font-semibold truncate text-white">
+                                  {group.workspaceName}
+                                </div>
+                                {showPipelineSubtitle &&
+                                  target.pipelineName && (
+                                    <div className="text-[11px] text-zinc-500 truncate mt-0.5">
+                                      {target.pipelineName}
+                                    </div>
+                                  )}
+                              </div>
+                              {isActive && (
+                                <Check
+                                  size={16}
+                                  className="flex-shrink-0"
+                                  style={{ color: "#15B981" }}
+                                  strokeWidth={3}
+                                />
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Create Workspace footer. WL-3b: disabled when
+                    isAtWorkspaceCap (1 agency + 1 personal already
+                    exist). Disabled-with-tooltip rather than hidden so
+                    discoverability stays — the user sees the
+                    affordance exists and learns why they can't use it. */}
+                <div style={{ padding: "12px" }}>
                   <button
                     type="button"
-                    onClick={() => setPortalSectionOpen((v) => !v)}
-                    className="w-full flex items-center justify-between px-3 pt-1.5 pb-1 cursor-pointer"
-                    aria-expanded={portalSectionOpen}
-                  >
-                    <span className="text-[10px] font-semibold tracking-wider text-zinc-500 uppercase">
-                      Client Portals
-                    </span>
-                    <ChevronDown
-                      size={12}
-                      className="text-zinc-500 flex-shrink-0"
-                      style={{
-                        transform: portalSectionOpen
-                          ? "rotate(180deg)"
-                          : "none",
-                        transition: "transform 0.15s",
-                      }}
-                    />
-                  </button>
-                  {portalSectionOpen &&
-                    clientGroups.map((group) => {
-                      const isActive =
-                        !!activeClientCtx &&
-                        group.contexts.some(
-                          (c) => c.pipelineId === activeClientCtx.pipelineId,
-                        );
-                      // First context in the group is the navigation
-                      // target when there are multiple pipelines under
-                      // one agency (no per-pipeline last-visited
-                      // tracking today).
-                      const target = group.contexts[0]!;
-                      const showPipelineSubtitle =
-                        group.contexts.length === 1;
-                      return (
-                        <div key={group.workspaceId} className="px-2">
-                          <div
-                            className="flex items-center gap-3 px-2 py-2 rounded-lg cursor-pointer transition-colors"
-                            style={{
-                              background: isActive
-                                ? "#212939"
-                                : "transparent",
-                            }}
-                            onMouseEnter={(e) => {
-                              if (!isActive)
-                                e.currentTarget.style.background = "#1F1F22";
-                            }}
-                            onMouseLeave={(e) => {
-                              if (!isActive)
-                                e.currentTarget.style.background =
-                                  "transparent";
-                            }}
-                            onClick={() => switchToPortal(target)}
-                          >
-                            <StagesHashTile
-                              workspaceId={group.workspaceId}
-                              size={40}
-                            />
-                            <div className="flex-1 min-w-0">
-                              {/* CLIENT PORTALS rows stay on
-                                  workspaceName, NOT company_name —
-                                  the company-name RPC only feeds the
-                                  active-pill label, not the row
-                                  labels here (each row would need its
-                                  own pipeline-scoped RPC call, which
-                                  isn't worth the wattage for a list
-                                  that's already grouped by agency). */}
-                              <div className="text-[14px] font-semibold truncate text-white">
-                                {group.workspaceName}
-                              </div>
-                              {showPipelineSubtitle &&
-                                target.pipelineName && (
-                                  <div className="text-[12px] text-zinc-500 truncate mt-0.5">
-                                    {target.pipelineName}
-                                  </div>
-                                )}
-                            </div>
-                            {isActive && (
-                              <Check
-                                size={16}
-                                className="flex-shrink-0"
-                                style={{ color: "#15B981" }}
-                                strokeWidth={3}
-                              />
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                </div>
-              )}
-
-              {/* ── PERSONAL ──────────────────────────────────────── */}
-              {personalContexts.length > 0 && (
-                <div
-                  className={`py-1 ${
-                    myAgencyContexts.length > 0 || clientGroups.length > 0
-                      ? "border-t border-zinc-800"
-                      : ""
-                  }`}
-                >
-                  <div className="px-3 pt-1.5 pb-1 text-[10px] font-semibold tracking-wider text-zinc-500 uppercase">
-                    Personal
-                  </div>
-                  {personalContexts.map(renderAgencyRow)}
-                </div>
-              )}
-            </div>
-
-            {/* + New workspace global footer. Hidden for pure-client
-                users — they get the CTA card at the top instead.
-                WL-3b: disabled when isAtWorkspaceCap (1 agency + 1
-                personal already exist). Disabled-with-tooltip rather
-                than hidden so discoverability stays — the user sees
-                the affordance exists and learns why they can't use it. */}
-            {hasAnyAgencyContext && (
-              <div className="border-t border-zinc-800 p-1">
-                <button
-                  onClick={isAtWorkspaceCap ? undefined : createNew}
-                  disabled={isAtWorkspaceCap}
-                  title={
-                    isAtWorkspaceCap
-                      ? "You're at the workspace limit (1 agency, 1 personal). Delete one to create another."
-                      : undefined
-                  }
-                  aria-disabled={isAtWorkspaceCap}
-                  className="w-full flex items-center gap-3 px-2 py-2 rounded-lg text-[13px] font-medium text-zinc-400 transition-colors"
-                  onMouseEnter={(e) => {
-                    if (!isAtWorkspaceCap)
-                      e.currentTarget.style.background = "#1F1F22";
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!isAtWorkspaceCap)
-                      e.currentTarget.style.background = "transparent";
-                  }}
-                  style={{
-                    background: "transparent",
-                    opacity: isAtWorkspaceCap ? 0.4 : 1,
-                    cursor: isAtWorkspaceCap ? "not-allowed" : "pointer",
-                  }}
-                >
-                  <div
+                    onClick={isAtWorkspaceCap ? undefined : createNew}
+                    disabled={isAtWorkspaceCap}
+                    title={
+                      isAtWorkspaceCap
+                        ? "You're at the workspace limit (1 agency, 1 personal). Delete one to create another."
+                        : undefined
+                    }
+                    aria-disabled={isAtWorkspaceCap}
+                    className="w-full flex items-center justify-center gap-2 text-[13px] font-medium text-white transition-colors"
                     style={{
-                      width: 40,
-                      height: 40,
-                      borderRadius: 10,
-                      border: "1px solid #36363A",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      flexShrink: 0,
+                      background: "#101010",
+                      border: "1px solid #434241",
+                      borderRadius: 8,
+                      height: 34,
+                      opacity: isAtWorkspaceCap ? 0.4 : 1,
+                      cursor: isAtWorkspaceCap ? "not-allowed" : "pointer",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!isAtWorkspaceCap)
+                        e.currentTarget.style.background = "#1A1A1A";
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isAtWorkspaceCap)
+                        e.currentTarget.style.background = "#101010";
                     }}
                   >
-                    <Plus size={18} className="text-zinc-500" />
-                  </div>
-                  New workspace
-                </button>
-              </div>
+                    <Plus size={16} />
+                    Create Workspace
+                  </button>
+                </div>
+              </>
             )}
           </div>
         </div>

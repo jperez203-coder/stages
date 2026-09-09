@@ -32,9 +32,19 @@ type Props = {
    *  trigger pill uses ~28 in default density and ~22 in compact
    *  density so the pill height matches the avatar in each shell. */
   size?: number;
+  /** Signed URL for a workspace's uploaded logo (workspace_logos bucket
+   *  via createWorkspaceLogoSignedUrl). When present, renders the image
+   *  instead of the generated "#" glyph — same container/border either
+   *  way, so the tile's footprint never shifts based on whether a
+   *  workspace has uploaded a custom logo. */
+  logoUrl?: string | null;
 };
 
-export function StagesHashTile({ workspaceId: _workspaceId, size = 40 }: Props) {
+export function StagesHashTile({
+  workspaceId: _workspaceId,
+  size = 40,
+  logoUrl,
+}: Props) {
   // Tile corner radius ~25% of footprint so 40 → 10, 28 → 7. Matches
   // the rounded-square look used by the pipeline emoji tile in
   // PortalShell — same shape family across the chrome.
@@ -57,9 +67,21 @@ export function StagesHashTile({ workspaceId: _workspaceId, size = 40 }: Props) 
         alignItems: "center",
         justifyContent: "center",
         flexShrink: 0,
+        overflow: "hidden",
       }}
     >
-      <WorkspaceIcon size={glyph} />
+      {logoUrl ? (
+        // Signed URL with a rotating query-string signature; next/image's
+        // remote-pattern allowlist + caching isn't a fit here.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={logoUrl}
+          alt=""
+          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+        />
+      ) : (
+        <WorkspaceIcon size={glyph} />
+      )}
     </div>
   );
 }

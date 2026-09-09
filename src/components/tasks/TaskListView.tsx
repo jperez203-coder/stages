@@ -577,7 +577,7 @@ export function TaskListView({
                                   const { text, bg } = getAvatarColorFromUserId(a.id);
                                   return (
                                     // Outer disc is a SOLID backing matching
-                                    // the page background (#000000), not
+                                    // the page background (#101010), not
                                     // just a border — see the same fix in
                                     // GlobalTaskDetailPanel.tsx for why a
                                     // plain border on overlapping avatars
@@ -591,7 +591,7 @@ export function TaskListView({
                                         width: 28,
                                         height: 28,
                                         marginLeft: i === 0 ? 0 : -8,
-                                        background: "#000000",
+                                        background: "#101010",
                                         flexShrink: 0,
                                       }}
                                     >

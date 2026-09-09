@@ -244,13 +244,13 @@ export function Sidebar({ workspaceSlug, workspaceId, pipelines }: Props) {
       }}
     >
       <NavRow
-        icon={<SidebarHomeIcon size={16} />}
+        icon={<SidebarHomeIcon size={15} />}
         label="Home"
         href={homeHref}
         active={isHomeActive}
       />
       <NavRow
-        icon={<SidebarActivityIcon size={16} />}
+        icon={<SidebarActivityIcon size={15} />}
         label="Activity"
         href={activityHref}
         active={isActivityActive}
@@ -273,7 +273,7 @@ export function Sidebar({ workspaceSlug, workspaceId, pipelines }: Props) {
         <span className="flex items-center justify-center" style={{ width: 15, flexShrink: 0 }}>
           <SidebarChevron open={projectsOpen} size={7} />
         </span>
-        <span className="text-[14px] font-normal" style={{ color: "#71717A" }}>
+        <span className="text-[13px] font-normal" style={{ color: "#71717A" }}>
           Projects
         </span>
       </button>
@@ -306,7 +306,7 @@ export function Sidebar({ workspaceSlug, workspaceId, pipelines }: Props) {
               />
             )}
             <span
-              className="text-[14px] truncate"
+              className="text-[13px] truncate"
               style={{ color: "#E4E4E7" }}
             >
               {p.name}
@@ -327,7 +327,7 @@ export function Sidebar({ workspaceSlug, workspaceId, pipelines }: Props) {
           <span className="flex items-center justify-center" style={{ width: 15, flexShrink: 0 }}>
             <SidebarChevron open={foldersOpen} size={7} />
           </span>
-          <span className="text-[14px] font-normal" style={{ color: "#71717A" }}>
+          <span className="text-[13px] font-normal" style={{ color: "#71717A" }}>
             Folders
           </span>
         </button>
@@ -361,7 +361,7 @@ export function Sidebar({ workspaceSlug, workspaceId, pipelines }: Props) {
             }
           }}
           placeholder="Folder name"
-          className="text-[14px] outline-none"
+          className="text-[13px] outline-none"
           style={{
             margin: "2px 8px 4px 8px",
             padding: "5px 7px",
@@ -411,7 +411,7 @@ export function Sidebar({ workspaceSlug, workspaceId, pipelines }: Props) {
                     folder name and should render exactly as typed (only
                     forced to caps if the user actually typed it in caps). */}
                 <span
-                  className="text-[14px] truncate"
+                  className="text-[13px] truncate"
                   style={{ color: "#71717A", letterSpacing: "0.04em" }}
                 >
                   {folder.name}
@@ -492,7 +492,7 @@ export function Sidebar({ workspaceSlug, workspaceId, pipelines }: Props) {
                       ) : (
                         <SheetIcon size={17} className="flex-shrink-0" />
                       )}
-                      <span className="text-[14px] truncate" style={{ color: isDocActive ? "#FFFFFF" : "#BCBAB6" }}>
+                      <span className="text-[13px] truncate" style={{ color: isDocActive ? "#FFFFFF" : "#BCBAB6" }}>
                         {doc.title}
                       </span>
                     </Link>
@@ -619,7 +619,7 @@ function NavRow({
       <span className="flex items-center" style={{ marginTop: -2 }}>
         {isValidElement<{ color?: string }>(icon) ? cloneElement(icon, { color: tint }) : icon}
       </span>
-      <span className="text-[14px] font-normal">{label}</span>
+      <span className="text-[13px] font-normal">{label}</span>
     </Link>
   );
 }
@@ -638,7 +638,7 @@ function SectionHeader({ label, collapsed }: { label: string; collapsed?: boolea
       <span className="flex items-center justify-center" style={{ width: 15, flexShrink: 0 }}>
         <SidebarChevron open={false} size={7} style={{ opacity: collapsed ? 1 : 0 }} />
       </span>
-      <span className="text-[14px] font-normal" style={{ color: "#71717A" }}>
+      <span className="text-[13px] font-normal" style={{ color: "#71717A" }}>
         {label}
       </span>
     </div>

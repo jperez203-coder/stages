@@ -200,11 +200,11 @@ export function AppShell({ children }: Props) {
     // elements (rather than one bordered wrapper around everything) is
     // deliberate per Jordan's correction — the top bar has its own flat
     // edge-to-edge look with no stroke or corner radius.
-    <div style={{ height: "100vh", background: "#000000", display: "flex", flexDirection: "column" }}>
+    <div style={{ height: "100vh", background: "#101010", display: "flex", flexDirection: "column" }}>
       <header
         className="flex-shrink-0"
         style={{
-          background: "#000000",
+          background: "#101010",
           height: "44px",
         }}
       >
