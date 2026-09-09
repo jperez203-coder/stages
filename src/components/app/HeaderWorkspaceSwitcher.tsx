@@ -117,7 +117,11 @@ export function HeaderWorkspaceSwitcher({
   const triggerHeight = triggerHeightOverride ?? (compact ? 32 : 40);
   const triggerTileSize = compact ? 22 : 28;
   const triggerPadding = compact ? "0 8px 0 3px" : "0 10px 0 4px";
-  const triggerFontSize = compact ? 12 : 13;
+  // The AppShell/triggerWidth sidebar instance matches the sidebar's
+  // Home/Activity NavRow text exactly (text-[14px] font-medium); other
+  // callers (PortalShell, settings, WorkspaceSelector) keep their
+  // existing compact-driven size.
+  const triggerFontSize = triggerWidth ? 14 : compact ? 12 : 13;
   const triggerLabelMaxWidth = compact ? 180 : 200;
   const router = useRouter();
   const pathname = usePathname();
@@ -502,7 +506,12 @@ export function HeaderWorkspaceSwitcher({
           background: triggerWidth ? "#1F1F1F" : "#212124",
           border: "1px solid #36363A",
           borderRadius: "8px",
-          padding: triggerPadding,
+          // Left inset bumped to 8px (matches the sidebar's Home row
+          // padding, "7px 8px") only for the AppShell/triggerWidth case —
+          // that's the only caller meant to align as one visual column
+          // with the sidebar below it; other callers (PortalShell,
+          // settings, WorkspaceSelector) keep their existing triggerPadding.
+          padding: triggerWidth ? "0 10px 0 16px" : triggerPadding,
           height: `${triggerHeight}px`,
           width: triggerWidth ? `${triggerWidth}px` : undefined,
           justifyContent: triggerWidth ? "space-between" : undefined,
@@ -519,6 +528,9 @@ export function HeaderWorkspaceSwitcher({
         <span className="flex items-center gap-2 min-w-0">
           <StagesHashTile workspaceId={triggerWorkspaceId} size={triggerTileSize} />
           <span
+            // Bumped one step up from font-medium (it was already
+            // font-medium, not regular, when this request came in) —
+            // now matches the other callers' existing font-semibold.
             className="font-semibold truncate"
             style={{
               fontSize: triggerFontSize,
