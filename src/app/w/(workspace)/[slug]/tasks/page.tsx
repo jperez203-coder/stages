@@ -83,7 +83,7 @@ export default async function TasksPage({
     redirect("/");
   }
 
-  const [profileRes, tasksRes, assigneesRes] = await Promise.all([
+  const [profileRes, tasksRes, assigneesRes, pipelinesRes] = await Promise.all([
     supabase
       .from("profiles")
       .select("display_name")
@@ -98,7 +98,7 @@ export default async function TasksPage({
         `id, title, description, deadline, priority, status, done, created_at, stage_id,
          stage:stages!inner(
            id, pipeline_id,
-           pipeline:pipelines!stages_pipeline_id_fkey!inner(id, name, emoji, workspace_id)
+           pipeline:pipelines!stages_pipeline_id_fkey!inner(id, name, emoji, workspace_id, is_system)
          )`,
       )
       .eq("done", false)
@@ -114,7 +114,49 @@ export default async function TasksPage({
          task:tasks!inner(stage_id, stage:stages!inner(pipeline_id, pipeline:pipelines!stages_pipeline_id_fkey!inner(workspace_id)))`,
       )
       .eq("task.stage.pipeline.workspace_id", ws.id),
+
+    // Full pipeline list for the Create Task modal's project picker — not
+    // every pipeline has a task yet, so this can't be derived from tasksRes.
+    supabase
+      .from("pipelines")
+      .select("id, name, emoji, current_stage_id")
+      .eq("workspace_id", ws.id)
+      .eq("is_system", false)
+      .order("name", { ascending: true }),
   ]);
+
+  if (pipelinesRes.error) {
+    console.error("[tasks] pipelines fetch failed:", pipelinesRes.error.message);
+  }
+
+  // Earliest stage per pipeline — the Create Task modal's fallback target
+  // when a pipeline's current_stage_id is null (e.g. never manually
+  // advanced past its first stage). Fetched only for pipelines missing
+  // that column so pipelines that already have one skip the lookup.
+  const pipelineIdsNeedingFirstStage = (pipelinesRes.data ?? [])
+    .filter((p) => !p.current_stage_id)
+    .map((p) => p.id);
+  const firstStageRes = pipelineIdsNeedingFirstStage.length
+    ? await supabase
+        .from("stages")
+        .select("id, pipeline_id, position")
+        .in("pipeline_id", pipelineIdsNeedingFirstStage)
+        .order("position", { ascending: true })
+    : { data: [] as { id: string; pipeline_id: string; position: number }[] };
+
+  const firstStageByPipelineId = new Map<string, string>();
+  for (const s of firstStageRes.data ?? []) {
+    if (!firstStageByPipelineId.has(s.pipeline_id)) {
+      firstStageByPipelineId.set(s.pipeline_id, s.id);
+    }
+  }
+
+  const taskCreatablePipelines = (pipelinesRes.data ?? []).map((p) => ({
+    id: p.id,
+    name: p.name,
+    emoji: p.emoji as string | null,
+    defaultStageId: p.current_stage_id ?? firstStageByPipelineId.get(p.id) ?? null,
+  }));
 
   if (tasksRes.error) {
     console.error("[tasks] fetch failed:", tasksRes.error.message);
@@ -153,20 +195,27 @@ export default async function TasksPage({
     id: string;
     pipeline_id: string;
     pipeline:
-      | { id: string; name: string; emoji: string | null }
-      | Array<{ id: string; name: string; emoji: string | null }>;
+      | { id: string; name: string; emoji: string | null; is_system: boolean }
+      | Array<{ id: string; name: string; emoji: string | null; is_system: boolean }>;
   };
+  // Returns null only when the join itself is malformed (shouldn't happen —
+  // stage/pipeline are both !inner). A task on the hidden is_system
+  // pipeline still gets a real object back — TaskRow.pipeline is never
+  // null, `isSystem` on it is what tells display code to hide the project
+  // badge, per Jordan: "a project should not show if i don't pick a
+  // project, however it should still show under the task view."
   const flattenStage = (s: unknown) => {
     const obj = (Array.isArray(s) ? s[0] : s) as StageJoin | undefined;
     if (!obj) return null;
     const p = Array.isArray(obj.pipeline) ? obj.pipeline[0] : obj.pipeline;
-    return { id: p?.id ?? "", name: p?.name ?? "", emoji: p?.emoji ?? "📋" };
+    if (!p) return null;
+    return { id: p.id, name: p.name, emoji: p.emoji ?? "📋", isSystem: p.is_system };
   };
 
   const tasks: TaskRow[] = (tasksRes.data ?? [])
     .map((t) => {
-      const pipeline = flattenStage(t.stage);
-      if (!pipeline) return null;
+      const pipelineJoin = flattenStage(t.stage);
+      if (!pipelineJoin) return null;
       return {
         id: t.id,
         title: t.title,
@@ -176,7 +225,7 @@ export default async function TasksPage({
         status: t.status as TaskRow["status"],
         done: t.done as boolean,
         createdAt: t.created_at as string,
-        pipeline,
+        pipeline: pipelineJoin,
         assignees: assigneesByTaskId.get(t.id) ?? [],
       };
     })
@@ -189,6 +238,13 @@ export default async function TasksPage({
   const firstName = firstWord ? firstWord[0].toUpperCase() + firstWord.slice(1) : null;
 
   return (
-    <TaskListView slug={slug} firstName={firstName} initialTasks={tasks} currentUserId={user.id} />
+    <TaskListView
+      slug={slug}
+      firstName={firstName}
+      initialTasks={tasks}
+      currentUserId={user.id}
+      workspaceId={ws.id}
+      pipelines={taskCreatablePipelines}
+    />
   );
 }

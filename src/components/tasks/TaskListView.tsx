@@ -21,6 +21,8 @@ import { PriorityPopover } from "@/components/tasks/PriorityPopover";
 import { StatusPopover, type StatusSelection } from "@/components/tasks/StatusPopover";
 import { AssigneesPopover } from "@/components/tasks/AssigneesPopover";
 import { GlobalTaskDetailPanel } from "@/components/tasks/GlobalTaskDetailPanel";
+import { CreateTaskModal } from "@/components/tasks/CreateTaskModal";
+import { ProjectPicker, type ProjectPickerPipeline } from "@/components/tasks/ProjectPicker";
 
 /**
  * /w/[slug]/tasks body — the global Task tab (Figma V2).
@@ -42,12 +44,15 @@ import { GlobalTaskDetailPanel } from "@/components/tasks/GlobalTaskDetailPanel"
  * whichever groups they still belong to; they don't change the grouping
  * itself.
  *
- * NOT WIRED YET (flagged, not faked): the "+ Task" button, the "+ Add
- * Task" row per group, and the filter/search icons are visual-only —
- * same documented gap as MyTasksCard's + button (creating a task needs a
- * pipeline/stage picker that doesn't exist yet). Assignees IS live here
- * too now (AssigneesPopover, same component the task detail panel uses)
- * — clicking the cell's avatars/— opens the same name-search picker.
+ * The "+ Task" button opens CreateTaskModal (Figma V2's project/status/
+ * name/description/assignee/due-date/priority modal). It resolves a
+ * target stage automatically from the chosen project's current_stage_id
+ * (no stage picker in the Figma) — see page.tsx's defaultStageId. The
+ * "+ Add Task" row per group and the filter/search icons are still
+ * visual-only (same documented gap as MyTasksCard's + button). Assignees
+ * IS live in the table too (AssigneesPopover, same component the task
+ * detail panel uses) — clicking the cell's avatars/— opens the same
+ * name-search picker.
  *
  * Priority and Status ARE both live — plain <select> pickers (not in the
  * original screenshot, which had no Status column, but added since moving
@@ -56,7 +61,7 @@ import { GlobalTaskDetailPanel } from "@/components/tasks/GlobalTaskDetailPanel"
  * immediately re-bucket the row via the `groups` memo above.
  */
 
-const PRIORITY_META: Record<
+export const PRIORITY_META: Record<
   NonNullable<TaskRow["priority"]>,
   { label: string; color: string }
 > = {
@@ -72,7 +77,7 @@ const GROUP_META = {
   not_started: { label: "Not started", color: "#71717A", bg: "#71717A" },
 } as const;
 
-const STATUS_META: Record<TaskRow["status"], { label: string; color: string }> = {
+export const STATUS_META: Record<TaskRow["status"], { label: string; color: string }> = {
   not_started: { label: "Not started", color: GROUP_META.not_started.color },
   in_progress: { label: "In progress", color: GROUP_META.in_progress.color },
 };
@@ -123,13 +128,18 @@ export function TaskListView({
   firstName,
   initialTasks,
   currentUserId,
+  workspaceId,
+  pipelines,
 }: {
   slug: string;
   firstName: string | null;
   initialTasks: TaskRow[];
   currentUserId: string;
+  workspaceId: string;
+  pipelines: ProjectPickerPipeline[];
 }) {
   const [tasks, setTasks] = useState(initialTasks);
+  const [createTaskOpen, setCreateTaskOpen] = useState(false);
   const [activeChip, setActiveChip] = useState<Chip>("all");
   const [collapsed, setCollapsed] = useState<Set<GroupKey>>(new Set());
   const [openDatePickerTaskId, setOpenDatePickerTaskId] = useState<string | null>(null);
@@ -140,6 +150,8 @@ export function TaskListView({
   const [statusAnchor, setStatusAnchor] = useState<HTMLElement | null>(null);
   const [openAssigneesTaskId, setOpenAssigneesTaskId] = useState<string | null>(null);
   const [assigneesAnchor, setAssigneesAnchor] = useState<HTMLElement | null>(null);
+  const [openProjectPickerTaskId, setOpenProjectPickerTaskId] = useState<string | null>(null);
+  const [projectPickerAnchor, setProjectPickerAnchor] = useState<HTMLElement | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const selectedTask = tasks.find((t) => t.id === selectedTaskId) ?? null;
 
@@ -227,6 +239,31 @@ export function TaskListView({
     setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, assignees } : t)));
   };
 
+  // Moving a task to a different project means changing its stage_id —
+  // pipeline isn't a task column, only stage_id is, so this targets the
+  // chosen pipeline's own default stage (same defaultStageId resolution
+  // CreateTaskModal uses). A pipeline with no stages yet can't accept the
+  // task, same guard as CreateTaskModal's submit button.
+  const updateProject = async (taskId: string, pipeline: ProjectPickerPipeline) => {
+    setOpenProjectPickerTaskId(null);
+    if (!pipeline.defaultStageId) {
+      console.error(`[tasks] can't move task to "${pipeline.name}" — it has no stages yet.`);
+      return;
+    }
+    setTasks((prev) =>
+      prev.map((t) =>
+        t.id === taskId
+          ? { ...t, pipeline: { id: pipeline.id, name: pipeline.name, emoji: pipeline.emoji ?? "📋", isSystem: false } }
+          : t,
+      ),
+    );
+    const { error } = await supabase
+      .from("tasks")
+      .update({ stage_id: pipeline.defaultStageId })
+      .eq("id", taskId);
+    if (error) console.error("[tasks] project update failed:", error.message);
+  };
+
   return (
     <div className="dotted-grid flex-1 px-6 pt-3 pb-6 overflow-y-auto overflow-x-hidden">
       <div className="max-w-[1600px] mx-auto mb-4">
@@ -285,9 +322,8 @@ export function TaskListView({
             </button>
             <button
               type="button"
-              title="Create a task from within a project for now"
-              disabled
-              style={{ background: "transparent", border: "none", padding: 0, opacity: 0.6, cursor: "not-allowed" }}
+              onClick={() => setCreateTaskOpen(true)}
+              style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer" }}
             >
               <TaskCreateButtonGraphic height={28} />
             </button>
@@ -544,12 +580,38 @@ export function TaskListView({
                             )}
                           </td>
                           <td style={{ padding: "8px" }}>
-                            <div className="flex items-center gap-1.5" style={{ position: "relative", zIndex: 1 }}>
-                              <span style={{ fontSize: 13 }}>{task.pipeline.emoji}</span>
-                              <span className="text-[13px] truncate" style={{ color: "#979393" }}>
-                                {task.pipeline.name}
-                              </span>
-                            </div>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                setProjectPickerAnchor(e.currentTarget);
+                                setOpenProjectPickerTaskId((prev) => (prev === task.id ? null : task.id));
+                              }}
+                              className="flex items-center gap-1.5 w-full transition-colors"
+                              style={{ position: "relative", zIndex: 1, background: "transparent", border: "none", padding: 0, cursor: "pointer", textAlign: "left" }}
+                            >
+                              {task.pipeline.isSystem ? (
+                                <span className="text-[13px]" style={{ color: "#3A3A3E" }}>Add project</span>
+                              ) : (
+                                <>
+                                  <span style={{ fontSize: 13 }}>{task.pipeline.emoji}</span>
+                                  <span className="text-[13px] truncate" style={{ color: "#979393" }}>
+                                    {task.pipeline.name}
+                                  </span>
+                                </>
+                              )}
+                            </button>
+                            {openProjectPickerTaskId === task.id && (
+                              <ProjectPicker
+                                anchor={projectPickerAnchor}
+                                pipelines={pipelines}
+                                selectedId={task.pipeline.isSystem ? null : task.pipeline.id}
+                                onSelect={(id) => {
+                                  const picked = pipelines.find((p) => p.id === id);
+                                  if (picked) void updateProject(task.id, picked);
+                                }}
+                                onClose={() => setOpenProjectPickerTaskId(null)}
+                              />
+                            )}
                           </td>
                           <td style={{ padding: "8px" }}>
                             <button
@@ -625,7 +687,8 @@ export function TaskListView({
                             {openAssigneesTaskId === task.id && (
                               <AssigneesPopover
                                 anchor={assigneesAnchor}
-                                pipelineId={task.pipeline.id}
+                                pipelineId={task.pipeline.isSystem ? null : task.pipeline.id}
+                                workspaceId={workspaceId}
                                 taskId={task.id}
                                 currentAssignees={task.assignees}
                                 onChange={(next) => updateAssignees(task.id, next)}
@@ -695,8 +758,21 @@ export function TaskListView({
         <GlobalTaskDetailPanel
           task={selectedTask}
           currentUserId={currentUserId}
+          workspaceId={workspaceId}
           onClose={() => setSelectedTaskId(null)}
           onUpdate={applyTaskPatch}
+        />
+      )}
+
+      {createTaskOpen && (
+        <CreateTaskModal
+          pipelines={pipelines}
+          workspaceId={workspaceId}
+          onClose={() => setCreateTaskOpen(false)}
+          onCreated={(task) => {
+            setTasks((prev) => [task, ...prev]);
+            setCreateTaskOpen(false);
+          }}
         />
       )}
     </div>

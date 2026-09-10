@@ -57,11 +57,12 @@ const PANEL_WIDTH = 560;
 type Props = {
   task: TaskRow;
   currentUserId: string;
+  workspaceId: string;
   onClose: () => void;
   onUpdate: (taskId: string, patch: Partial<TaskRow>) => void;
 };
 
-export function GlobalTaskDetailPanel({ task, currentUserId, onClose, onUpdate }: Props) {
+export function GlobalTaskDetailPanel({ task, currentUserId, workspaceId, onClose, onUpdate }: Props) {
   const asideRef = useRef<HTMLElement | null>(null);
   const attachmentsRef = useRef<TaskAttachmentsSectionHandle | null>(null);
 
@@ -249,14 +250,18 @@ export function GlobalTaskDetailPanel({ task, currentUserId, onClose, onUpdate }
           <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
             <TaskTabIcon size={18} />
             <span className="text-[13px]" style={{ color: "#D4D4D8" }}>Task</span>
-            <span style={{ color: "#52525B" }}>/</span>
-            <span style={{ fontSize: 13 }}>{task.pipeline.emoji}</span>
-            <span
-              className="text-[13px] truncate"
-              style={{ color: "#D4D4D8" }}
-            >
-              {task.pipeline.name}
-            </span>
+            {!task.pipeline.isSystem && (
+              <>
+                <span style={{ color: "#52525B" }}>/</span>
+                <span style={{ fontSize: 13 }}>{task.pipeline.emoji}</span>
+                <span
+                  className="text-[13px] truncate"
+                  style={{ color: "#D4D4D8" }}
+                >
+                  {task.pipeline.name}
+                </span>
+              </>
+            )}
           </div>
           <button
             type="button"
@@ -476,7 +481,8 @@ export function GlobalTaskDetailPanel({ task, currentUserId, onClose, onUpdate }
               {openPopover === "assignees" && (
                 <AssigneesPopover
                   anchor={anchor}
-                  pipelineId={task.pipeline.id}
+                  pipelineId={task.pipeline.isSystem ? null : task.pipeline.id}
+                  workspaceId={workspaceId}
                   taskId={task.id}
                   currentAssignees={task.assignees}
                   onChange={handleAssigneesChange}

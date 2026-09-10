@@ -118,6 +118,7 @@ export default async function MyTasksPage({
       .from("pipelines")
       .select("id, name, emoji, last_edited_at")
       .eq("workspace_id", ws.id)
+      .eq("is_system", false)
       .order("name", { ascending: true }),
 
     // All tasks assigned to current user in this workspace that aren't

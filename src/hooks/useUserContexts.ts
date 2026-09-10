@@ -228,7 +228,8 @@ export function useUserContexts(): UserContextsState {
           supabase
             .from("pipelines")
             .select("workspace_id, id")
-            .in("workspace_id", agencyWorkspaceIds),
+            .in("workspace_id", agencyWorkspaceIds)
+            .eq("is_system", false),
           supabase
             .from("pipeline_memberships")
             .select("user_id, pipeline:pipelines(workspace_id)")

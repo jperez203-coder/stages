@@ -315,14 +315,17 @@ export function Sidebar({ workspaceSlug, workspaceId, pipelines }: Props) {
         ))
       ))}
 
-      <div className="flex items-center justify-between gap-1" style={{ marginTop: 16 }}>
+      <div
+        className="group flex items-center justify-between gap-1 rounded-md transition-colors"
+        style={{ marginTop: 16, padding: "6px 8px" }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = "#232326")}
+        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+      >
         <button
           type="button"
           onClick={() => setFoldersOpen((prev) => !prev)}
-          className="flex-1 flex items-center gap-[10px] rounded-md transition-colors text-left min-w-0"
-          style={{ padding: "6px 8px", background: "transparent", border: "none", cursor: "pointer" }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = "#232326")}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          className="flex-1 flex items-center gap-[10px] text-left min-w-0"
+          style={{ background: "transparent", border: "none", cursor: "pointer" }}
         >
           <span className="flex items-center justify-center" style={{ width: 15, flexShrink: 0 }}>
             <SidebarChevron open={foldersOpen} size={7} />
@@ -338,12 +341,13 @@ export function Sidebar({ workspaceSlug, workspaceId, pipelines }: Props) {
             setCreatingFolder(true);
           }}
           aria-label="New folder"
-          className="flex items-center justify-center rounded transition-colors flex-shrink-0"
-          style={{ width: 20, height: 20, marginRight: 8, background: "transparent", border: "none", cursor: "pointer", color: "#71717A" }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = "#232326")}
+          title="New folder"
+          className="flex items-center justify-center rounded transition-colors flex-shrink-0 opacity-0 group-hover:opacity-100"
+          style={{ width: 20, height: 20, background: "transparent", border: "none", cursor: "pointer", color: "#71717A" }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = "#2C2C2F")}
           onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
         >
-          <Plus size={13} />
+          <Plus size={13} strokeWidth={3} />
         </button>
       </div>
 
@@ -433,6 +437,8 @@ export function Sidebar({ workspaceSlug, workspaceId, pipelines }: Props) {
                   color: "#BCBAB6",
                   opacity: openFolderMenu === folder.id ? 1 : undefined,
                 }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "#2C2C2F")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                 title="Folder options"
               >
                 <span className={openFolderMenu === folder.id ? "" : "opacity-0 group-hover:opacity-100 transition-opacity"}>
@@ -513,6 +519,8 @@ export function Sidebar({ workspaceSlug, workspaceId, pipelines }: Props) {
                         color: "#BCBAB6",
                         opacity: openDocMenu === doc.id ? 1 : undefined,
                       }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "#2C2C2F")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                       title="Document options"
                     >
                       <span className={openDocMenu === doc.id ? "" : "opacity-0 group-hover:opacity-100 transition-opacity"}>
@@ -551,24 +559,36 @@ export function Sidebar({ workspaceSlug, workspaceId, pipelines }: Props) {
                   </div>
                   );
                 })}
-                <div className="flex items-center gap-3" style={{ padding: "4px 8px 8px 8px" }}>
+                <div className="flex items-center gap-1" style={{ padding: "4px 2px 8px 2px" }}>
                   <button
                     type="button"
                     onClick={() => createDocument(folder.id, "doc")}
-                    className="flex items-center gap-1 text-[13px] transition-colors"
-                    style={{ background: "transparent", border: "none", cursor: "pointer", color: "#71717A" }}
-                    onMouseEnter={(e) => (e.currentTarget.style.color = "#E4E4E7")}
-                    onMouseLeave={(e) => (e.currentTarget.style.color = "#71717A")}
+                    className="flex items-center gap-1 rounded text-[13px] transition-colors"
+                    style={{ padding: "3px 6px", background: "transparent", border: "none", cursor: "pointer", color: "#71717A" }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.color = "#E4E4E7";
+                      e.currentTarget.style.background = "#2C2C2F";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.color = "#71717A";
+                      e.currentTarget.style.background = "transparent";
+                    }}
                   >
                     <Plus size={11} /> Doc
                   </button>
                   <button
                     type="button"
                     onClick={() => createDocument(folder.id, "sheet")}
-                    className="flex items-center gap-1 text-[13px] transition-colors"
-                    style={{ background: "transparent", border: "none", cursor: "pointer", color: "#71717A" }}
-                    onMouseEnter={(e) => (e.currentTarget.style.color = "#E4E4E7")}
-                    onMouseLeave={(e) => (e.currentTarget.style.color = "#71717A")}
+                    className="flex items-center gap-1 rounded text-[13px] transition-colors"
+                    style={{ padding: "3px 6px", background: "transparent", border: "none", cursor: "pointer", color: "#71717A" }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.color = "#E4E4E7";
+                      e.currentTarget.style.background = "#2C2C2F";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.color = "#71717A";
+                      e.currentTarget.style.background = "transparent";
+                    }}
                   >
                     <Plus size={11} /> Sheet
                   </button>

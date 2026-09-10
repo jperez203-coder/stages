@@ -38,18 +38,34 @@ export function StatusPopover({ anchor, value, onSelect, onClose }: Props) {
 
   useLayoutEffect(() => {
     if (!anchor) return;
+    // POPOVER_HEIGHT is a rough upper-bound guess used only until the
+    // popover has actually mounted once — its real content (3 short
+    // sections) renders noticeably shorter, so the flip-up math below
+    // re-measures the real height on the next pass and corrects `top`
+    // rather than leaving a big unwanted gap above the trigger.
     const compute = () => {
       const a = anchor.getBoundingClientRect();
-      const bottomIfBelow = a.bottom + GAP + POPOVER_HEIGHT;
+      const height = ref.current?.getBoundingClientRect().height ?? POPOVER_HEIGHT;
+      const bottomIfBelow = a.bottom + GAP + height;
       const flipUp = bottomIfBelow > window.innerHeight - VIEWPORT_PAD;
-      const top = flipUp ? Math.max(VIEWPORT_PAD, a.top - GAP - POPOVER_HEIGHT) : a.bottom + GAP;
+      const top = flipUp ? Math.max(VIEWPORT_PAD, a.top - GAP - height) : a.bottom + GAP;
       const left = Math.min(a.left, window.innerWidth - POPOVER_WIDTH - VIEWPORT_PAD);
-      setPosition({ top, left: Math.max(VIEWPORT_PAD, left) });
+      setPosition((prev) => {
+        const next = { top, left: Math.max(VIEWPORT_PAD, left) };
+        if (prev && prev.top === next.top && prev.left === next.left) return prev;
+        return next;
+      });
     };
     compute();
+    // Re-measure once the popover has actually mounted (first pass above
+    // runs before it exists, so it uses the POPOVER_HEIGHT guess) — this
+    // second pass sees the real rendered height and corrects the flip-up
+    // position if the guess was off.
+    const raf = requestAnimationFrame(compute);
     window.addEventListener("scroll", compute, true);
     window.addEventListener("resize", compute);
     return () => {
+      cancelAnimationFrame(raf);
       window.removeEventListener("scroll", compute, true);
       window.removeEventListener("resize", compute);
     };

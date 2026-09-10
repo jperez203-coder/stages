@@ -19,6 +19,7 @@ import {
   createWorkspaceLogoSignedUrl,
   uploadWorkspaceLogo,
 } from "@/lib/workspace-logo";
+import { getCachedLogoUrl, setCachedLogoUrl } from "@/lib/workspace-logo-cache";
 import type { UserContext } from "@/hooks/useUserContexts";
 
 type Props = {
@@ -243,9 +244,21 @@ export function HeaderWorkspaceSwitcher({
   // workspaceType — clients don't see the parent workspace as a
   // first-class concept), so Client Portal rows always show the
   // generated "#" tile.
+  // Lazy-initialized from sessionStorage so a remount (page refresh, or
+  // the sidebar toggle unmounting/remounting this component along with
+  // it) can paint the real logo immediately instead of flashing the
+  // generated "#" tile while the signed-URL round trip is in flight.
   const [logoUrlsByWorkspaceId, setLogoUrlsByWorkspaceId] = useState<
     Record<string, string>
-  >({});
+  >(() => {
+    const initial: Record<string, string> = {};
+    for (const w of workspaces) {
+      if (!w.logoPath) continue;
+      const cached = getCachedLogoUrl(w.workspaceId, w.logoPath);
+      if (cached) initial[w.workspaceId] = cached;
+    }
+    return initial;
+  });
   useEffect(() => {
     const pending = workspaces.filter(
       (w) => w.logoPath && !logoUrlsByWorkspaceId[w.workspaceId],
@@ -255,14 +268,17 @@ export function HeaderWorkspaceSwitcher({
     void Promise.all(
       pending.map(async (w) => {
         const { signedUrl } = await createWorkspaceLogoSignedUrl(w.logoPath!);
-        return [w.workspaceId, signedUrl] as const;
+        return [w.workspaceId, w.logoPath!, signedUrl] as const;
       }),
     ).then((results) => {
       if (!alive) return;
       setLogoUrlsByWorkspaceId((prev) => {
         const next = { ...prev };
-        for (const [workspaceId, signedUrl] of results) {
-          if (signedUrl) next[workspaceId] = signedUrl;
+        for (const [workspaceId, logoPath, signedUrl] of results) {
+          if (signedUrl) {
+            next[workspaceId] = signedUrl;
+            setCachedLogoUrl(workspaceId, logoPath, signedUrl);
+          }
         }
         return next;
       });
@@ -303,6 +319,7 @@ export function HeaderWorkspaceSwitcher({
         ...prev,
         [activeAgencyCtx.workspaceId]: signedUrl,
       }));
+      setCachedLogoUrl(activeAgencyCtx.workspaceId, path, signedUrl);
     }
   };
 

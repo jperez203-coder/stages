@@ -83,7 +83,7 @@ export async function fetchAdminMetrics(): Promise<AdminMetrics> {
       .limit(1)
       .maybeSingle(),
     admin.from("profiles").select("id"),
-    admin.from("pipelines").select("workspace_id"),
+    admin.from("pipelines").select("workspace_id").eq("is_system", false),
     admin
       .from("workspace_memberships")
       .select("workspace_id, user_id")

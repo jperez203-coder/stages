@@ -22,6 +22,10 @@ import type { TaskAssignee } from "@/components/tasks/types";
  * 'client'), fetched lazily on open via pipeline_memberships + a batched
  * profiles lookup (no direct FK between the two tables for PostgREST to
  * embed, same reason tasks/page.tsx does its own two-step assignee fetch).
+ * When pipelineId is null (a task created without a project — the hidden
+ * "Unassigned" pipeline has no real memberships), this falls back to
+ * workspace_memberships for workspaceId instead — the whole team, since
+ * there's no narrower project to scope to.
  *
  * The "Search by name…" box only FILTERS this already-fetched member list
  * by display name (no email matching, per Jordan — this is a name picker,
@@ -32,8 +36,17 @@ import type { TaskAssignee } from "@/components/tasks/types";
 
 type Props = {
   anchor: HTMLElement | null;
-  pipelineId: string;
-  taskId: string;
+  /** Null for a task with no project (the hidden "Unassigned" pipeline) —
+   *  assignable people then come from workspaceId's whole team instead of
+   *  one pipeline's members. */
+  pipelineId: string | null;
+  /** Used only as the fallback source when pipelineId is null. */
+  workspaceId: string;
+  /** Omit while drafting a not-yet-created task (CreateTaskModal) — there's
+   *  no task_assignees row to write to yet, so toggle() only calls
+   *  onChange() and the caller inserts the final selection itself once the
+   *  real task id exists. */
+  taskId?: string | null;
   currentAssignees: TaskAssignee[];
   onChange: (next: TaskAssignee[]) => void;
   onClose: () => void;
@@ -46,31 +59,62 @@ const POPOVER_HEIGHT = 320;
 const GAP = 6;
 const VIEWPORT_PAD = 16;
 
-export function AssigneesPopover({ anchor, pipelineId, taskId, currentAssignees, onChange, onClose }: Props) {
+export function AssigneesPopover({ anchor, pipelineId, workspaceId, taskId, currentAssignees, onChange, onClose }: Props) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
   const [people, setPeople] = useState<Person[] | null>(null);
   const [query, setQuery] = useState("");
   const [pending, setPending] = useState<Set<string>>(new Set());
 
+  // POPOVER_HEIGHT is a rough upper bound (maxHeight on the popover
+  // itself) — actual height is usually much shorter (few people, or a
+  // short search result), so `compute` prefers the real measured height
+  // once the popover has mounted, correcting the flip-up `top` rather
+  // than leaving a big unwanted gap above the trigger.
   useLayoutEffect(() => {
     if (!anchor) return;
     const compute = () => {
       const a = anchor.getBoundingClientRect();
-      const bottomIfBelow = a.bottom + GAP + POPOVER_HEIGHT;
+      const height = ref.current?.getBoundingClientRect().height ?? POPOVER_HEIGHT;
+      const bottomIfBelow = a.bottom + GAP + height;
       const flipUp = bottomIfBelow > window.innerHeight - VIEWPORT_PAD;
-      const top = flipUp ? Math.max(VIEWPORT_PAD, a.top - GAP - POPOVER_HEIGHT) : a.bottom + GAP;
+      const top = flipUp ? Math.max(VIEWPORT_PAD, a.top - GAP - height) : a.bottom + GAP;
       const left = Math.min(a.left, window.innerWidth - POPOVER_WIDTH - VIEWPORT_PAD);
-      setPosition({ top, left: Math.max(VIEWPORT_PAD, left) });
+      setPosition((prev) => {
+        const next = { top, left: Math.max(VIEWPORT_PAD, left) };
+        if (prev && prev.top === next.top && prev.left === next.left) return prev;
+        return next;
+      });
     };
     compute();
+    // Re-measure once mounted (first pass runs before the popover exists,
+    // so it uses the POPOVER_HEIGHT guess) — this sees the real rendered
+    // height and corrects the flip-up position if the guess was off.
+    const raf = requestAnimationFrame(compute);
     window.addEventListener("scroll", compute, true);
     window.addEventListener("resize", compute);
     return () => {
+      cancelAnimationFrame(raf);
       window.removeEventListener("scroll", compute, true);
       window.removeEventListener("resize", compute);
     };
   }, [anchor]);
+
+  // The list's height changes as people load and as the search query
+  // filters it — re-run the same measurement so a flipped-up popover
+  // stays snug against the trigger instead of drifting as content
+  // shrinks/grows.
+  useLayoutEffect(() => {
+    if (!anchor || !ref.current) return;
+    const a = anchor.getBoundingClientRect();
+    const height = ref.current.getBoundingClientRect().height;
+    const bottomIfBelow = a.bottom + GAP + height;
+    const flipUp = bottomIfBelow > window.innerHeight - VIEWPORT_PAD;
+    const top = flipUp ? Math.max(VIEWPORT_PAD, a.top - GAP - height) : a.bottom + GAP;
+    const left = Math.max(VIEWPORT_PAD, Math.min(a.left, window.innerWidth - POPOVER_WIDTH - VIEWPORT_PAD));
+    setPosition((prev) => (prev && prev.top === top && prev.left === left ? prev : { top, left }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [people, query]);
 
   useEffect(() => {
     const onMouseDown = (e: MouseEvent) => {
@@ -91,11 +135,21 @@ export function AssigneesPopover({ anchor, pipelineId, taskId, currentAssignees,
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const { data: memberships, error: membershipErr } = await supabase
-        .from("pipeline_memberships")
-        .select("user_id, role")
-        .eq("pipeline_id", pipelineId)
-        .neq("role", "client");
+      // A task without a project (the hidden per-workspace "Unassigned"
+      // pipeline — see 20260910120000_unassigned_pipeline_for_tasks.sql)
+      // has no pipeline_memberships to speak of, so assignable people
+      // fall back to the whole workspace's team instead of one pipeline's.
+      const membershipRes = pipelineId
+        ? await supabase
+            .from("pipeline_memberships")
+            .select("user_id, role")
+            .eq("pipeline_id", pipelineId)
+            .neq("role", "client")
+        : await supabase
+            .from("workspace_memberships")
+            .select("user_id, role")
+            .eq("workspace_id", workspaceId);
+      const { data: memberships, error: membershipErr } = membershipRes;
       if (cancelled) return;
       if (membershipErr) {
         console.error("[assignees] membership fetch failed:", membershipErr.message);
@@ -129,7 +183,7 @@ export function AssigneesPopover({ anchor, pipelineId, taskId, currentAssignees,
     return () => {
       cancelled = true;
     };
-  }, [pipelineId]);
+  }, [pipelineId, workspaceId]);
 
   const filtered = useMemo(() => {
     if (!people) return [];
@@ -150,16 +204,20 @@ export function AssigneesPopover({ anchor, pipelineId, taskId, currentAssignees,
 
     if (isAssigned) {
       onChange(currentAssignees.filter((a) => a.id !== person.id));
-      const { error } = await supabase
-        .from("task_assignees")
-        .delete()
-        .eq("task_id", taskId)
-        .eq("user_id", person.id);
-      if (error) console.error("[assignees] remove failed:", error.message);
+      if (taskId) {
+        const { error } = await supabase
+          .from("task_assignees")
+          .delete()
+          .eq("task_id", taskId)
+          .eq("user_id", person.id);
+        if (error) console.error("[assignees] remove failed:", error.message);
+      }
     } else {
       onChange([...currentAssignees, { id: person.id, displayName: person.displayName, avatarUrl: person.avatarUrl }]);
-      const { error } = await supabase.from("task_assignees").insert({ task_id: taskId, user_id: person.id });
-      if (error) console.error("[assignees] add failed:", error.message);
+      if (taskId) {
+        const { error } = await supabase.from("task_assignees").insert({ task_id: taskId, user_id: person.id });
+        if (error) console.error("[assignees] add failed:", error.message);
+      }
     }
     setPending((prev) => {
       const next = new Set(prev);

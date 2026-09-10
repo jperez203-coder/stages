@@ -167,6 +167,7 @@ export function AppShell({ children }: Props) {
         .from("pipelines")
         .select("id, name, company, emoji")
         .eq("workspace_id", activeWorkspaceId)
+        .eq("is_system", false)
         .order("last_edited_at", { ascending: false });
       if (cancelled) return;
       if (error) {
@@ -220,29 +221,51 @@ export function AppShell({ children }: Props) {
         <div
           className="h-full grid items-center"
           style={{
-            gridTemplateColumns: "auto 1fr auto",
+            // With the sidebar open, the left/right columns are content-
+            // sized (auto) and the middle column soaks up the rest —
+            // centering the logo/search cluster over the "home screen"
+            // content area (which starts where the sidebar ends), not
+            // true viewport center. With the sidebar closed, the switcher
+            // is gone and the left column shrinks to just the toggle
+            // button, which would leave the middle cluster looking
+            // off-center against the far-heavier right column (settings +
+            // avatar) — so both edge columns become equal 1fr spacers
+            // instead, guaranteeing the middle cluster sits at the true
+            // horizontal center regardless of how wide either side is.
+            gridTemplateColumns: sidebarOpen ? "auto 1fr auto" : "1fr auto 1fr",
             columnGap: "16px",
             paddingLeft: 12,
             paddingRight: 12,
           }}
         >
-        <div className="flex items-center" style={{ gap: "16px" }}>
-          {/* Workspace switcher — agency-only. Hidden for pure clients
-              (no workspaces to switch between, no "Create workspace"
-              affordance they should see). Empty slot during the brief
-              load window (no placeholder flash). See hasAnyAgencyContext
+        <div className="flex items-center" style={{ gap: "16px", justifyContent: "flex-start" }}>
+          {/* Workspace switcher — agency-only, and only VISIBLE while the
+              sidebar it aligns with is open (Jordan: it should disappear
+              together with the sidebar, not linger in the top-left once
+              the sidebar's gone). Hidden via CSS rather than unmounted on
+              sidebarOpen so toggling the sidebar doesn't tear down and
+              re-fetch this component's state every time — most visibly,
+              its cached workspace-logo signed URL (see
+              logoUrlsByWorkspaceId), which would otherwise flash back to
+              the generated "#" tile on every toggle while it re-resolves.
+              Hidden entirely (not just visually) for pure clients — no
+              workspaces to switch between, no "Create workspace"
+              affordance they should see. Empty slot during the brief load
+              window (no placeholder flash). See hasAnyAgencyContext
               derivation above for the 2026-05-26 Tier-A boundary fix. */}
           {session.status === "authenticated" &&
             contexts.status === "ready" &&
             hasAnyAgencyContext && (
-              <HeaderWorkspaceSwitcher
-                contexts={contexts.contexts}
-                activeSlug={activeSlug}
-                userId={session.user.id}
-                triggerWidth={236}
-                triggerHeight={30}
-                compact
-              />
+              <div style={{ display: sidebarOpen ? undefined : "none" }}>
+                <HeaderWorkspaceSwitcher
+                  contexts={contexts.contexts}
+                  activeSlug={activeSlug}
+                  userId={session.user.id}
+                  triggerWidth={236}
+                  triggerHeight={30}
+                  compact
+                />
+              </div>
             )}
 
           {/* "← Back to portal" link — pure-client mode only (A2). Sits
@@ -369,7 +392,7 @@ export function AppShell({ children }: Props) {
           )}
         </div>
 
-        <div className="flex items-center" style={{ gap: "16px", marginRight: 16 }}>
+        <div className="flex items-center" style={{ gap: "16px", marginRight: 16, justifyContent: "flex-end" }}>
           {/* Settings — Figma V2 adds a standalone gear icon in the
               header. Routes to the existing account settings page;
               there's no per-workspace settings landing page today, so

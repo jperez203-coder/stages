@@ -201,7 +201,8 @@ export default async function WorkspaceDashboardPage({
     supabase
       .from("pipelines")
       .select("id, name, emoji, company, last_edited_at, created_at")
-      .eq("workspace_id", ws.id),
+      .eq("workspace_id", ws.id)
+      .eq("is_system", false),
 
     supabase
       .from("stages")
