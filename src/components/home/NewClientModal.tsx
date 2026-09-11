@@ -183,9 +183,9 @@ export function NewClientModal({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
               <TemplateCard
                 title="Blank Workspace"
-                description="Start with one stage and build it your way."
+                description="Start with one project and build it your way."
                 icon={<Sparkles size={20} className="text-zinc-300" />}
-                stages={["Stage 1"]}
+                stages={["Project 1"]}
                 selected={picked === "blank"}
                 onClick={() => setPicked("blank")}
               />

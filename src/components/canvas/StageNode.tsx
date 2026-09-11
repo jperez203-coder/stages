@@ -595,7 +595,7 @@ export function StageNode({
             fontWeight: 500,
           }}
         >
-          Stage {stage.position} · {stage.completed}/{stage.total} task
+          Project {stage.position} · {stage.completed}/{stage.total} task
           {stage.total === 1 ? "" : "s"}
         </div>
 
@@ -606,7 +606,7 @@ export function StageNode({
         {editMode && canEditPipeline && !isRenaming && (
           <button
             type="button"
-            aria-label={`Delete stage ${stage.name}`}
+            aria-label={`Delete project ${stage.name}`}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
@@ -810,7 +810,7 @@ export function StageDragGhost({
             fontWeight: 500,
           }}
         >
-          Stage {stage.position} · {stage.completed}/{stage.total} task
+          Project {stage.position} · {stage.completed}/{stage.total} task
           {stage.total === 1 ? "" : "s"}
         </div>
       </div>

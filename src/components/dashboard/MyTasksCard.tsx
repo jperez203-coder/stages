@@ -197,7 +197,7 @@ export function MyTasksCard({
             color: "rgba(255,255,255,0.6)",
           }}
         >
-          Quick-add lands in step 4 with a stage picker. For now, create
+          Quick-add lands in step 4 with a project picker. For now, create
           tasks from inside a pipeline.
         </div>
       )}

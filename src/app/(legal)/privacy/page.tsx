@@ -145,7 +145,7 @@ export default function PrivacyPolicyPage() {
             </li>
             <li>
               <strong>Workspace content.</strong> Workspace and pipeline names,
-              client company labels, stages, tasks, notes, chat messages, files
+              client company labels, projects, tasks, notes, chat messages, files
               you upload, and external URLs you paste in.
             </li>
             <li>
@@ -363,12 +363,12 @@ export default function PrivacyPolicyPage() {
           <List>
             <li>
               <strong>Workspace deletion</strong> cascades to delete every
-              pipeline, stage, task, note, chat message, file, and audit
+              pipeline, project, task, note, chat message, file, and audit
               record in that workspace.
             </li>
             <li>
               <strong>Pipeline deletion</strong> cascades to delete every
-              stage, task, note, attachment, link, channel, and message in
+              project, task, note, attachment, link, channel, and message in
               that pipeline.
             </li>
             <li>
@@ -423,7 +423,7 @@ export default function PrivacyPolicyPage() {
               the app. For full account deletion, email us. Note: a small
               amount of denormalized data may remain in workspace audit
               logs for integrity purposes (e.g., &ldquo;Sarah completed
-              stage X&rdquo; in activity history).
+              project X&rdquo; in activity history).
             </li>
             <li>
               <strong>Data portability.</strong> Email us to request an

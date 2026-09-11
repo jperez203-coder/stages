@@ -188,7 +188,7 @@ export function ClientPortal({
               <div className="flex items-center justify-between mb-2">
                 <div className="text-[13px] font-semibold">Project progress</div>
                 <div className="text-[13px]" style={{ color: "#979393" }}>
-                  {completedStages} of {totalStages} stages complete
+                  {completedStages} of {totalStages} projects complete
                 </div>
               </div>
               <div
@@ -288,7 +288,7 @@ export function ClientPortal({
                   color: "#979393",
                 }}
               >
-                The agency hasn&apos;t shared any stages yet. Check back soon — they&apos;ll appear
+                The agency hasn&apos;t shared any projects yet. Check back soon — they&apos;ll appear
                 here as the project moves forward.
               </div>
             ) : (

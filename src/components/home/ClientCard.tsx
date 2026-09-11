@@ -108,7 +108,7 @@ export function ClientCard({
 
       <div className="mb-1">
         <div className="text-[12px] mb-1.5" style={{ color: "#979393" }}>
-          Current stage
+          Current project
         </div>
         <div className="flex items-center gap-2">
           <span

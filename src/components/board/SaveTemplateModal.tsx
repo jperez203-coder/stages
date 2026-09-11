@@ -109,14 +109,14 @@ export function SaveTemplateModal({ client, onSave, onClose }: Props) {
             <SaveTemplateOption
               selected={!includeTasks}
               onSelect={() => setIncludeTasks(false)}
-              title="Stage names only"
-              subtitle={`${client.stages.length} stages · clean structure to fill in later`}
+              title="Project names only"
+              subtitle={`${client.stages.length} projects · clean structure to fill in later`}
             />
             <SaveTemplateOption
               selected={includeTasks}
               onSelect={() => setIncludeTasks(true)}
-              title="Stages + tasks"
-              subtitle={`${client.stages.length} stages · ${totalTasks} tasks · full reusable workflow`}
+              title="Projects + tasks"
+              subtitle={`${client.stages.length} projects · ${totalTasks} tasks · full reusable workflow`}
             />
           </div>
         </div>

@@ -321,7 +321,7 @@ export function Canvas({
                         }}
                         className="icon-btn"
                         style={{ width: 28, height: 28, color: "#F87171" }}
-                        title="Delete stage"
+                        title="Delete project"
                       >
                         <Trash2 size={12} />
                       </button>
@@ -370,7 +370,7 @@ export function Canvas({
                 )}
                 <div className="text-[12px] text-zinc-500 mt-1 flex items-center gap-2 flex-wrap">
                   <span>
-                    Stage {i + 1} · {stage.tasks.filter((t) => t.done).length}/{stage.tasks.length}{" "}
+                    Project {i + 1} · {stage.tasks.filter((t) => t.done).length}/{stage.tasks.length}{" "}
                     tasks
                   </span>
                   {stage.deadline && !stage.completed && (() => {
@@ -504,7 +504,7 @@ export function Canvas({
         >
           <Pencil size={14} style={{ color: "#3BA5EE" }} />
           <span className="text-zinc-300">
-            Edit mode · click a stage name to rename, use arrows to reorder
+            Edit mode · click a project name to rename, use arrows to reorder
           </span>
         </div>
       )}

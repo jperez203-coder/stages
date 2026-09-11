@@ -683,7 +683,7 @@ export function useAppState() {
         ...c.stages,
         {
           id: `s_${Date.now()}`,
-          name: `Stage ${c.stages.length + 1}`,
+          name: `Project ${c.stages.length + 1}`,
           description: "",
           deadline: null,
           color: pickColor(c.stages.length),

@@ -556,7 +556,7 @@ export function TaskDetailPanel({
           </PanelSection>
 
           {/* Stage notes (read-only display) */}
-          <PanelSection label="Stage">
+          <PanelSection label="Project">
             <StageContextRow
               stageName={stage.name}
               stagePosition={stage.position}
@@ -690,7 +690,7 @@ export function TaskDetailPanel({
                   }}
                 >
                   <Plus size={13} />
-                  Add another task to this stage
+                  Add another task to this project
                 </button>
               )}
             </PanelSection>
@@ -1355,7 +1355,7 @@ function StageContextRow({
           marginBottom: 2,
         }}
       >
-        Stage {stagePosition}
+        Project {stagePosition}
       </div>
       <div style={{ color: "white", fontWeight: 500 }}>{stageName}</div>
       <div
@@ -1366,7 +1366,7 @@ function StageContextRow({
           fontStyle: "italic",
         }}
       >
-        Stage notes are edited in pipeline edit mode.
+        Project notes are edited in pipeline edit mode.
       </div>
     </div>
   );

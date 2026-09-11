@@ -136,7 +136,7 @@ export default function TermsOfServicePage() {
             Stages is a workspace product for client services businesses:
             agencies, consultants, freelancers, and similar teams. Stages
             provides tools to organize client work, including pipelines,
-            stages, tasks, notes, chat, and files. We also provide a
+            projects, tasks, notes, chat, and files. We also provide a
             client-portal surface that lets your customers see and interact
             with the parts of a project you choose to share.
           </P>
@@ -257,7 +257,7 @@ export default function TermsOfServicePage() {
         <Section id="content" title="7. Your content">
           <P>
             <strong>You own your content.</strong> All workspace data you
-            create or upload (pipelines, stages, tasks, notes, messages,
+            create or upload (pipelines, projects, tasks, notes, messages,
             files, and similar) remains your property. Stages does not
             claim ownership of your content.
           </P>

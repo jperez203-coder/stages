@@ -1323,14 +1323,14 @@ export function PipelineCanvas({
                 fontStyle: "italic",
               }}
             >
-              no stages yet
+              no projects yet
             </div>
           )}
 
           {/* 5e: when empty + edit mode, the placeholder becomes an
               actionable "+ Add first stage" affordance — clicking opens
               the inline title input. Replaces (not augments) the
-              "no stages yet" italic pill so the surface doesn't double up. */}
+              "no projects yet" italic pill so the surface doesn't double up. */}
           {stageVMs.length === 0 && editMode && canEditPipeline && (
             <AddStageEndButton
               x={PLANE_CX - 16}

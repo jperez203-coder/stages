@@ -168,16 +168,16 @@ export function PipelineCard({
             letterSpacing: 0.5,
           }}
         >
-          Current stage
+          Current project
         </div>
         <div className="flex items-center gap-2">
           {/* Stage-color dot removed — it was tying the dashboard to
               stages.color (a per-stage rotation palette) which mixed
               urgency and identity in a confusing way next to the
-              %-based progress bar below. The "Current stage" label +
+              %-based progress bar below. The "Current project" label +
               stage name carry the meaning on their own. */}
           <span className="text-[14px] font-medium text-white truncate">
-            {pipeline.currentStage?.name ?? "No stages yet"}
+            {pipeline.currentStage?.name ?? "No projects yet"}
           </span>
         </div>
       </div>

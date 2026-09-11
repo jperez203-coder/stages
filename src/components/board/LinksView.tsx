@@ -241,7 +241,7 @@ export function LinksView({
           </div>
           <div className="text-[14px] font-semibold mb-1">No files or links yet</div>
           <div className="text-[13px] text-zinc-500">
-            Drag in an image above, paste a URL, or upload from inside a stage.
+            Drag in an image above, paste a URL, or upload from inside a project.
           </div>
         </div>
       ) : (
@@ -370,7 +370,7 @@ export function LinksView({
                       fontWeight: 500,
                       whiteSpace: "nowrap",
                     }}
-                    title="Toggle visibility on the stage page"
+                    title="Toggle visibility on the project page"
                   >
                     {item.clientVisible ? <ExternalLink size={10} /> : <Lock size={10} />}
                     <span>{item.clientVisible ? "Client" : "Internal"}</span>

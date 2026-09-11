@@ -96,7 +96,7 @@ const PLAN_DEFS: Array<{
       "Unlimited client seats",
       "Unlimited channels",
       "Pre-built pipeline snapshots",
-      "File uploads & stage notes",
+      "File uploads & project notes",
       "Deadlines and status tracking",
     ],
   },

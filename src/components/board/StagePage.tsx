@@ -382,7 +382,7 @@ export function StagePage({
                           cancelDescription();
                         }
                       }}
-                      placeholder="Add a brief description for this stage…"
+                      placeholder="Add a brief description for this project…"
                       className="w-full leading-relaxed resize-none"
                       style={{
                         background: "#1A1A1C",
@@ -695,7 +695,7 @@ export function StagePage({
                     color: "#979393",
                   }}
                 >
-                  No files attached to this stage yet.
+                  No files attached to this project yet.
                 </div>
               )
             ) : (
@@ -828,7 +828,7 @@ export function StagePage({
             <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
               <div className="flex items-center gap-2">
                 <FileEdit size={18} className="text-zinc-400" />
-                <h3 className="text-[16px] font-semibold">Stage notes</h3>
+                <h3 className="text-[16px] font-semibold">Project notes</h3>
                 {sortedNotes.length > 0 && (
                   <span
                     className="text-[11px] px-2 py-0.5 rounded-full"
@@ -852,7 +852,7 @@ export function StagePage({
                       submitNote();
                     }
                   }}
-                  placeholder="Add a note about this stage… (Enter to post · Shift+Enter for new line)"
+                  placeholder="Add a note about this project… (Enter to post · Shift+Enter for new line)"
                   className="field min-h-[80px] resize-y leading-relaxed"
                 />
                 <div className="flex items-center justify-between mt-2">
@@ -1060,13 +1060,13 @@ export function StagePage({
                   {stage.tasks.length === 0
                     ? `Add tasks to ${stage.name} to get started`
                     : completedTasks === stage.tasks.length
-                      ? `${stage.name} is complete — advancing to the next stage…`
+                      ? `${stage.name} is complete — advancing to the next project…`
                       : `${stage.tasks.length - completedTasks} task${
                           stage.tasks.length - completedTasks === 1 ? "" : "s"
                         } remaining`}
                 </div>
                 <div className="text-[13px] text-zinc-500">
-                  Stages advance automatically when all their tasks are checked off.
+                  Projects advance automatically when all their tasks are checked off.
                 </div>
               </div>
             </div>

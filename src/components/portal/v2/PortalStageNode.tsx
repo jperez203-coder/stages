@@ -215,7 +215,7 @@ export function PortalStageNode({
             fontWeight: 500,
           }}
         >
-          Stage {stage.displayPosition} · {stage.completed}/{stage.total} task
+          Project {stage.displayPosition} · {stage.completed}/{stage.total} task
           {stage.total === 1 ? "" : "s"}
         </div>
       </div>

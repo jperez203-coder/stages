@@ -28,7 +28,7 @@ export function StageIndicatorPill({ current, total, onRecenter }: Props) {
     <button
       type="button"
       onClick={onRecenter}
-      aria-label={`Recenter on stage ${current} of ${total}`}
+      aria-label={`Recenter on project ${current} of ${total}`}
       style={{
         position: "absolute",
         top: 20,
@@ -55,7 +55,7 @@ export function StageIndicatorPill({ current, total, onRecenter }: Props) {
         e.currentTarget.style.color = "rgba(255,255,255,0.7)";
       }}
     >
-      showing stage {current} of {total}
+      showing project {current} of {total}
     </button>
   );
 }

@@ -308,7 +308,7 @@ export function SaveAsTemplateModal({
             color: "rgba(255,255,255,0.45)",
           }}
         >
-          Saves the current pipeline&apos;s stages + tasks as a reusable
+          Saves the current pipeline&apos;s projects + tasks as a reusable
           template for this workspace. Won&apos;t include completion state,
           assignees, deadlines, or task positions.
         </p>

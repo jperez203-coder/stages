@@ -41,7 +41,7 @@ export function PortalCanvasEmptyState() {
           margin: 0,
         }}
       >
-        No visible stages yet
+        No visible projects yet
       </h2>
       <p
         style={{

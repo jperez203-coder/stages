@@ -218,7 +218,7 @@ export function DeletePipelineModal({
             <strong style={{ color: "white" }}>
               &ldquo;{pipelineName}&rdquo;
             </strong>{" "}
-            permanently removes its stages, tasks, channels, chat messages,
+            permanently removes its projects, tasks, channels, chat messages,
             files, and the client&apos;s portal access.{" "}
             <span style={{ color: "#F43F5E", fontWeight: 600 }}>
               This can&apos;t be undone.

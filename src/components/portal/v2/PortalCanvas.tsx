@@ -569,7 +569,7 @@ function StageCountPill({
         backdropFilter: "blur(8px)",
       }}
     >
-      Stage {anchorIndex + 1} of {total}
+      Project {anchorIndex + 1} of {total}
     </div>
   );
 }

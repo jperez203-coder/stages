@@ -208,7 +208,7 @@ export function TaskRow({
             />
           )}
           <span className="truncate">
-            {task.stage.pipelineName} · Stage {task.stage.position} ·{" "}
+            {task.stage.pipelineName} · Project {task.stage.position} ·{" "}
             {task.stage.name}
           </span>
         </div>

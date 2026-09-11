@@ -73,7 +73,7 @@ export function AddStageEndButton({
       <button
         type="button"
         className="pan-disabled"
-        aria-label="Add stage at end"
+        aria-label="Add project at end"
         onClick={() => {
           setExpanded(true);
           // Input not mounted yet — focus next tick.
@@ -142,7 +142,7 @@ export function AddStageEndButton({
           }
         }}
         onBlur={submit}
-        placeholder="Stage name…"
+        placeholder="Project name…"
         maxLength={80}
         style={{
           width: 160,
@@ -240,7 +240,7 @@ export function InsertStageHandle({
             }
           }}
           onBlur={submit}
-          placeholder="Stage name…"
+          placeholder="Project name…"
           maxLength={80}
           style={{
             width: "100%",
@@ -277,7 +277,7 @@ export function InsertStageHandle({
     >
       <button
         type="button"
-        aria-label="Insert stage here"
+        aria-label="Insert project here"
         onClick={() => {
           setExpanded(true);
           setTimeout(() => inputRef.current?.focus(), 0);
@@ -367,7 +367,7 @@ export function DeleteStageConfirmDialog({
               margin: 0,
             }}
           >
-            Delete stage?
+            Delete project?
           </h2>
           <button
             type="button"

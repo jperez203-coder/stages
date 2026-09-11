@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { ArrowLeft, PanelLeft, Settings } from "lucide-react";
 import { StagesLogo } from "@/components/icons/StagesLogo";
 import { QuickCreateIcon } from "@/components/icons/QuickCreateIcon";
@@ -16,6 +16,7 @@ import {
   type HeaderSearchStatus,
 } from "@/components/app/HeaderSearch";
 import { Sidebar } from "@/components/app/Sidebar";
+import { CreatePortalModal } from "@/components/pipeline-create/CreatePortalModal";
 import { supabase } from "@/lib/supabase";
 
 type Props = {
@@ -40,7 +41,6 @@ type Props = {
 export function AppShell({ children }: Props) {
   const session = useSession();
   const contexts = useUserContexts();
-  const router = useRouter();
   // Active workspace slug. When mounted inside /w/[slug]/*, it comes
   // straight from the route params. When mounted on workspace-agnostic
   // routes like /settings/*, there's no [slug] param — fall back to the
@@ -149,6 +149,11 @@ export function AppShell({ children }: Props) {
   // Local UI state only, not persisted; matches the icon's apparent role
   // as a quick show/hide rather than a saved preference.
   const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  // "+ New project" header button opens the Create Portal modal in place
+  // of the old dedicated /p/new route — see CreatePortalModal's doc
+  // comment for why this moved to a modal.
+  const [createPortalOpen, setCreatePortalOpen] = useState(false);
 
   useEffect(() => {
     if (!activeWorkspaceId) {
@@ -374,7 +379,7 @@ export function AppShell({ children }: Props) {
           {activeSlug && canCreatePipeline && hasAnyAgencyContext && (
             <button
               type="button"
-              onClick={() => router.push(`/w/${activeSlug}/p/new`)}
+              onClick={() => setCreatePortalOpen(true)}
               aria-label="New project"
               className="flex items-center justify-center flex-shrink-0 transition-colors"
               style={{
@@ -457,6 +462,15 @@ export function AppShell({ children }: Props) {
           <div className="flex-1 flex flex-col min-h-0 overflow-y-auto">{children}</div>
         </div>
       </div>
+
+      {createPortalOpen && activeSlug && activeWorkspaceId && session.status === "authenticated" && (
+        <CreatePortalModal
+          workspaceId={activeWorkspaceId}
+          slug={activeSlug}
+          userId={session.user.id}
+          onClose={() => setCreatePortalOpen(false)}
+        />
+      )}
     </div>
   );
 }

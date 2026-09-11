@@ -77,7 +77,7 @@ export function TemplateCard({ template, isSelected, onSelect }: Props) {
 
   const summaryLine =
     template.description?.trim() ||
-    `${stageCount} ${stageCount === 1 ? "stage" : "stages"} · ${taskCount} ${taskCount === 1 ? "task" : "tasks"}`;
+    `${stageCount} ${stageCount === 1 ? "project" : "projects"} · ${taskCount} ${taskCount === 1 ? "task" : "tasks"}`;
 
   const visiblePills = sortedStages.slice(0, MAX_VISIBLE_PILLS);
   const overflow = Math.max(0, stageCount - visiblePills.length);

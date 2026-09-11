@@ -32,7 +32,7 @@ export function buildStages(
     return [
       {
         id: `s_${Date.now()}_0`,
-        name: "Stage 1",
+        name: "Project 1",
         description: "",
         deadline: null,
         color: pickColor(0),
