@@ -51,7 +51,7 @@ Dotted-grid backdrop (locked 2026-05-25): single shared utility class `.dotted-g
 
 Typography: Plus Jakarta Sans throughout. Body 13–15px, headers 15–32px, mono used only inside `.field` value previews. Antialiasing on.
 
-Sidebar + Docs typography (2026-09-25, verified against app.notion.com + Notion screenshots). Sidebar: `font-system` (Notion's system UI stack — Notion's app does NOT use Inter; only notion.com marketing does), app-wide `antialiased` smoothing. Row labels 13px/500 `#C1C1C1`, active 600 `#FFFFFF` (was 600/700 until 2026-09-26) — Jordan's by-eye choice; Notion's literal 14px/500 + smoothing auto was tried 2026-09-25 and rejected; section labels 12px/600 `#8A8A8A`; 28px row fills on a 30px pitch. Workspace-switcher name: system 14px/700 `#E4E4E7`. Docs pages: `font-inter`, title 30px/700 (matches ClickUp), DocEditor `scale="page"` (body 16/24, H1 30/600, H2 24/600); task panel body keeps `scale="compact"`.
+Sidebar + Docs typography (2026-09-25, verified against app.notion.com + Notion screenshots). Sidebar: `font-system` (Notion's system UI stack — Notion's app does NOT use Inter; only notion.com marketing does), app-wide `antialiased` smoothing. Row labels 14px/500 `#C1C1C1`, active 600 `#FFFFFF` (13px 600/700 earlier on 2026-09-26) — Jordan's by-eye choice; Notion's literal 14px/500 + smoothing auto was tried 2026-09-25 and rejected; section labels 12px/600 `#8A8A8A`; 28px row fills on a 30px pitch. Workspace-switcher name: system 14px/700 `#E4E4E7`. Docs pages: `font-inter`, title 30px/700 (matches ClickUp), DocEditor `scale="page"` (body 16/24, H1 30/600, H2 24/600); task panel body keeps `scale="compact"`.
 
 ## Data model (mirrors prototype)
 

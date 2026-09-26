@@ -402,7 +402,7 @@ export function Sidebar({ workspaceSlug, workspaceId, userId, pipelines }: Props
     const docHref = workspaceSlug ? `/w/${workspaceSlug}/d/${doc.id}` : "#";
     const isDocActive = pathname === docHref;
     return (
-      <Link key={doc.id} href={docHref} className={ROW_CLASS} style={rowStyle(isDocActive)}>
+      <Link key={doc.id} href={docHref} className={ROW_CLASS} style={rowStyle(isDocActive, true)}>
         <IconBox>
           {doc.type === "doc" ? <DocIcon size={16} /> : <SheetIcon size={16} />}
         </IconBox>
@@ -668,7 +668,7 @@ export function Sidebar({ workspaceSlug, workspaceId, userId, pipelines }: Props
                       key={doc.id}
                       data-row-menu
                       className={`group relative ${ROW_CLASS}`}
-                      style={rowStyle(isDocActive)}
+                      style={rowStyle(isDocActive, true)}
                     >
                       {renamingDocId === doc.id ? (
                         <div className="flex-1 flex items-center gap-2 min-w-0 h-full">
@@ -771,11 +771,12 @@ const ROW_CLASS =
   "w-full flex items-center gap-2 rounded-md transition-colors hover:bg-[#333333]";
 
 // 28px fill + 1px margin top/bottom: rows keep a 30px pitch, but adjacent
-// hover/active fills always have a 2px gap instead of touching.
-function rowStyle(active: boolean): React.CSSProperties {
+// hover/active fills always have a 2px gap instead of touching. Doc/sheet
+// rows pass `spacious` for 2px margins (32px pitch) so file lists breathe.
+function rowStyle(active: boolean, spacious = false): React.CSSProperties {
   return {
     height: 28,
-    marginBlock: 1,
+    marginBlock: spacious ? 2 : 1,
     padding: "0 8px",
     flexShrink: 0,
     ...(active ? { background: SB.active } : null),
@@ -807,7 +808,7 @@ function IconBox({
   );
 }
 
-/** Every sidebar row label: system UI font 13px / 500, active 600
+/** Every sidebar row label: system UI font 14px / 500, active 600
  *  (switched from 600/700 on 2026-09-26). Section labels are separate
  *  (SectionHeader, 12px / 600) and unchanged.
  *  Tuned by eye by Jordan (2026-09-25). Notion's literal values (14px /
@@ -815,7 +816,7 @@ function IconBox({
 function RowLabel({ children, active }: { children: React.ReactNode; active?: boolean }) {
   return (
     <span
-      className="text-[13px] truncate"
+      className="text-[14px] truncate"
       style={{
         fontWeight: active ? 600 : 500,
         color: active ? SB.textActive : SB.text,
@@ -862,7 +863,7 @@ function RenameInput({
         if (e.key === "Escape") onCancel();
       }}
       aria-label={label}
-      className="flex-1 min-w-0 text-[13px] font-medium outline-none"
+      className="flex-1 min-w-0 text-[14px] font-medium outline-none"
       style={{
         height: 24,
         padding: "0 6px",
@@ -977,9 +978,9 @@ function RowMenuItem({
     <button
       type="button"
       onClick={onClick}
-      // Same type as the sidebar's row labels (13px / 500, system font via
+      // Same type as the sidebar's row labels (14px / 500, system font via
       // RowMenu's font-system).
-      className="w-full flex items-center gap-2 rounded text-left text-[13px] font-medium transition-colors hover:bg-[#333333]"
+      className="w-full flex items-center gap-2 rounded text-left text-[14px] font-medium transition-colors hover:bg-[#333333]"
       style={{ height: 28, padding: "0 8px", border: "none", cursor: "pointer", color }}
     >
       {children}
