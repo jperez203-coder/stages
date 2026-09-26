@@ -7,7 +7,8 @@ import {
   useRef,
   useState,
 } from "react";
-import { Bold, Heading1, Heading2, Italic, List, Pilcrow, Plus, Square, X } from "lucide-react";
+import { ExternalLink, Heading1, Heading2, Link2Off, Pencil, Pilcrow, Plus, Square, X } from "lucide-react";
+import { ToolbarBoldIcon, ToolbarBulletListIcon, ToolbarItalicIcon, ToolbarLinkIcon, ToolbarUnderlineIcon } from "@/components/icons/DocToolbarIcons";
 
 /**
  * Minimal block doc editor. Blocks are { id, type, text } where `text` is
@@ -48,11 +49,19 @@ function makeId(): string {
   return Math.random().toString(36).slice(2);
 }
 
-const BLOCK_TYPES: { type: DocBlock["type"]; icon: typeof Pilcrow; label: string }[] = [
-  { type: "p", icon: Pilcrow, label: "Text" },
-  { type: "h1", icon: Heading1, label: "Heading 1" },
-  { type: "h2", icon: Heading2, label: "Heading 2" },
-  { type: "bullet", icon: List, label: "Bullet" },
+// iconSize: each glyph fills a different share of its box, so sizes are
+// set per icon to render every toolbar icon ~13px tall (the B's height) —
+// measured from a screenshot, 2026-09-26.
+const BLOCK_TYPES: {
+  type: DocBlock["type"];
+  icon: React.ComponentType<{ size?: number; strokeWidth?: number }>;
+  iconSize: number;
+  label: string;
+}[] = [
+  { type: "p", icon: Pilcrow, iconSize: 16, label: "Text" },
+  { type: "h1", icon: Heading1, iconSize: 22, label: "Heading 1" },
+  { type: "h2", icon: Heading2, iconSize: 22, label: "Heading 2" },
+  { type: "bullet", icon: ToolbarBulletListIcon, iconSize: 22, label: "Bullet" },
 ];
 
 // Own palette rather than reusing STAGE_COLORS from lib/constants — that
@@ -113,6 +122,25 @@ function getCaretTextOffset(el: HTMLElement): number {
   preRange.selectNodeContents(el);
   preRange.setEnd(range.startContainer, range.startOffset);
   return preRange.toString().length;
+}
+
+/** Only these link schemes are ever saved or opened — blocks
+ *  `javascript:` / `data:` style links that could run code. */
+const SAFE_LINK = /^(https?:|mailto:|tel:)/i;
+
+export function isSafeLinkHref(href: string | null | undefined): boolean {
+  return !!href && SAFE_LINK.test(href.trim());
+}
+
+/** "stages.app" → "https://stages.app", "a@b.com" → "mailto:a@b.com".
+ *  Returns null for empty or disallowed input. */
+export function normalizeLinkInput(raw: string): string | null {
+  const v = raw.trim();
+  if (!v) return null;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(v)) return SAFE_LINK.test(v) ? v : null;
+  if (/^[^\s@/]+@[^\s@]+\.[^\s@]+$/.test(v)) return `mailto:${v}`;
+  if (/\s/.test(v)) return null;
+  return `https://${v.replace(/^\/+/, "")}`;
 }
 
 function escapeHtml(text: string): string {
@@ -183,6 +211,61 @@ export function repairMergedBlocks(blocks: DocBlock[]): DocBlock[] {
   return result;
 }
 
+/** Screen rect of the collapsed caret, or null when the browser can't
+ *  measure it (e.g. an empty line) — callers fall back to the block rect. */
+function caretRect(): DOMRect | null {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return null;
+  const r = sel.getRangeAt(0).cloneRange();
+  r.collapse(true);
+  const rects = r.getClientRects();
+  const rect = rects.length ? rects[rects.length - 1] : r.getBoundingClientRect();
+  return rect && (rect.width || rect.height) ? rect : null;
+}
+
+/** Is the caret on the first (up) / last (down) visual line of `el`? */
+function isCaretOnEdgeLine(el: HTMLElement, dir: "up" | "down"): boolean {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return false;
+  const rect = caretRect();
+  if (!rect) return true; // empty/unmeasurable line = the only line
+  const box = el.getBoundingClientRect();
+  const line = parseFloat(getComputedStyle(el).lineHeight) || rect.height || 20;
+  return dir === "up" ? rect.top - box.top < line * 0.75 : box.bottom - rect.bottom < line * 0.75;
+}
+
+/** Put the caret in `el` at horizontal position `x`, on its first line
+ *  (arriving from above) or last line (arriving from below). */
+function placeCaretAtX(el: HTMLElement, x: number, from: "above" | "below") {
+  el.focus({ preventScroll: true });
+  const box = el.getBoundingClientRect();
+  const line = parseFloat(getComputedStyle(el).lineHeight) || 20;
+  const y = from === "above" ? box.top + Math.min(line / 2, box.height / 2) : box.bottom - Math.min(line / 2, box.height / 2);
+  const cx = Math.min(Math.max(x, box.left + 1), box.right - 1);
+  const doc = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+  };
+  let range: Range | null = null;
+  if (typeof document.caretRangeFromPoint === "function") {
+    range = document.caretRangeFromPoint(cx, y);
+  } else if (doc.caretPositionFromPoint) {
+    const pos = doc.caretPositionFromPoint(cx, y);
+    if (pos) {
+      range = document.createRange();
+      range.setStart(pos.offsetNode, pos.offset);
+    }
+  }
+  const sel = window.getSelection();
+  if (range && el.contains(range.startContainer)) {
+    range.collapse(true);
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  } else {
+    setCaretAtTextOffset(el, from === "above" ? 0 : plainTextLength(el.innerHTML));
+  }
+  el.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
 function isCaretAtStart(el: HTMLElement): boolean {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0) return false;
@@ -233,7 +316,9 @@ function setCaretAtTextOffset(el: HTMLElement, offset: number) {
 type BlockRowHandle = {
   focusAtStart: () => void;
   focusAtEnd: () => void;
-  applyFormat: (command: "bold" | "italic") => void;
+  applyFormat: (command: "bold" | "italic" | "underline") => void;
+  /** Link (or, with href=null, unlink) the text in `range`. */
+  applyLink: (range: Range, href: string | null) => void;
   getElement: () => HTMLDivElement | null;
 };
 
@@ -253,6 +338,12 @@ const BlockRow = forwardRef<
     /** Per-line "+" gutter button (hover-only) — opens the insert menu
      *  anchored to whichever line it was clicked on. */
     onRequestPlus: (blockId: string, anchor: HTMLElement) => void;
+    /** A link inside this block was clicked (caret placed, no selection). */
+    onLinkClick: (a: HTMLAnchorElement) => void;
+    /** Up/Down pressed on this block's first/last visual line — move to
+     *  the neighbouring block at horizontal position `x`. Returns false
+     *  when there's no block in that direction. */
+    onVerticalArrow: (dir: "up" | "down", x: number) => boolean;
     /** Extra top margin, in px — used ONLY for the block right after a
      *  banner (see DocEditor's render). Zero everywhere else so normal
      *  block spacing is untouched. */
@@ -271,6 +362,8 @@ const BlockRow = forwardRef<
     onColorChange,
     onRemoveBanner,
     onRequestPlus,
+    onLinkClick,
+    onVerticalArrow,
     spacingBefore,
     scale,
   },
@@ -320,6 +413,39 @@ const BlockRow = forwardRef<
       lastSynced.current = html;
       onFormatChange(html);
     },
+    applyLink(range, href) {
+      const el = divRef.current;
+      if (!el) return;
+      el.focus({ preventScroll: true });
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+      if (href) {
+        document.execCommand("createLink", false, href);
+        el.querySelectorAll("a").forEach((a) => {
+          a.setAttribute("target", "_blank");
+          a.setAttribute("rel", "noopener noreferrer");
+        });
+      } else {
+        // Unlink the whole link the selection sits in, not just the
+        // selected characters.
+        const a = (range.startContainer instanceof Element
+          ? range.startContainer
+          : range.startContainer.parentElement
+        )?.closest("a");
+        if (a && el.contains(a)) {
+          const r = document.createRange();
+          r.selectNodeContents(a);
+          sel?.removeAllRanges();
+          sel?.addRange(r);
+        }
+        document.execCommand("unlink");
+      }
+      sel?.collapseToEnd();
+      const html = el.innerHTML;
+      lastSynced.current = html;
+      onFormatChange(html);
+    },
     getElement() {
       return divRef.current;
     },
@@ -337,6 +463,7 @@ const BlockRow = forwardRef<
   const plusGutter = (
     <button
       type="button"
+      contentEditable={false}
       onClick={(e) => onRequestPlus(block.id, e.currentTarget)}
       aria-label="Add content"
       className="flex items-center justify-center rounded transition-colors opacity-0 group-hover:opacity-100"
@@ -353,7 +480,7 @@ const BlockRow = forwardRef<
     return (
       <div className="group" style={{ position: "relative", marginTop: spacingBefore }}>
         {plusGutter}
-        <div>
+        <div contentEditable={false}>
           <div
             className="group/banner"
             style={{ position: "relative", borderRadius: 8, padding: "10px 20px", background: color }}
@@ -447,14 +574,26 @@ const BlockRow = forwardRef<
       {plusGutter}
       <div className="flex items-start gap-1.5" style={scale === "page" ? { paddingBlock: 2 } : undefined}>
         {block.type === "bullet" && (
-          <span style={{ color: "#71717A", fontSize: blockStyle("bullet", scale).fontSize, lineHeight: blockStyle("bullet", scale).lineHeight, flexShrink: 0 }}>•</span>
+          <span contentEditable={false} style={{ color: "#71717A", fontSize: blockStyle("bullet", scale).fontSize, lineHeight: blockStyle("bullet", scale).lineHeight, flexShrink: 0 }}>•</span>
         )}
         <div
           ref={divRef}
+          data-doc-block={block.id}
           contentEditable
           suppressContentEditableWarning
-          spellCheck={false}
+          // Browser spellcheck (red squiggles under misspelled words).
+          spellCheck
           data-placeholder={block.type === "p" ? placeholder : ""}
+          onClick={(e) => {
+            // Google Docs-style: clicking linked text keeps the caret there
+            // and shows a small card (Open / Edit / Remove) — see DocEditor.
+            const a = (e.target as Element).closest("a");
+            if (!a) return;
+            e.preventDefault(); // never navigate from inside the editor
+            const sel = window.getSelection();
+            if (sel && !sel.isCollapsed) return;
+            onLinkClick(a as HTMLAnchorElement);
+          }}
           onMouseUp={() => {
             // Empty contentEditable divs have no real text to click
             // against, so browsers place the visible caret at the click's
@@ -516,6 +655,18 @@ const BlockRow = forwardRef<
             } else if (e.key === "Backspace" && isCaretAtStart(e.currentTarget)) {
               e.preventDefault();
               onBackspaceAtStart();
+            } else if (
+              (e.key === "ArrowUp" || e.key === "ArrowDown") &&
+              !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey
+            ) {
+              // Each block is its own editing box, so the browser's own
+              // Up/Down stops at the box edge (jumping to line start/end).
+              // On the first/last visual line, hop to the next block instead.
+              const dir = e.key === "ArrowUp" ? "up" : "down";
+              const el = e.currentTarget;
+              if (!isCaretOnEdgeLine(el, dir)) return;
+              const x = caretRect()?.left ?? el.getBoundingClientRect().left;
+              if (onVerticalArrow(dir, x)) e.preventDefault();
             }
           }}
           onPaste={(e) => {
@@ -556,6 +707,22 @@ export type PlusMenuItem = {
   icon: React.ComponentType<{ size?: number; color?: string }>;
   onSelect: () => void;
 };
+
+/* Selection toolbar + its link popovers — styled after ClickUp's doc
+   toolbar (measured from screenshots, 2026-09-26): #191919, #35353A outline,
+   soft shadow, 30px buttons, ~19px soft-grey icons, dark dividers. */
+const TB = {
+  bg: "#191919",
+  icon: "#B3B3B3",
+  iconActive: "#FFFFFF",
+  hover: "#2A2A2A",
+  active: "#2A2A2A",
+  divider: "#333333",
+  border: "1px solid #35353A",
+  shadow: "0 6px 20px rgba(0,0,0,0.5)",
+};
+const TB_BUTTON =
+  "flex items-center justify-center rounded-md transition-colors text-[#B3B3B3] hover:bg-[#2A2A2A] hover:text-white";
 
 export function DocEditor({
   content,
@@ -761,6 +928,22 @@ export function DocEditor({
     }, 0);
   };
 
+  // Up/Down across blocks: find the nearest block with a text area in that
+  // direction (banners have none — they're skipped) and land at the same x.
+  const moveVertically = (fromId: string, dir: "up" | "down", x: number): boolean => {
+    const index = blocks.findIndex((b) => b.id === fromId);
+    if (index === -1) return false;
+    const step = dir === "up" ? -1 : 1;
+    for (let i = index + step; i >= 0 && i < blocks.length; i += step) {
+      const el = refs.current.get(blocks[i].id)?.getElement();
+      if (el) {
+        placeCaretAtX(el, x, dir === "up" ? "below" : "above");
+        return true;
+      }
+    }
+    return false;
+  };
+
   const removeBlock = (id: string) => {
     commitStructural(blocks);
     if (blocks.length === 1) {
@@ -809,6 +992,133 @@ export function DocEditor({
 
   // ── Floating format toolbar on text selection ──────────────────────────
   const [toolbar, setToolbar] = useState<{ top: number; left: number; blockId: string } | null>(null);
+  // Link box opened from the toolbar's link button. Holds the text range to
+  // link (focus moves into the URL input, so the live selection is gone).
+  const [linkEditor, setLinkEditor] = useState<{
+    top: number;
+    left: number;
+    blockId: string;
+    range: Range;
+    existingHref: string | null;
+  } | null>(null);
+  // Card shown after clicking a link: address + Open / Edit / Remove.
+  const [linkPreview, setLinkPreview] = useState<{
+    top: number;
+    left: number;
+    blockId: string;
+    href: string;
+    anchor: HTMLAnchorElement;
+  } | null>(null);
+  const linkPreviewRef = useRef<HTMLDivElement | null>(null);
+  const [linkDraft, setLinkDraft] = useState("");
+  const [linkError, setLinkError] = useState(false);
+  const linkEditorRef = useRef<HTMLDivElement | null>(null);
+
+  const openLinkEditor = () => {
+    const sel = window.getSelection();
+    if (!toolbar || !sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0).cloneRange();
+    const node = range.startContainer;
+    const a = (node instanceof Element ? node : node.parentElement)?.closest("a");
+    const existingHref = a?.getAttribute("href") ?? null;
+    setLinkDraft(existingHref ?? "");
+    setLinkError(false);
+    setLinkEditor({ top: toolbar.top, left: toolbar.left, blockId: toolbar.blockId, range, existingHref });
+    setToolbar(null);
+  };
+
+  const showLinkPreview = (blockId: string, a: HTMLAnchorElement) => {
+    const rect = a.getBoundingClientRect();
+    setLinkPreview({ top: rect.bottom + 6, left: rect.left, blockId, href: a.getAttribute("href") ?? "", anchor: a });
+  };
+
+  // Edit / Remove from the card act on the whole link.
+  const linkRangeFor = (a: HTMLAnchorElement) => {
+    const r = document.createRange();
+    r.selectNodeContents(a);
+    return r;
+  };
+
+  const editFromPreview = () => {
+    if (!linkPreview) return;
+    const { blockId, href, anchor } = linkPreview;
+    const rect = anchor.getBoundingClientRect();
+    setLinkPreview(null);
+    setLinkDraft(href);
+    setLinkError(false);
+    setLinkEditor({
+      top: rect.top,
+      left: rect.left + rect.width / 2,
+      blockId,
+      range: linkRangeFor(anchor),
+      existingHref: href,
+    });
+  };
+
+  const removeFromPreview = () => {
+    if (!linkPreview) return;
+    const { blockId, anchor } = linkPreview;
+    setLinkPreview(null);
+    commitStructural(blocks);
+    refs.current.get(blockId)?.applyLink(linkRangeFor(anchor), null);
+  };
+
+  useEffect(() => {
+    if (!linkPreview) return;
+    const onMouseDown = (e: MouseEvent) => {
+      if (linkPreviewRef.current?.contains(e.target as Node)) return;
+      setLinkPreview(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Shift" && e.key !== "Meta" && e.key !== "Control" && e.key !== "Alt") setLinkPreview(null);
+    };
+    const onScroll = () => setLinkPreview(null);
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [linkPreview]);
+
+  const closeLinkEditor = (restoreSelection: boolean) => {
+    if (!linkEditor) return;
+    const { blockId, range } = linkEditor;
+    setLinkEditor(null);
+    if (restoreSelection) {
+      const el = refs.current.get(blockId)?.getElement();
+      if (el) {
+        el.focus({ preventScroll: true });
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+      }
+    }
+  };
+
+  const submitLink = (remove = false) => {
+    if (!linkEditor) return;
+    const href = remove ? null : normalizeLinkInput(linkDraft);
+    if (!remove && !href) {
+      setLinkError(true);
+      return;
+    }
+    commitStructural(blocks);
+    refs.current.get(linkEditor.blockId)?.applyLink(linkEditor.range, href);
+    setLinkEditor(null);
+  };
+
+  useEffect(() => {
+    if (!linkEditor) return;
+    const onMouseDown = (e: MouseEvent) => {
+      if (linkEditorRef.current?.contains(e.target as Node)) return;
+      setLinkEditor(null);
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    return () => document.removeEventListener("mousedown", onMouseDown);
+  }, [linkEditor]);
 
   useEffect(() => {
     function handleSelectionChange() {
@@ -840,7 +1150,7 @@ export function DocEditor({
     return () => document.removeEventListener("selectionchange", handleSelectionChange);
   }, []);
 
-  const applyFormat = (command: "bold" | "italic") => {
+  const applyFormat = (command: "bold" | "italic" | "underline") => {
     if (!toolbar) return;
     refs.current.get(toolbar.blockId)?.applyFormat(command);
   };
@@ -876,12 +1186,285 @@ export function DocEditor({
     };
   }, [plusMenu]);
 
+  // ── Multi-line selection ───────────────────────────────────────────────
+  // Every block is its own contentEditable, and browsers won't extend a
+  // selection across separate editing hosts — so drag-selecting stopped at
+  // one line and Cmd/Ctrl+A only selected the current line. Fix: while a
+  // selection may span blocks, the wrapper itself becomes the single
+  // editing host ("multi mode"):
+  //  - mousedown on a block turns the wrapper editable so a native drag can
+  //    run across lines; on mouseup, a selection inside ONE block goes
+  //    straight back to normal per-block editing (focus + range restored).
+  //  - Cmd/Ctrl+A selects every block.
+  //  - While multi mode is on, the DOM is never edited natively (beforeinput
+  //    is blocked); keys are applied to the block model instead: copy is
+  //    native, cut/Backspace/Delete/typing/paste replace the selection,
+  //    arrows/Escape collapse back to a caret.
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const multiRef = useRef(false);
+
+  const blockElFor = (node: Node | null): HTMLElement | null => {
+    const el = node instanceof Element ? node : node?.parentElement;
+    return (el?.closest("[data-doc-block]") as HTMLElement | null) ?? null;
+  };
+
+  const enterMulti = () => {
+    const w = wrapperRef.current;
+    if (!w || multiRef.current) return;
+    multiRef.current = true;
+    w.contentEditable = "true";
+  };
+
+  /** Leave multi mode; optionally put the caret/selection back into one
+   *  block (re-focusing it so its own key handlers run again). */
+  const exitMulti = (focusEl?: HTMLElement | null, range?: Range | null) => {
+    const w = wrapperRef.current;
+    if (!w || !multiRef.current) return;
+    multiRef.current = false;
+    w.removeAttribute("contenteditable");
+    if (focusEl) {
+      focusEl.focus({ preventScroll: true });
+      if (range) {
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+      }
+    }
+  };
+
+  const selectAllBlocks = () => {
+    const w = wrapperRef.current;
+    if (!w) return;
+    const els = Array.from(w.querySelectorAll<HTMLElement>("[data-doc-block]"));
+    if (!els.length) return;
+    enterMulti();
+    w.focus({ preventScroll: true });
+    const range = document.createRange();
+    range.setStart(els[0], 0);
+    const last = els[els.length - 1];
+    range.setEnd(last, last.childNodes.length);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  };
+
+  /** Replace the current (multi-block) selection with `lines` (plain text;
+   *  [] = just delete). The first and last touched blocks keep the text
+   *  outside the selection and merge; everything between is removed. */
+  const replaceSelection = (lines: string[]) => {
+    const sel = window.getSelection();
+    const w = wrapperRef.current;
+    if (!sel || sel.rangeCount === 0 || !w) return;
+    const range = sel.getRangeAt(0);
+    const els = Array.from(w.querySelectorAll<HTMLElement>("[data-doc-block]"));
+    const idxOfEl = (el: HTMLElement | null) => (el ? blocks.findIndex((b) => b.id === el.dataset.docBlock) : -1);
+    const startEl = blockElFor(range.startContainer);
+    const endEl = blockElFor(range.endContainer);
+    // Boundaries outside any text block (a banner, the gutter) snap to the
+    // nearest text block inside the range.
+    const firstInside = els.find((el) => range.intersectsNode(el)) ?? null;
+    const lastInside = [...els].reverse().find((el) => range.intersectsNode(el)) ?? null;
+    const aEl = startEl ?? firstInside;
+    const bEl = endEl ?? lastInside;
+    if (!aEl || !bEl) return;
+    let i = idxOfEl(aEl);
+    const j = idxOfEl(bEl);
+    if (i === -1 || j === -1) return;
+    // Banners fully inside the selection are removed too.
+    while (i > 0 && blocks[i - 1].type === "banner" && range.intersectsNode(w.children[i - 1] ?? w)) i--;
+    const htmlOf = (r: Range) => {
+      const div = document.createElement("div");
+      div.appendChild(r.cloneContents());
+      return div.innerHTML;
+    };
+    const before = document.createRange();
+    before.selectNodeContents(aEl);
+    if (startEl) before.setEnd(range.startContainer, range.startOffset);
+    else before.collapse(true);
+    const after = document.createRange();
+    after.selectNodeContents(bEl);
+    if (endEl) after.setStart(range.endContainer, range.endOffset);
+    else after.collapse(false);
+    const beforeHtml = htmlOf(before);
+    const afterHtml = htmlOf(after);
+
+    commitStructural(blocks);
+    const first = blocks[i];
+    const type: DocBlock["type"] = first.type === "banner" ? "p" : first.type;
+    const pieces = lines.length ? lines : [""];
+    const merged: DocBlock[] = pieces.map((line, k) => {
+      let text = escapeHtml(line);
+      if (k === 0) text = beforeHtml + text;
+      if (k === pieces.length - 1) text = text + afterHtml;
+      return { id: k === 0 ? first.id : makeId(), type, text };
+    });
+    const next = [...blocks];
+    next.splice(i, j - i + 1, ...merged);
+    onChange({ blocks: next });
+
+    const target = merged[merged.length - 1];
+    const caret =
+      (pieces.length === 1 ? plainTextLength(beforeHtml) : 0) + pieces[pieces.length - 1].length;
+    exitMulti();
+    setTimeout(() => {
+      const el = refs.current.get(target.id)?.getElement();
+      if (el) {
+        el.focus({ preventScroll: true });
+        setCaretAtTextOffset(el, caret);
+      }
+    }, 0);
+  };
+
+  // Latest replaceSelection for the native listener below (it's registered
+  // once, and replaceSelection closes over the current `blocks`).
+  const replaceSelectionRef = useRef(replaceSelection);
+  useEffect(() => {
+    replaceSelectionRef.current = replaceSelection;
+  });
+
+  // Block native DOM edits while the wrapper is the editing host — React
+  // owns the block DOM, so every change goes through the model instead.
+  // Input that arrives without a keydown (dictation, autocorrect, IME,
+  // "insert text" from assistive tools) is applied here.
+  useEffect(() => {
+    const w = wrapperRef.current;
+    if (!w) return;
+    const onBeforeInput = (e: InputEvent) => {
+      if (!multiRef.current) return;
+      e.preventDefault();
+      const t = e.inputType;
+      if (t === "insertFromPaste" || t === "insertFromDrop") return; // onPaste handles paste
+      if (t.startsWith("delete") || t === "insertParagraph" || t === "insertLineBreak") {
+        replaceSelectionRef.current([]);
+      } else if (t.startsWith("insert") && e.data) {
+        replaceSelectionRef.current(e.data.replace(/\r\n?/g, "\n").split("\n"));
+      }
+    };
+    const onFocusOut = (e: FocusEvent) => {
+      if (multiRef.current && !w.contains(e.relatedTarget as Node | null)) exitMulti();
+    };
+    w.addEventListener("beforeinput", onBeforeInput);
+    w.addEventListener("focusout", onFocusOut);
+    return () => {
+      w.removeEventListener("beforeinput", onBeforeInput);
+      w.removeEventListener("focusout", onFocusOut);
+    };
+  }, []);
+
+  const handleMouseDownCapture = (e: React.MouseEvent) => {
+    if (e.button !== 0 || e.shiftKey) return;
+    // Only drags that start in a text block — banner inputs, the "+"
+    // gutter and menus keep their normal behavior.
+    if (!blockElFor(e.target as Node)) return;
+    enterMulti();
+    const onUp = () => {
+      document.removeEventListener("mouseup", onUp);
+      // Let the browser finish placing the selection first.
+      setTimeout(() => {
+        if (!multiRef.current) return;
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return exitMulti();
+        const range = sel.getRangeAt(0);
+        const a = blockElFor(range.startContainer);
+        const b = blockElFor(range.endContainer);
+        if (a && a === b) exitMulti(a, range.cloneRange());
+        // else: selection spans blocks — stay in multi mode.
+      }, 0);
+    };
+    document.addEventListener("mouseup", onUp);
+  };
+
+  const handleMultiKeyDown = (e: React.KeyboardEvent): boolean => {
+    if (!multiRef.current) return false;
+    const mod = e.metaKey || e.ctrlKey;
+    const key = e.key.toLowerCase();
+    if (mod && (key === "c" || key === "a")) {
+      if (key === "a") {
+        e.preventDefault();
+        selectAllBlocks();
+      }
+      return true; // copy: native
+    }
+    if (mod && key === "x") {
+      e.preventDefault();
+      document.execCommand("copy");
+      replaceSelection([]);
+      return true;
+    }
+    if (mod) return false; // undo/redo etc. fall through
+    if (e.key === "Backspace" || e.key === "Delete" || e.key === "Enter") {
+      e.preventDefault();
+      replaceSelection([]);
+      return true;
+    }
+    if (e.key.length === 1 && !e.altKey) {
+      e.preventDefault();
+      replaceSelection([e.key]);
+      return true;
+    }
+    if (e.key.startsWith("Arrow") || e.key === "Escape") {
+      e.preventDefault();
+      const sel = window.getSelection();
+      const range = sel && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+      if (!range) return exitMulti(), true;
+      const toStart = e.key === "ArrowLeft" || e.key === "ArrowUp";
+      range.collapse(toStart);
+      const el = blockElFor(range.startContainer);
+      exitMulti(el, el ? range : null);
+      return true;
+    }
+    return false;
+  };
+
   return (
     <div
-      className="flex flex-col"
+      ref={wrapperRef}
+      className="flex flex-col outline-none"
+      // Off on the wrapper itself (it only becomes editable during
+      // multi-line selection); each text block turns spellcheck on.
+      spellCheck={false}
+      suppressContentEditableWarning
+      onMouseDownCapture={handleMouseDownCapture}
+      onCopy={(e) => {
+        // Multi-line copy: one line of plain text per block (the native copy
+        // adds blank lines between blocks and puts bullet dots on their own
+        // line). Cut goes through here too (execCommand("copy")).
+        if (!multiRef.current) return;
+        const sel = window.getSelection();
+        const w = wrapperRef.current;
+        if (!sel || sel.rangeCount === 0 || !w) return;
+        const range = sel.getRangeAt(0);
+        const lines = Array.from(w.querySelectorAll<HTMLElement>("[data-doc-block]"))
+          .filter((el) => range.intersectsNode(el))
+          .map((el) => {
+            const part = document.createRange();
+            part.selectNodeContents(el);
+            if (el.contains(range.startContainer)) part.setStart(range.startContainer, range.startOffset);
+            if (el.contains(range.endContainer)) part.setEnd(range.endContainer, range.endOffset);
+            return part.toString();
+          });
+        e.preventDefault();
+        e.clipboardData.setData("text/plain", lines.join("\n"));
+      }}
+      onPaste={(e) => {
+        if (!multiRef.current) return;
+        e.preventDefault();
+        const text = e.clipboardData.getData("text/plain").replace(/\r\n?/g, "\n");
+        replaceSelection(text.split("\n"));
+      }}
       onKeyDown={(e) => {
+        // Text fields inside the editor (link box, banner title) keep their
+        // own native shortcuts — Cmd+A there selects just that field.
+        const t = e.target as HTMLElement;
+        if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
+        if (handleMultiKeyDown(e)) return;
         const mod = e.metaKey || e.ctrlKey;
         if (!mod) return;
+        if (e.key.toLowerCase() === "a") {
+          e.preventDefault();
+          selectAllBlocks();
+          return;
+        }
         const key = e.key.toLowerCase();
         if (key === "z" && e.shiftKey) {
           e.preventDefault();
@@ -905,12 +1488,28 @@ export function DocEditor({
           block={block}
           onTextChange={(text) => setBlockTextTyping(block.id, text)}
           onFormatChange={(text) => setBlockTextImmediate(block.id, text)}
-          onEnter={(before, after) =>
-            splitBlock(block.id, before, after, block.type === "bullet" ? "bullet" : "p")
-          }
-          onBackspaceAtStart={() =>
-            plainTextLength(block.text) === 0 ? removeBlock(block.id) : mergeIntoPrevious(block.id)
-          }
+          // Bullets follow the Notion / Google Docs convention:
+          //  - Enter on a bullet with text → new bullet below.
+          //  - Enter on an EMPTY bullet (i.e. "double Enter") → that line
+          //    turns back into a normal paragraph, ending the list.
+          //  - Backspace at the start of a bullet → removes the bullet
+          //    marker but keeps the text as a paragraph (a second Backspace
+          //    then merges/deletes like any paragraph).
+          onEnter={(before, after) => {
+            if (block.type === "bullet" && plainTextLength(block.text) === 0) {
+              setBlockType(block.id, "p");
+              return;
+            }
+            splitBlock(block.id, before, after, block.type === "bullet" ? "bullet" : "p");
+          }}
+          onBackspaceAtStart={() => {
+            if (block.type === "bullet") {
+              setBlockType(block.id, "p");
+              return;
+            }
+            if (plainTextLength(block.text) === 0) removeBlock(block.id);
+            else mergeIntoPrevious(block.id);
+          }}
           onPasteLines={(before, after, lines) => pasteLines(block.id, before, after, lines)}
           // Only the very first block of an otherwise-completely-empty doc
           // shows the placeholder — e.g. a brand-new blank page/task. Every
@@ -936,6 +1535,8 @@ export function DocEditor({
                   : 0
           }
           scale={scale}
+          onLinkClick={(a) => showLinkPreview(block.id, a)}
+          onVerticalArrow={(dir, x) => moveVertically(block.id, dir, x)}
           onColorChange={(color) => setBlockColor(block.id, color)}
           onRemoveBanner={() => removeBlock(block.id)}
           onRequestPlus={(blockId, anchor) => {
@@ -997,23 +1598,25 @@ export function DocEditor({
 
       {toolbar && (
         <div
-          className="fixed flex items-center gap-0.5"
+          className="fixed flex items-center gap-px"
           style={{
-            top: toolbar.top - 40,
+            top: toolbar.top - 46,
             left: toolbar.left,
             transform: "translateX(-50%)",
-            background: "#2C2C2F",
-            border: "1px solid #36363A",
-            borderRadius: 8,
-            padding: 4,
+            background: TB.bg,
+            border: TB.border,
+            borderRadius: 10,
+            // 1px top/bottom (3px sides): 34px tall around the 30px buttons.
+            padding: "1px 3px",
             zIndex: 30,
+            boxShadow: TB.shadow,
           }}
         >
           {/* Block-type controls (Text/H1/H2/Bullet) — moved here from the
               old per-block hover toolbar, which popped up over every line
               on hover and got in the way of reading. Only shows now when
               text is actually selected. */}
-          {BLOCK_TYPES.map(({ type, icon: Icon, label }) => (
+          {BLOCK_TYPES.map(({ type, icon: Icon, iconSize, label }) => (
             <button
               key={type}
               type="button"
@@ -1022,25 +1625,20 @@ export function DocEditor({
                 e.preventDefault();
                 if (toolbar) setBlockType(toolbar.blockId, type);
               }}
-              className="flex items-center justify-center rounded transition-colors"
+              className={TB_BUTTON}
               style={{
-                width: 26,
-                height: 26,
-                background: toolbarBlock?.type === type ? "#3A3A3E" : "transparent",
+                width: 30,
+                height: 30,
                 border: "none",
                 cursor: "pointer",
-                color: toolbarBlock?.type === type ? "#E4E4E7" : "#A1A1AA",
+                ...(toolbarBlock?.type === type ? { background: TB.active, color: TB.iconActive } : null),
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "#3A3A3E")}
-              onMouseLeave={(e) =>
-                (e.currentTarget.style.background = toolbarBlock?.type === type ? "#3A3A3E" : "transparent")
-              }
             >
-              <Icon size={13} />
+              <Icon size={iconSize} strokeWidth={1.75} />
             </button>
           ))}
 
-          <span aria-hidden style={{ width: 1, height: 18, margin: "0 3px", background: "#3A3A3E", flexShrink: 0 }} />
+          <span aria-hidden style={{ width: 1, height: 20, margin: "0 6px", background: TB.divider, flexShrink: 0 }} />
 
           <button
             type="button"
@@ -1049,12 +1647,12 @@ export function DocEditor({
               e.preventDefault();
               applyFormat("bold");
             }}
-            className="flex items-center justify-center rounded transition-colors"
-            style={{ width: 26, height: 26, background: "transparent", border: "none", cursor: "pointer", color: "#E4E4E7" }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = "#3A3A3E")}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            className={TB_BUTTON}
+            style={{ width: 30, height: 30, border: "none", cursor: "pointer" }}
           >
-            <Bold size={13} />
+            {/* The supplied B fills its whole box, so 13px renders it ~12px tall
+                — level with the italic I, sized to ClickUp's toolbar. */}
+            <ToolbarBoldIcon size={13} />
           </button>
           <button
             type="button"
@@ -1063,13 +1661,164 @@ export function DocEditor({
               e.preventDefault();
               applyFormat("italic");
             }}
-            className="flex items-center justify-center rounded transition-colors"
-            style={{ width: 26, height: 26, background: "transparent", border: "none", cursor: "pointer", color: "#E4E4E7" }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = "#3A3A3E")}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            className={TB_BUTTON}
+            style={{ width: 30, height: 30, border: "none", cursor: "pointer" }}
           >
-            <Italic size={13} />
+            <ToolbarItalicIcon size={22} />
           </button>
+          <button
+            type="button"
+            aria-label="Underline"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              applyFormat("underline");
+            }}
+            className={TB_BUTTON}
+            style={{ width: 30, height: 30, border: "none", cursor: "pointer" }}
+          >
+            {/* Same visual height as the B (both supplied SVGs fill their box). */}
+            <ToolbarUnderlineIcon size={13} />
+          </button>
+          <button
+            type="button"
+            aria-label="Link"
+            title="Add link"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              openLinkEditor();
+            }}
+            className={TB_BUTTON}
+            style={{ width: 30, height: 30, border: "none", cursor: "pointer" }}
+          >
+            {/* 14px → ~13px visible, the same height as the B and U. */}
+            <ToolbarLinkIcon size={14} />
+          </button>
+        </div>
+      )}
+
+      {linkPreview && (
+        <div
+          ref={linkPreviewRef}
+          contentEditable={false}
+          className="fixed flex items-center gap-px"
+          style={{
+            top: linkPreview.top,
+            left: linkPreview.left,
+            background: TB.bg,
+            border: TB.border,
+            borderRadius: 10,
+            padding: "3px 3px 3px 10px",
+            zIndex: 31,
+            boxShadow: TB.shadow,
+            maxWidth: 380,
+          }}
+        >
+          <span className="text-[13px] truncate" style={{ color: "#5AA7F5", maxWidth: 220 }} title={linkPreview.href}>
+            {linkPreview.href.replace(/^(https?:\/\/|mailto:|tel:)/i, "")}
+          </span>
+          <span aria-hidden style={{ width: 1, height: 20, margin: "0 6px", background: TB.divider, flexShrink: 0 }} />
+          {isSafeLinkHref(linkPreview.href) && (
+            <a
+              href={linkPreview.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open link"
+              aria-label="Open link"
+              onClick={() => setLinkPreview(null)}
+              className={TB_BUTTON}
+              style={{ width: 30, height: 30 }}
+            >
+              <ExternalLink size={16} strokeWidth={1.75} />
+            </a>
+          )}
+          <button
+            type="button"
+            title="Edit link"
+            aria-label="Edit link"
+            onClick={editFromPreview}
+            className={TB_BUTTON}
+            style={{ width: 30, height: 30, border: "none", cursor: "pointer" }}
+          >
+            <Pencil size={15} strokeWidth={1.75} />
+          </button>
+          <button
+            type="button"
+            title="Remove link"
+            aria-label="Remove link"
+            onClick={removeFromPreview}
+            className={TB_BUTTON}
+            style={{ width: 30, height: 30, border: "none", cursor: "pointer" }}
+          >
+            <Link2Off size={16} strokeWidth={1.75} />
+          </button>
+        </div>
+      )}
+
+      {linkEditor && (
+        <div
+          ref={linkEditorRef}
+          contentEditable={false}
+          className="fixed flex items-center gap-1.5"
+          style={{
+            top: linkEditor.top - 44,
+            left: linkEditor.left,
+            transform: "translateX(-50%)",
+            background: TB.bg,
+            border: TB.border,
+            borderRadius: 10,
+            padding: 3,
+            zIndex: 31,
+            boxShadow: TB.shadow,
+          }}
+        >
+          <input
+            autoFocus
+            value={linkDraft}
+            onChange={(e) => {
+              setLinkDraft(e.target.value);
+              setLinkError(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                submitLink();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                closeLinkEditor(true);
+              }
+            }}
+            placeholder="Paste or type a link"
+            aria-label="Link address"
+            aria-invalid={linkError}
+            className="outline-none text-[13px]"
+            style={{
+              width: 240,
+              height: 28,
+              padding: "0 8px",
+              background: "#222222",
+              border: `1px solid ${linkError ? "#F43F5E" : "#2E2E2E"}`,
+              borderRadius: 6,
+              color: "#E4E4E7",
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => submitLink()}
+            className="rounded text-[12px] font-semibold"
+            style={{ height: 28, padding: "0 10px", background: "#108CE9", border: "none", color: "#FFFFFF", cursor: "pointer" }}
+          >
+            {linkEditor.existingHref ? "Update" : "Add"}
+          </button>
+          {linkEditor.existingHref && (
+            <button
+              type="button"
+              onClick={() => submitLink(true)}
+              className="rounded-md text-[12px] font-semibold transition-colors hover:bg-[#2A2A2A]"
+              style={{ height: 28, padding: "0 10px", border: "none", color: TB.icon, cursor: "pointer" }}
+            >
+              Remove
+            </button>
+          )}
         </div>
       )}
     </div>

@@ -63,6 +63,18 @@ body {
    done in JS (plain-text length, tag-agnostic) rather than relying on
    CSS :empty, since some browsers leave a stray <br> in a "cleared"
    contentEditable that :empty wouldn't match. */
+/* Links inside doc blocks (added via the selection toolbar's link button). */
+.doc-block-editable a {
+  color: #5AA7F5;
+  text-decoration: underline;
+  text-decoration-color: rgba(90, 167, 245, 0.45);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.doc-block-editable a:hover {
+  text-decoration-color: #5AA7F5;
+}
+
 .doc-block-empty:before {
   content: attr(data-placeholder);
   color: #52525B;

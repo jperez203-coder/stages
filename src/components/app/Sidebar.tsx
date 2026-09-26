@@ -247,6 +247,8 @@ export function Sidebar({ workspaceSlug, workspaceId, userId, pipelines }: Props
         title: "Untitled",
         type,
         content: defaultContent,
+        // Author for the doc page byline. (Never set before 2026-09-26.)
+        created_by: userId,
       })
       .select("id, folder_id, title, type")
       .single();
@@ -402,7 +404,7 @@ export function Sidebar({ workspaceSlug, workspaceId, userId, pipelines }: Props
     return (
       <Link key={doc.id} href={docHref} className={ROW_CLASS} style={rowStyle(isDocActive)}>
         <IconBox>
-          {doc.type === "doc" ? <DocIcon size={17} /> : <SheetIcon size={17} />}
+          {doc.type === "doc" ? <DocIcon size={16} /> : <SheetIcon size={16} />}
         </IconBox>
         <RowLabel active={isDocActive} >{doc.title || "Untitled"}</RowLabel>
       </Link>
@@ -657,7 +659,7 @@ export function Sidebar({ workspaceSlug, workspaceId, userId, pipelines }: Props
             {isOpen && (
               // Docs/sheets indent under their open folder so the group
               // reads as nested.
-              <div style={{ paddingLeft: 12 }}>
+              <div style={{ paddingLeft: 8 }}>
                 {folderDocs.map((doc) => {
                   const docHref = workspaceSlug ? `/w/${workspaceSlug}/d/${doc.id}` : "#";
                   const isDocActive = pathname === docHref;
@@ -671,7 +673,7 @@ export function Sidebar({ workspaceSlug, workspaceId, userId, pipelines }: Props
                       {renamingDocId === doc.id ? (
                         <div className="flex-1 flex items-center gap-2 min-w-0 h-full">
                           <IconBox>
-                            {doc.type === "doc" ? <DocIcon size={17} /> : <SheetIcon size={17} />}
+                            {doc.type === "doc" ? <DocIcon size={16} /> : <SheetIcon size={16} />}
                           </IconBox>
                           <RenameInput
                             value={docRenameDraft}
@@ -690,9 +692,9 @@ export function Sidebar({ workspaceSlug, workspaceId, userId, pipelines }: Props
                       >
                         <IconBox>
                           {doc.type === "doc" ? (
-                            <DocIcon size={17} className="flex-shrink-0" />
+                            <DocIcon size={16} className="flex-shrink-0" />
                           ) : (
-                            <SheetIcon size={17} className="flex-shrink-0" />
+                            <SheetIcon size={16} className="flex-shrink-0" />
                           )}
                         </IconBox>
                         <RowLabel active={isDocActive} >{doc.title || "Untitled"}</RowLabel>
@@ -805,8 +807,9 @@ function IconBox({
   );
 }
 
-/** Every sidebar row label: system UI font 13px / 600, active 700
- *  (medium was tested 2026-09-25 and rejected).
+/** Every sidebar row label: system UI font 13px / 500, active 600
+ *  (switched from 600/700 on 2026-09-26). Section labels are separate
+ *  (SectionHeader, 12px / 600) and unchanged.
  *  Tuned by eye by Jordan (2026-09-25). Notion's literal values (14px /
  *  500 with font-smoothing auto) were tried and looked worse — keep this. */
 function RowLabel({ children, active }: { children: React.ReactNode; active?: boolean }) {
@@ -814,7 +817,7 @@ function RowLabel({ children, active }: { children: React.ReactNode; active?: bo
     <span
       className="text-[13px] truncate"
       style={{
-        fontWeight: active ? 700 : 600,
+        fontWeight: active ? 600 : 500,
         color: active ? SB.textActive : SB.text,
       }}
     >
@@ -859,7 +862,7 @@ function RenameInput({
         if (e.key === "Escape") onCancel();
       }}
       aria-label={label}
-      className="flex-1 min-w-0 text-[13px] font-semibold outline-none"
+      className="flex-1 min-w-0 text-[13px] font-medium outline-none"
       style={{
         height: 24,
         padding: "0 6px",
@@ -974,9 +977,9 @@ function RowMenuItem({
     <button
       type="button"
       onClick={onClick}
-      // Same type as the sidebar's row labels (13px / 600, system font via
+      // Same type as the sidebar's row labels (13px / 500, system font via
       // RowMenu's font-system).
-      className="w-full flex items-center gap-2 rounded text-left text-[13px] font-semibold transition-colors hover:bg-[#333333]"
+      className="w-full flex items-center gap-2 rounded text-left text-[13px] font-medium transition-colors hover:bg-[#333333]"
       style={{ height: 28, padding: "0 8px", border: "none", cursor: "pointer", color }}
     >
       {children}

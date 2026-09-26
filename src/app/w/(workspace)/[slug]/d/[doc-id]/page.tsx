@@ -9,6 +9,8 @@ import {
   notifyDocumentRenamed,
   type DocumentRenamedDetail,
 } from "@/lib/document-title";
+import { UserAvatar, type AvatarUser } from "@/components/UserAvatar";
+import { resolveDisplayName } from "@/lib/display-name";
 import { supabase } from "@/lib/supabase";
 import { useSession } from "@/hooks/useSession";
 import { DocEditor, repairMergedBlocks, type DocContent } from "@/components/documents/DocEditor";
@@ -47,7 +49,30 @@ type DocumentRow = {
   title: string;
   type: "doc" | "sheet";
   content: DocContent | SheetContent;
+  created_by: string | null;
+  updated_at: string;
 };
+
+/** ClickUp-style "Last updated" stamp: "Today at 12:40 am",
+ *  "Yesterday at 3:05 pm", "Sep 24 at 9:12 am", or with the year when
+ *  it isn't this year. */
+function formatLastUpdated(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  const time = d
+    .toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
+    .toLowerCase();
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const dayDiff = Math.round((startOf(now) - startOf(d)) / 86_400_000);
+  if (dayDiff === 0) return `Today at ${time}`;
+  if (dayDiff === 1) return `Yesterday at ${time}`;
+  const date = d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : null),
+  });
+  return `${date} at ${time}`;
+}
 
 type LoadState = "loading" | "ready" | "not_found" | "error";
 
@@ -66,6 +91,10 @@ export default function DocumentPage() {
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const [isStarred, setIsStarred] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // Byline under the title: creator (documents.created_by → profiles) and
+  // last-updated time (documents.updated_at, bumped locally on each save).
+  const [author, setAuthor] = useState<AvatarUser | null>(null);
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
 
   useEffect(() => {
     if (session.status === "anonymous") {
@@ -81,7 +110,7 @@ export default function DocumentPage() {
         supabase
           .from("documents")
           .select(
-            "id, workspace_id, folder_id, title, type, content, folder:sidebar_folders(name)",
+            "id, workspace_id, folder_id, title, type, content, created_by, updated_at, folder:sidebar_folders(name)",
           )
           .eq("id", docId)
           .maybeSingle(),
@@ -117,10 +146,12 @@ export default function DocumentPage() {
       // "after" half was itself still several paragraphs glued together.
       if (docRow.type === "doc") {
         const raw = docRow.content as DocContent;
+        // Spread the whole block (not just id/type/text) so per-block
+        // fields survive a reload — dropping them is what reset banner
+        // colors to the default blue on refresh.
         const withIds = (raw.blocks?.length ? raw.blocks : [{ type: "p" as const, text: "" }]).map((b) => ({
+          ...b,
           id: (b as { id?: string }).id ?? crypto.randomUUID(),
-          type: b.type,
-          text: b.text,
         }));
         docRow.content = { blocks: repairMergedBlocks(withIds) };
       }
@@ -128,7 +159,19 @@ export default function DocumentPage() {
       setFolderName(folderObj?.name ?? null);
       setTitle(docRes.data.title);
       setIsStarred(Boolean(starRes.data));
+      setUpdatedAt(docRow.updated_at);
+      setAuthor(null);
       setLoadState("ready");
+      // Docs created before created_by was recorded (pre 2026-09-26) have
+      // no author — the byline then shows only "Last updated …".
+      if (docRow.created_by) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("id, display_name, email, avatar_url")
+          .eq("id", docRow.created_by)
+          .maybeSingle();
+        if (!cancelled && profile) setAuthor(profile as AvatarUser);
+      }
     })();
     return () => {
       cancelled = true;
@@ -149,6 +192,7 @@ export default function DocumentPage() {
           return;
         }
         setSaveState("saved");
+        setUpdatedAt(new Date().toISOString());
       }, 800);
     },
     [docId],
@@ -357,7 +401,8 @@ export default function DocumentPage() {
       </div>
 
       <div className="flex-1 overflow-y-auto min-h-0">
-        {/* Docs pages use Inter + a Notion-style scale (40px title,
+        {/* Docs pages use Inter + a Notion-style scale (30px title — sized to
+            ClickUp's doc title, measured 2026-09-26 —
             DocEditor's "page" scale below) — see --font-inter in globals.css. */}
         <div className="max-w-[1180px] px-20 py-10 w-full font-inter">
           <input
@@ -365,8 +410,26 @@ export default function DocumentPage() {
             onChange={(e) => handleTitleChange(e.target.value)}
             placeholder="Untitled"
             className="w-full outline-none bg-transparent"
-            style={{ fontSize: 40, fontWeight: 700, lineHeight: "48px", letterSpacing: "-0.02em", color: "#F4F4F5" }}
+            style={{ fontSize: 30, fontWeight: 700, lineHeight: "38px", letterSpacing: "-0.02em", color: "#F4F4F5" }}
           />
+
+          {/* Byline (ClickUp-style): author · Last updated … */}
+          {(author || updatedAt) && (
+            <div className="flex items-center gap-2 text-[13px]" style={{ marginTop: 10, color: "#9B9B9B" }}>
+              {author && (
+                <>
+                  {/* Circle here (ClickUp byline) — UserAvatar is a rounded
+                      square app-wide, so clip it rather than change it. */}
+                  <span className="flex flex-shrink-0 overflow-hidden rounded-full" style={{ width: 18, height: 18 }}>
+                    <UserAvatar user={author} size={18} />
+                  </span>
+                  <span style={{ color: "#C1C1C1", fontWeight: 500 }}>{resolveDisplayName(author)}</span>
+                  {updatedAt && <span aria-hidden>·</span>}
+                </>
+              )}
+              {updatedAt && <span>Last updated {formatLastUpdated(updatedAt)}</span>}
+            </div>
+          )}
 
           <div className="mt-6">
             {doc.type === "doc" ? (
