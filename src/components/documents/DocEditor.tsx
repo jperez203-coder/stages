@@ -65,15 +65,37 @@ const BANNER_COLORS = [
   "#A855F7", "#14B8A6", "#EAB308", "#EF4444",
 ];
 
-function blockStyle(type: DocBlock["type"]): React.CSSProperties {
+/** "page" = the Docs pages' Notion-style scale (16px body on a 24px line,
+ *  30/24px headings with their own line boxes + space above them).
+ *  "compact" = the original dense scale, still used by the task detail
+ *  panel's body. */
+export type DocScale = "page" | "compact";
+
+function blockStyle(type: DocBlock["type"], scale: DocScale): React.CSSProperties {
+  if (scale === "compact") {
+    switch (type) {
+      case "h1":
+        return { fontSize: 26, fontWeight: 700, lineHeight: "22px", color: "#E4E4E7" };
+      case "h2":
+        return { fontSize: 19, fontWeight: 600, lineHeight: "22px", color: "#E4E4E7" };
+      default:
+        return { fontSize: 14, fontWeight: 400, lineHeight: "22px", color: "#E4E4E7" };
+    }
+  }
   switch (type) {
     case "h1":
-      return { fontSize: 26, fontWeight: 700, color: "#E4E4E7" };
+      return { fontSize: 30, fontWeight: 600, lineHeight: "38px", letterSpacing: "-0.015em", color: "#F4F4F5" };
     case "h2":
-      return { fontSize: 19, fontWeight: 600, color: "#E4E4E7" };
+      return { fontSize: 24, fontWeight: 600, lineHeight: "31px", letterSpacing: "-0.01em", color: "#F4F4F5" };
     default:
-      return { fontSize: 14, fontWeight: 400, color: "#E4E4E7" };
+      return { fontSize: 16, fontWeight: 400, lineHeight: "24px", color: "#E4E4E7" };
   }
+}
+
+/** Line-box height in px for a block — drives minHeight, the bullet dot
+ *  and vertical centering of the hover "+" gutter button. */
+function blockLineHeight(type: DocBlock["type"], scale: DocScale): number {
+  return parseInt(String(blockStyle(type, scale).lineHeight), 10);
 }
 
 function plainTextLength(html: string): number {
@@ -235,6 +257,7 @@ const BlockRow = forwardRef<
      *  banner (see DocEditor's render). Zero everywhere else so normal
      *  block spacing is untouched. */
     spacingBefore: number;
+    scale: DocScale;
   }
 >(function BlockRow(
   {
@@ -249,6 +272,7 @@ const BlockRow = forwardRef<
     onRemoveBanner,
     onRequestPlus,
     spacingBefore,
+    scale,
   },
   ref,
 ) {
@@ -316,7 +340,7 @@ const BlockRow = forwardRef<
       onClick={(e) => onRequestPlus(block.id, e.currentTarget)}
       aria-label="Add content"
       className="flex items-center justify-center rounded transition-colors opacity-0 group-hover:opacity-100"
-      style={{ position: "absolute", left: -26, top: 1, width: 20, height: 20, background: "transparent", border: "none", color: "#71717A", cursor: "pointer" }}
+      style={{ position: "absolute", left: -26, top: Math.max(1, (blockLineHeight(block.type, scale) - 20) / 2 + (scale === "page" ? 2 : 0)), width: 20, height: 20, background: "transparent", border: "none", color: "#71717A", cursor: "pointer" }}
       onMouseEnter={(e) => (e.currentTarget.style.color = "#E4E4E7")}
       onMouseLeave={(e) => (e.currentTarget.style.color = "#71717A")}
     >
@@ -421,9 +445,9 @@ const BlockRow = forwardRef<
           you've actually selected text), alongside onTypeChange still
           wired the same way via DocEditor's setBlockType. */}
       {plusGutter}
-      <div className="flex items-start gap-1.5">
+      <div className="flex items-start gap-1.5" style={scale === "page" ? { paddingBlock: 2 } : undefined}>
         {block.type === "bullet" && (
-          <span style={{ color: "#71717A", fontSize: 14, lineHeight: "22px", flexShrink: 0 }}>•</span>
+          <span style={{ color: "#71717A", fontSize: blockStyle("bullet", scale).fontSize, lineHeight: blockStyle("bullet", scale).lineHeight, flexShrink: 0 }}>•</span>
         )}
         <div
           ref={divRef}
@@ -520,7 +544,7 @@ const BlockRow = forwardRef<
             onPasteLines(full.slice(0, offset), full.slice(offset), lines);
           }}
           className={`doc-block-editable flex-1 outline-none bg-transparent ${isEmpty ? "doc-block-empty" : ""}`}
-          style={{ ...blockStyle(block.type), lineHeight: "22px", minHeight: 22, wordBreak: "break-word" }}
+          style={{ ...blockStyle(block.type, scale), minHeight: blockLineHeight(block.type, scale), wordBreak: "break-word" }}
         />
       </div>
     </div>
@@ -538,6 +562,7 @@ export function DocEditor({
   onChange,
   placeholder = "Type something…",
   extraPlusMenuItems,
+  scale = "page",
 }: {
   content: DocContent;
   onChange: (next: DocContent) => void;
@@ -551,6 +576,8 @@ export function DocEditor({
    *  DocEditor stays ignorant of what these do; it just renders them and
    *  calls onSelect. */
   extraPlusMenuItems?: PlusMenuItem[];
+  /** Type scale — see DocScale. Defaults to the Docs pages' "page" scale. */
+  scale?: DocScale;
 }) {
   // Stable id for the fallback empty block — makeId() must NOT be called
   // inline here, or every re-render while content.blocks is still []
@@ -897,7 +924,18 @@ export function DocEditor({
           // spacing" fix on regular Enter-created lines vs. wrapped text).
           // This targets specifically the banner→text adjacency, not
           // spacing in general.
-          spacingBefore={index > 0 && blocks[index - 1].type === "banner" ? 10 : 0}
+          // In the "page" scale, headings also get Notion-style space
+          // above them (never on the very first block).
+          spacingBefore={
+            index > 0 && blocks[index - 1].type === "banner"
+              ? 10
+              : scale === "page" && index > 0 && block.type === "h1"
+                ? 24
+                : scale === "page" && index > 0 && block.type === "h2"
+                  ? 16
+                  : 0
+          }
+          scale={scale}
           onColorChange={(color) => setBlockColor(block.id, color)}
           onRemoveBanner={() => removeBlock(block.id)}
           onRequestPlus={(blockId, anchor) => {

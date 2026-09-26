@@ -3,6 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { MoreHorizontal, Star, Trash2 } from "lucide-react";
+import { notifyDocumentStarsChanged } from "@/lib/document-stars";
+import {
+  DOCUMENT_RENAMED_EVENT,
+  notifyDocumentRenamed,
+  type DocumentRenamedDetail,
+} from "@/lib/document-title";
 import { supabase } from "@/lib/supabase";
 import { useSession } from "@/hooks/useSession";
 import { DocEditor, repairMergedBlocks, type DocContent } from "@/components/documents/DocEditor";
@@ -29,10 +35,9 @@ import { SheetIcon } from "@/components/icons/SheetIcon";
  *   2. Big editable title + body, centered in the content column
  *
  * Starring is per-user (document_stars table, 20260906120000) — not a
- * shared flag on the document. The sidebar's "Starred" section is still a
- * static placeholder (no schema wired to it yet); this only persists the
- * toggle itself, per Jordan's explicit ask. Wiring the Starred section to
- * actually list these is a separate follow-up.
+ * shared flag on the document. A successful toggle fires
+ * notifyDocumentStarsChanged() so the sidebar's "Starred" section
+ * (which lists these) refreshes immediately.
  */
 
 type DocumentRow = {
@@ -152,7 +157,20 @@ export default function DocumentPage() {
   const handleTitleChange = (value: string) => {
     setTitle(value);
     scheduleSave({ title: value || "Untitled" });
+    // Live-update the sidebar's copy of this doc's name.
+    if (docId) notifyDocumentRenamed(docId, value || "Untitled");
   };
+
+  // Renamed from the sidebar (its inline Rename already saved to the DB) —
+  // mirror it in this page's title input.
+  useEffect(() => {
+    const onRenamed = (e: Event) => {
+      const { id, title: next } = (e as CustomEvent<DocumentRenamedDetail>).detail;
+      if (id === docId) setTitle((prev) => (prev === next ? prev : next));
+    };
+    window.addEventListener(DOCUMENT_RENAMED_EVENT, onRenamed);
+    return () => window.removeEventListener(DOCUMENT_RENAMED_EVENT, onRenamed);
+  }, [docId]);
 
   const handleContentChange = (content: DocContent | SheetContent) => {
     if (!doc) return;
@@ -176,7 +194,9 @@ export default function DocumentPage() {
     if (error) {
       console.error("[document] star toggle failed:", error.message);
       setIsStarred(!next);
+      return;
     }
+    notifyDocumentStarsChanged();
   };
 
   const handleDelete = async () => {
@@ -337,13 +357,15 @@ export default function DocumentPage() {
       </div>
 
       <div className="flex-1 overflow-y-auto min-h-0">
-        <div className="max-w-[1180px] px-20 py-10 w-full">
+        {/* Docs pages use Inter + a Notion-style scale (40px title,
+            DocEditor's "page" scale below) — see --font-inter in globals.css. */}
+        <div className="max-w-[1180px] px-20 py-10 w-full font-inter">
           <input
             value={title}
             onChange={(e) => handleTitleChange(e.target.value)}
             placeholder="Untitled"
             className="w-full outline-none bg-transparent"
-            style={{ fontSize: 26, fontWeight: 700, color: "#E4E4E7" }}
+            style={{ fontSize: 40, fontWeight: 700, lineHeight: "48px", letterSpacing: "-0.02em", color: "#F4F4F5" }}
           />
 
           <div className="mt-6">

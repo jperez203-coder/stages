@@ -456,6 +456,7 @@ export function AppShell({ children }: Props) {
             <Sidebar
               workspaceSlug={activeSlug}
               workspaceId={activeWorkspaceId}
+              userId={session.status === "authenticated" ? session.user.id : null}
               pipelines={searchPipelines}
             />
           )}

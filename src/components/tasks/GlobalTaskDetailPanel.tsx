@@ -545,6 +545,7 @@ export function GlobalTaskDetailPanel({ task, currentUserId, workspaceId, onClos
                 content={body}
                 onChange={handleBodyChange}
                 placeholder="Write, press '/' for commands"
+                scale="compact"
                 extraPlusMenuItems={[
                   { label: "Upload file", icon: Upload, onSelect: () => attachmentsRef.current?.triggerUpload() },
                   { label: "Add link", icon: LinkIcon, onSelect: () => attachmentsRef.current?.triggerAddLink() },

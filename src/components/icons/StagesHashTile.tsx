@@ -38,12 +38,16 @@ type Props = {
    *  way, so the tile's footprint never shifts based on whether a
    *  workspace has uploaded a custom logo. */
   logoUrl?: string | null;
+  /** 1px #36363A stroke around the tile (default true). The sidebar's
+   *  workspace-switcher trigger turns it off (ClickUp-style, 2026-09-25). */
+  bordered?: boolean;
 };
 
 export function StagesHashTile({
   workspaceId: _workspaceId,
   size = 40,
   logoUrl,
+  bordered = true,
 }: Props) {
   // Tile corner radius ~25% of footprint so 40 → 10, 28 → 7. Matches
   // the rounded-square look used by the pipeline emoji tile in
@@ -61,7 +65,7 @@ export function StagesHashTile({
         // exactly (#212124 / 1px / #36363A) so the tiles read as one
         // visual family across the app chrome.
         background: "#212124",
-        border: "1px solid #36363A",
+        border: bordered ? "1px solid #36363A" : "none",
         borderRadius: radius,
         display: "flex",
         alignItems: "center",

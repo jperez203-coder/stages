@@ -20,7 +20,7 @@ The founder is non-developer with strong design instincts; the prototype is the 
 | Language | TypeScript, strict mode |
 | Styling | Tailwind v4 (CSS-based config in `globals.css`) |
 | Icons | lucide-react |
-| Type | Plus Jakarta Sans via `next/font/google` (400/500/600/700/800) |
+| Type | Self-hosted via `next/font/local` from `src/app/fonts/` (NOT `next/font/google` — it breaks on Google's extensionless font URLs, vercel/next.js#99114). Plus Jakarta Sans (app default), Poppins (Home greeting/tabs), Inter (sidebar + Docs pages) |
 | Backend | Supabase (Postgres, RLS, Auth, Storage) — wired up in Phase 3 |
 | Email | Resend via Supabase Auth — Phase 3 |
 | Hosting | Vercel — Phase 5 |
@@ -50,6 +50,8 @@ Stage rotation palette (12 colors): `#3BA5EE, #8B5CF6, #EC4899, #F59E0B, #10B981
 Dotted-grid backdrop (locked 2026-05-25): single shared utility class `.dotted-grid` in `src/app/globals.css`. Background `stages-bg` (`#212124`); dot **source color** `#424242` rendered at 40% alpha → **effective `~#2E2E30`** composited against the `#212124` bg; 1px dots on a 24px grid. Every dotted surface in the app (agency canvas, portal canvas, dashboard, auth screens, chat thread, my-tasks, create-pipeline, etc.) MUST use this class — don't inline a different radial-gradient anywhere or the surfaces will drift again. To dial dot visibility globally, change the alpha in the CSS rule (`0.4`); don't change the source `#424242`.
 
 Typography: Plus Jakarta Sans throughout. Body 13–15px, headers 15–32px, mono used only inside `.field` value previews. Antialiasing on.
+
+Sidebar + Docs typography (2026-09-25, verified against app.notion.com + Notion screenshots). Sidebar: `font-system` (Notion's system UI stack — Notion's app does NOT use Inter; only notion.com marketing does), app-wide `antialiased` smoothing. Row labels 13px/600 `#C1C1C1`, active 700 `#FFFFFF` — Jordan's by-eye choice; Notion's literal 14px/500 + smoothing auto was tried 2026-09-25 and rejected; section labels 12px/600 `#8A8A8A`; 28px row fills on a 30px pitch. Workspace-switcher name: system 14px/700 `#E4E4E7`. Docs pages: `font-inter`, title 40px/700, DocEditor `scale="page"` (body 16/24, H1 30/600, H2 24/600); task panel body keeps `scale="compact"`.
 
 ## Data model (mirrors prototype)
 
@@ -264,6 +266,7 @@ stages/
 - **No CLAUDE.md/PROGRESS.md churn** unless something durable changed; phase-end updates only.
 - **Push to `main`** directly until production. PR discipline starts when there are real customers.
 - **Don't expand scope** beyond the prototype — flag missing/weird things, don't fix silently.
+- **Migrations: do NOT run `npx supabase db push`.** As of 2026-09-25 the remote migration history only records up to `20260520140000`; the ~80 later migrations were applied by hand (dashboard SQL editor), so `db push` would try to re-run all of them. Apply a new migration file individually with `npx supabase db query --linked -f supabase/migrations/<file>.sql` (check first with `to_regclass(...)` that it isn't already applied), then `notify pgrst, 'reload schema';`. `20260906120000_document_stars.sql` had been missed and was applied this way on 2026-09-25.
 - **[v1.1 wishlist](WISHLIST.md)** captures intentionally-deferred features. Anything not in the prototype goes there, not into Phase 2 code. Don't act on wishlist items without explicit go-ahead.
 - **Dashboard sections stay position-agnostic.** Customizable dashboard ordering (user decides whether pipelines, tasks, activity, etc. come first) is a planned v1.1+ feature, deferred until post-launch validation. NOT being built now. But every dashboard section component (the cards under `src/components/dashboard/`, plus future sections) must (a) be self-contained — no section assumes what renders above or below it, (b) not hardcode its vertical position or order, (c) own its own data fetching / empty / error states independently. Keeps v1.1 customization a layout-shell change (persist a per-user order, drag-to-reorder the shell) rather than a rewrite of every card. Don't couple sections to fixed positions or to each other.
 

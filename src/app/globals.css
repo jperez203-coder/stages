@@ -6,6 +6,13 @@
      else in the app stays on --font-sans (Plus Jakarta Sans). Apply via
      the `font-poppins` utility, don't reach for this token generally. */
   --font-poppins: var(--font-poppins-raw), system-ui, sans-serif;
+  /* Scoped exception — sidebar + Docs pages only (2026-09-25), to match the
+     neutral UI type of Notion/ClickUp. Apply via the `font-inter` utility. */
+  --font-inter: var(--font-inter-raw), system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Notion's exact UI stack (SF Pro on macOS, Segoe UI on Windows) — the
+     sidebar + workspace switcher use it via `font-system` (2026-09-25),
+     matched against a Notion screenshot. No web font to load. */
+  --font-system: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol";
 
   /* Stages brand palette — ported from prototype GlobalStyles */
   --color-stages-bg: #101010;

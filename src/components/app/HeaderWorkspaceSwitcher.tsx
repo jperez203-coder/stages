@@ -122,7 +122,9 @@ export function HeaderWorkspaceSwitcher({
   // scales proportionally so the # mark's visual weight stays roughly
   // ~70% of the pill height in both modes.
   const triggerHeight = triggerHeightOverride ?? (compact ? 32 : 40);
-  const triggerTileSize = compact ? 22 : 28;
+  // Sidebar (triggerWidth) trigger: 21px, 1px under compact, closer to
+  // ClickUp's smaller workspace avatar (2026-09-25).
+  const triggerTileSize = triggerWidth ? 21 : compact ? 22 : 28;
   const triggerPadding = compact ? "0 8px 0 3px" : "0 10px 0 4px";
   // The AppShell/triggerWidth sidebar instance matches the sidebar's
   // Home/Activity NavRow text exactly (text-[14px] font-medium); other
@@ -596,12 +598,14 @@ export function HeaderWorkspaceSwitcher({
           background: triggerWidth ? "#1F1F1F" : "#212124",
           border: "1px solid #36363A",
           borderRadius: "8px",
-          // Left inset bumped to 8px (matches the sidebar's Home row
-          // padding, "7px 8px") only for the AppShell/triggerWidth case —
-          // that's the only caller meant to align as one visual column
-          // with the sidebar below it; other callers (PortalShell,
-          // settings, WorkspaceSelector) keep their existing triggerPadding.
-          padding: triggerWidth ? "0 10px 0 16px" : triggerPadding,
+          // AppShell/triggerWidth case only — the one caller meant to align
+          // as a single column with the sidebar below it. 15px left inset
+          // was measured against a live screenshot (2026-09-25) so the logo
+          // tile's left edge sits at the same X as the sidebar's Home/
+          // Activity icons. The pill itself (position/width) is unchanged.
+          // Other callers (PortalShell, settings, WorkspaceSelector) keep
+          // their existing triggerPadding.
+          padding: triggerWidth ? "0 10px 0 15px" : triggerPadding,
           height: `${triggerHeight}px`,
           width: triggerWidth ? `${triggerWidth}px` : undefined,
           justifyContent: triggerWidth ? "space-between" : undefined,
@@ -616,13 +620,17 @@ export function HeaderWorkspaceSwitcher({
         }
       >
         <span className="flex items-center gap-2 min-w-0">
-          <StagesHashTile workspaceId={triggerWorkspaceId} size={triggerTileSize} logoUrl={logoUrlsByWorkspaceId[triggerWorkspaceId]} />
+          <StagesHashTile workspaceId={triggerWorkspaceId} size={triggerTileSize} logoUrl={logoUrlsByWorkspaceId[triggerWorkspaceId]} bordered={!triggerWidth} />
           <span
-            // Bumped one step up from font-medium (it was already
-            // font-medium, not regular, when this request came in) —
-            // now matches the other callers' existing font-semibold.
-            className="font-semibold truncate"
+            // AppShell/triggerWidth case matches ClickUp's workspace
+            // switcher (measured from a screenshot, 2026-09-25): system UI
+            // font 14px / 700 in the trigger's #E4E4E7, nudged 1px UP —
+            // at 14px the caps otherwise render ~0.7px below the pill's
+            // center (measured). Whole-pixel nudge keeps the text crisp. Every other
+            // caller keeps its existing font-semibold in the app font.
+            className={`truncate ${triggerWidth ? "font-system" : "font-semibold"}`}
             style={{
+              ...(triggerWidth ? { fontWeight: 700, transform: "translateY(-1px)" } : null),
               fontSize: triggerFontSize,
               maxWidth: triggerLabelMaxWidth,
             }}
