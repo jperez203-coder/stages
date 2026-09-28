@@ -6,11 +6,38 @@ This file is the cross-session memory for working on Stages. Read it first; it c
 
 ## Product positioning
 
-Stages is the **operating system for client services businesses** — agencies, consultants, freelancers. Core wedge: today these teams juggle ClickUp/Asana for work, Slack for chat, email for client communication, and Drive for files. Stages unifies all of that into one tool where every client interaction lives in the context of a structured pipeline.
+**Updated 2026-09-28.** Long-term vision: Stages is **the brain of a business** — where its knowledge lives, where you can ask it anything, and where an AI worker (**Stagebot**) does the work, always with a human approving. Three layers, built in this order (each needs the one before):
 
-The differentiator vs. Slack/Notion/ClickUp is that **the agency and the client work in the same system**, with each side seeing exactly what they need. The long-term moat is an AI knowledge base that can answer any question about any client by drawing on the structured stages data, chat history, files, and notes — something Slack and Notion can't do because they lack the underlying project structure.
+1. **KNOW** — the business's knowledge lives in Stages: docs, sheets, clients/projects, tasks, chat, files, client portals. *Mostly built.*
+2. **ASK** — "ask Stages anything", answered from the workspace's own data, with clickable sources. *Next to build.*
+3. **ACT** — Stagebot runs workflows with human-in-the-loop approval. *First workflow: the end-of-month (EOM) client report.*
 
-The founder is non-developer with strong design instincts; the prototype is the source of truth for scope. Don't add features that aren't in it without asking.
+**Go-to-market wedge: marketing agencies.** Sell v1 as "AI month-end client reporting for marketing agencies", not as a generic workspace — don't compete head-on with Notion/ClickUp. The agency↔client portal (same system, each side sees only what it should) stays the moat: Stagebot's output is delivered *through* the portal.
+
+Future (not now — don't build without explicit go-ahead): live integrations (Meta Ads API, Stripe, Gmail, CRMs, ERPs), Stagebot reachable from Slack/Teams, client-facing ASK in the portal, more ACT workflows, outcome/usage-based pricing.
+
+The founder is non-developer with strong design instincts. Scope rule: the prototype defined the original product; KNOW/ASK/ACT scope above is approved by the founder (2026-09-28). Anything beyond it still needs asking first.
+
+### Stagebot v1 decisions (locked 2026-09-28)
+
+- **Extend the existing app — no rebuild.** No Clerk, no shadcn rewrite, no new shell.
+- **No Gmail in v1.** `gmail.compose` (drafts) is a *restricted* scope → paid CASA audit (~$540–1,000/yr) + 4–12+ weeks of Google review. Reports are delivered to the client's **Stages portal** + a **Resend** notification email. Later option: `gmail.send` only (*sensitive*, no CASA).
+- **No n8n/Make.** Workflows run in the app's own backend (Next.js route handlers + Vercel cron) so OAuth tokens and data stay in Supabase.
+- **Meta Ads: CSV upload first** (per client, per month). Live Meta API later — it needs Meta business verification + app review. Parse CSV columns by header name, never by position.
+- **Stripe payment check: not in v1** (agencies invoice via many tools).
+- **No fake numbers in the UI.** Counters/"hours saved" must come from real runs with a stated formula.
+- **EOM report states:** `draft → needs_review → approved → published`. Missing CSV → stop *before* any AI call and show a clear "upload this month's Meta export" message.
+- **ASK is agency-staff only at launch** (no client-facing ASK yet).
+- **ASK security: retrieve as the asking user** (their Supabase session) so existing RLS applies automatically — never a service-role query filtered only by app code, never "the model was told not to reveal it". Internal messages/notes must never reach anything client-facing.
+- **Retrieval: start with Postgres full-text search** (no extra service). Embeddings/pgvector later if answer quality needs it (Anthropic has no embeddings API — would need e.g. Voyage).
+- **Models:** ASK = `claude-sonnet-5`; EOM reports = `claude-opus-5`. Per-workspace monthly ASK limit + usage log table to keep AI spend inside a ~$50/mo infra budget.
+- **Product Hunt:** no date. Onboard 3–5 real agencies first, launch with real results.
+
+### Schema gaps found for Stagebot (2026-09-28)
+
+- `documents` have no pipeline link and no `client_visible` → portals can't show docs. Reports need their own pipeline-scoped home shown in the portal (design TBD).
+- `tasks` have no `completed_at` → needed for "tasks completed this month".
+- No pgvector extension enabled (fine — full-text first).
 
 ## Tech stack
 
